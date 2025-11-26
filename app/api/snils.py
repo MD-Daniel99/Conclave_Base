@@ -20,3 +20,10 @@ def api_update_snils(snils_id: UUID, payload: schemas.SnilsUpdate, db: Session =
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snils not found")
         
     return updated_snils
+
+@router.delete("/{snils_id}", status_code=status.HTTP_204_NO_CONTENT)
+def api_delete_snils(snils_id: UUID, db: Session = Depends(get_db)):
+    ok = crud.delete_snils(db, snils_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SNILS not found")
+    return None

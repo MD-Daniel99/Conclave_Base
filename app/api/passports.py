@@ -24,3 +24,10 @@ def api_update_passport(passport_id: UUID, payload: schemas.PassportUpdate, db: 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passport not found")
         
     return updated_passport
+
+@router.delete("/{passport_id}", status_code=status.HTTP_204_NO_CONTENT)
+def api_delete_passport(passport_id: UUID, db: Session = Depends(get_db)):
+    ok = crud.delete_passport(db, passport_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passport not found")
+    return None

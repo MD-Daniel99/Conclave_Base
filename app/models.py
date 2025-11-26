@@ -15,7 +15,7 @@
 """
 
 from sqlalchemy import (
-    Column, String, Text, Date, Integer, DateTime, ForeignKey, JSON, BigInteger, text, func
+    Column, String, Text, Date, Integer, DateTime, ForeignKey, JSON, BigInteger, text, func, Float, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -51,7 +51,7 @@ class Agent(Base):
     inn = Column(String(12), nullable=False)
     ogrnip = Column(String(15), nullable=False)
     account_number = Column(String(34), nullable=False)
-    correspondent_account = Column(String(34), nullable=False)
+    correspondent_account = Column(String(34), nullable=True)
     bic = Column(String(9), nullable=False)
 
     # Relationship: один агент — много клиентов
@@ -120,6 +120,7 @@ class Client(Base):
     snils = relationship("Snils", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
     documents = relationship("Document", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
     reminders = relationship("Reminder", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
+    modules = relationship("Module", back_populates = "client", cascade = "all, delete-orphan", passive_deletes = True)
 
     def __repr__(self):
         return f"<Client {self.client_id} {self.last_name}>"
@@ -155,37 +156,24 @@ class Phone(Base):
     client = relationship("Client", back_populates="phones")
 
 
-# app/models.py
-
-# ... (остальной код файла без изменений) ...
 
 class Passport(Base):
     __tablename__ = "PASSPORT"
     passport_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     client_id = Column(UUID(as_uuid=True), ForeignKey("CLIENT.client_id", ondelete="CASCADE"), nullable=False)
     full_name = Column(Text, nullable=False)
-    
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    birth_date = Column(Date, nullable=True) # <-- ДОБАВЛЕНО: Дата рождения
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-    
+    birth_date = Column(Date, nullable=True) 
     birth_place = Column(Text, nullable=False)
     series_number = Column(String(20), nullable=False)
     issued_by = Column(Text, nullable=False)
     issue_date = Column(Date, nullable=False)
-    
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    department_code = Column(String(7), nullable=True) # <-- ДОБАВЛЕНО: Код подразделения (формат xxx-xxx)
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-    
+    department_code = Column(String(7), nullable=True) 
     expiry_date = Column(Date, nullable=True)
     registration_address = Column(Text, nullable=False)
     version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     client = relationship("Client", back_populates="passports")
-
-# ... (остальной код файла без изменений) ...
 
 
 class Snils(Base):
@@ -220,3 +208,40 @@ class AuditLog(Base):
     user_id = Column(String(64), nullable=False)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     details = Column(JSON, nullable=True)
+
+
+class Module(Base):
+    __tablename__ = "MODULES"
+
+    module_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
+    client_id = Column(UUID(as_uuid = True), ForeignKey("CLIENT.client_id", ondelete = "CASCADE"), nullable = True)
+    module_name = Column(String(64), nullable = False)
+    catalogue_index = Column(String(64), nullable = False)
+    supplier = Column(String(64), nullable = False)
+    ordered = Column(String(64), nullable = False)
+    order_date_acc_num = Column(String(64), nullable = False)
+    quantity = Column(Integer, nullable = False, default = 1)
+    cost = Column(Float)
+    price = Column(Float)
+    recd = Column(String(64), nullable = False)
+    pending = Column(String(64), nullable = False)
+    properties = Column(String(64), nullable = False)
+    created_at = Column(DateTime(timezone = True), server_default = func.now(), nullable = False)
+    updated_at = Column(DateTime(timezone = True), server_default = func.now(), onupdate = func.now(), nullable = False)
+    notes = Column(Text, nullable=True)
+
+    client = relationship("Client", back_populates = "modules")
+
+
+class User(Base):
+    __tablename__ = "USERS"
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    password_hash = Column(String(128), nullable=False)
+    role = Column(String(32), nullable=False, default="user") # 'admin' или 'user'
+    is_active = Column(Boolean, default=True) # Требуется import Boolean
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    def __repr__(self):
+        return f"<User {self.username} ({self.role})>"

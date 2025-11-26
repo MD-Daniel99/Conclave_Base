@@ -20,6 +20,62 @@ OgrnipType = constr(pattern=r'^\d{15}$', strip_whitespace=True)         # 15 ц�
 BicType = constr(pattern=r'^\d{9}$', strip_whitespace=True)            # 9 цифр
 AccountType = constr(min_length=20, max_length=34, pattern=r'^\d+$', strip_whitespace=True)  # 20..34 цифр
 
+
+
+class ClientSummary(BaseModel):
+    client_id: UUID
+    first_name: str
+    last_name: str
+    model_config = ConfigDict(from_attributes=True)
+
+# -------------------------
+# Module
+# -------------------------
+class ModuleBase(BaseModel):
+    module_name: str
+    catalogue_index: str
+    supplier: str
+    ordered: str
+    order_date_acc_num: str
+    quantity: int = 0
+    cost: float = 0.0
+    price: float = 0.0
+    recd: str
+    pending: str
+    properties: str
+    notes: Optional[str] = None
+
+class ModuleCreate(ModuleBase):
+    # Разрешаем None, чтобы модуль мог быть "ничьим"
+    client_id: Optional[UUID] = None
+    
+
+class ModuleUpdate(BaseModel):
+    # Все поля опциональны для PATCH-запросов
+    client_id: Optional[UUID] = None # Разрешаем перепривязку модуля
+    module_name: Optional[str] = None
+    catalogue_index: Optional[str] = None
+    supplier: Optional[str] = None
+    ordered: Optional[str] = None
+    order_date_acc_num: Optional[str] = None
+    cost: Optional[float] = None
+    price: Optional[float] = None
+    recd: Optional[str] = None
+    pending: Optional[str] = None
+    properties: Optional[str] = None
+    notes: Optional[str] = None
+
+class ModuleRead(ModuleBase):
+    module_id: UUID
+    client_id: Optional[UUID] = None 
+    client: Optional[ClientSummary] = None # информация о клиенте-владельце 
+    #module_name: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # -------------------------
 # Agent
 # -------------------------
@@ -112,6 +168,8 @@ class PhoneRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class PhoneUpdate(BaseModel):
+    number: Optional[str] = None
 
 # -------------------------
 # Client
@@ -186,12 +244,13 @@ class ClientRead(ClientBase):
     stage: Optional[StageSummary] = None
     phones: Optional[List[PhoneRead]] = Field(default_factory=list)
 
-    # Дополнительные вложенные списки (SNILS, Passports)
-    snils: Optional[List["SnilsRead"]] = Field(default_factory=list)
-    passports: Optional[List["PassportRead"]] = Field(default_factory=list)
+    # Дополнительные вложенные списки
+    snils: Optional[List["SnilsRead"]] = Field(default_factory = list)
+    passports: Optional[List["PassportRead"]] = Field(default_factory = list)
+
+    modules: Optional[List["ModuleRead"]] = Field(default_factory = list)
 
     model_config = ConfigDict(from_attributes=True)
-
 
 # -------------------------
 # Status / Stage / DocumentType
@@ -224,29 +283,20 @@ class DocumentTypeCreate(BaseModel):
 class DocumentTypeRead(DocumentTypeCreate):
     model_config = ConfigDict(from_attributes=True)
 
-
-# app/schemas.py
-
-# ... (остальной код файла без изменений) ...
-
 # -------------------------
 # Passport
 # -------------------------
 class PassportBase(BaseModel):
     full_name: str
     
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    birth_date: Optional[date] = None # <-- ДОБАВЛЕНО
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    birth_date: Optional[date] = None 
     
     birth_place: str
     series_number: str
     issued_by: str
     issue_date: date
     
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    department_code: Optional[str] = None # <-- ДОБАВЛЕНО
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    department_code: Optional[str] = None 
     
     expiry_date: Optional[date] = None
     registration_address: str
@@ -255,28 +305,22 @@ class PassportBase(BaseModel):
 class PassportCreate(PassportBase):
     pass
 
-# НОВАЯ СХЕМА
+
 class PassportUpdate(BaseModel):
     full_name: Optional[str] = None
     
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    birth_date: Optional[date] = None # <-- ДОБАВЛЕНО
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    birth_date: Optional[date] = None 
     
     birth_place: Optional[str] = None
     series_number: Optional[str] = None
     issued_by: Optional[str] = None
     issue_date: Optional[date] = None
     
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    department_code: Optional[str] = None # <-- ДОБАВЛЕНО
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    department_code: Optional[str] = None 
+
     
     expiry_date: Optional[date] = None
     registration_address: Optional[str] = None
-
-# ... (остальной код файла без изменений) ...
-
 
 class PassportRead(PassportBase):
     passport_id: UUID
@@ -298,7 +342,6 @@ class SnilsBase(BaseModel):
 class SnilsCreate(SnilsBase):
     pass
 
-# НОВАЯ СХЕМА
 class SnilsUpdate(BaseModel):
     number: Optional[str] = None
     issued_date: Optional[date] = None
@@ -373,9 +416,42 @@ class AuditLogCreate(AuditLogBase):
 class AuditLogRead(AuditLogBase):
     log_id: UUID
     timestamp: Optional[datetime]
-
     model_config = ConfigDict(from_attributes=True)
 
 
-# Разрешаем forward references (PassportRead / SnilsRead использованы в ClientRead)
-ClientRead.model_rebuild() # ИЗМЕНЕНИЕ: update_forward_refs() устарел в Pydantic v2
+# -------------------------
+# Auth / Users
+# -------------------------
+class UserBase(BaseModel):
+    username: str
+
+class UserCreate(UserBase):
+    password: str
+    role: str = "user"
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = None 
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+    password: Optional[str] = None 
+
+class UserRead(UserBase):
+    user_id: UUID
+    role: str
+    is_active: bool
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    role: str
+    username: str
+    user_id: UUID 
+
+ClientRead.model_rebuild() 
+UserRead.model_rebuild()

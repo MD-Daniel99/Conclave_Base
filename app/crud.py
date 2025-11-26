@@ -1,24 +1,76 @@
-'''
-Функции доступа к базе данных.
-
- - create_client будет создавать клиента и (опционально) телефоны, возвращать досье клиента
- - get_client будет возвращать досье клиента (включая телефоны и связанные сущности)
- - list_clients — пагинация, поиск по ФИО, возвращает вложенные сущности
- - update_client — частичное обновление (PATCH)
- - delete_client — удаление
-
-Роуты используют response_model и get_db()
-'''
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from sqlalchemy import select, or_, func, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
-from datetime import datetime
+from datetime import datetime, timezone
 
 from . import models, schemas
+from passlib.context import CryptContext
 
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto") 
+
+# --- USER CRUD ---
+
+def get_user_by_username(db: Session, username: str):
+    return db.execute(select(models.User).where(models.User.username == username)).scalars().first()
+
+def create_user(db: Session, user_in: schemas.UserCreate):
+    hashed_password = pwd_context.hash(user_in.password)
+    db_user = models.User(
+        username=user_in.username,
+        password_hash=hashed_password,
+        role=user_in.role
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_user(db: Session, user_id: UUID):
+    return db.get(models.User, user_id)
+
+def update_user(db: Session, user_id: UUID, payload: schemas.UserUpdate):
+    user = db.get(models.User, user_id)
+    if not user: return None
+    
+    # Обновление логина с проверкой на уникальность
+    if payload.username is not None:
+        # Проверяем, не занят ли логин кем-то другим
+        existing = get_user_by_username(db, payload.username)
+        if existing and existing.user_id != user_id:
+            raise ValueError(f"Логин '{payload.username}' уже занят.")
+        user.username = payload.username
+
+    if payload.role is not None:
+        user.role = payload.role
+    if payload.is_active is not None:
+        user.is_active = payload.is_active
+    if payload.password is not None:
+        user.password_hash = pwd_context.hash(payload.password)
+        
+    db.add(user)
+    try:
+        db.commit()
+        db.refresh(user)
+        return user
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("Ошибка базы данных (возможно, логин занят)")
+    except Exception as e:
+        db.rollback()
+        raise e
+
+def delete_user(db: Session, user_id: UUID):
+    user = db.get(models.User, user_id)
+    if not user: return False
+    db.delete(user)
+    db.commit()
+    return True
 
 def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
     """
@@ -36,7 +88,6 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
                 "created_at": p.created_at
             })
     else:
-        # fallback: отдельный запрос (на случай, если связь не была загружена)
         phones_q = db.execute(
             select(models.Phone).where(models.Phone.client_id == client.client_id).order_by(models.Phone.phone_id)
         ).scalars().all()
@@ -48,11 +99,11 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
                 "created_at": p.created_at
             })
 
-    # agent summary (use relationship if available)
+    # agent summary 
     agent_summary = None
     agent_obj = getattr(client, "agent", None)
     if agent_obj is None and client.agent_id is not None:
-        # safe fallback — загрузим агента
+        # safe fallback 
         agent_obj = db.get(models.Agent, client.agent_id)
     if agent_obj is not None:
         agent_summary = {
@@ -134,6 +185,17 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
                 "version": s.version,
                 "created_at": s.created_at,
             })
+    
+    modules_list: List[Dict[str, Any]] = []
+    if "modules" in client.__dict__: 
+        for m in client.modules:
+            modules_list.append(schemas.ModuleRead.from_orm(m).model_dump())
+    else:
+        # Fallback (на всякий случай, если вызвана функцию без selectinload)
+        m_q = db.execute(select(models.Module).where(models.Module.client_id == client.client_id)).scalars().all()
+        for m in m_q:
+            modules_list.append(schemas.ModuleRead.from_orm(m).model_dump())
+
 
     result = {
         "client_id": client.client_id,
@@ -155,6 +217,7 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "phones": phones,
         "passports": passports_list,
         "snils": snils_list,
+        "modules": modules_list,
     }
     return result
 
@@ -200,10 +263,6 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
 
 
 def get_client(db: Session, client_id: UUID) -> Optional[Dict[str, Any]]:
-    """
-    Возвращает клиента с вложенными сущностями.
-    Используем select + selectinload, чтобы подгрузить нужные связи одним запросом.
-    """
     stmt = (
         select(models.Client)
         .where(models.Client.client_id == client_id)
@@ -212,6 +271,7 @@ def get_client(db: Session, client_id: UUID) -> Optional[Dict[str, Any]]:
             selectinload(models.Client.agent),
             selectinload(models.Client.passports),
             selectinload(models.Client.snils),
+            selectinload(models.Client.modules),
         )
     )
     client = db.execute(stmt).scalars().first()
@@ -227,7 +287,7 @@ def list_clients(
     q: Optional[str] = None,
     status: Optional[str] = None,
     agent_id: Optional[UUID] = None,
-    current_stage: Optional[str] = None, # <--- ИЗМЕНЕНИЕ: Добавлен параметр
+    current_stage: Optional[str] = None, 
 ) -> List[Dict[str, Any]]:
     """
     Возвращает список клиентов с вложенными сущностями (agent, status, stage, phones, passports, snils).
@@ -238,6 +298,7 @@ def list_clients(
         selectinload(models.Client.agent),
         selectinload(models.Client.passports),
         selectinload(models.Client.snils),
+        selectinload(models.Client.modules),
     )
 
     conditions = []
@@ -254,7 +315,6 @@ def list_clients(
         conditions.append(models.Client.status_code == status)
     if agent_id:
         conditions.append(models.Client.agent_id == agent_id)
-    # <--- ИЗМЕНЕНИЕ: Добавлено условие фильтрации
     if current_stage:
         conditions.append(models.Client.current_stage == current_stage)
 
@@ -334,7 +394,6 @@ def create_agent(db: Session, agent_in: schemas.AgentCreate) -> Dict[str, Any]:
     """
     Создаёт агента и возвращает dict, соответствующий schemas.AgentRead.
     """
-    # ИЗМЕНЕНИЕ: Корректная обработка опционального поля
     corr_account = agent_in.correspondent_account or agent_in.account_number
 
     agent = models.Agent(
@@ -376,27 +435,28 @@ def get_agent_by_external(db: Session, external_id: int) -> Optional[Dict[str, A
     return _agent_to_dict(agent)
 
 
-def list_agents(
-    db: Session,
-    skip: int = 0,
-    limit: int = 50,
-    q: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """
-    Список агентов с поиском по ФИО (q), пагинацией.
-    """
-    stmt = select(models.Agent)
+def list_agents(db: Session, skip: int = 0, limit: int = 50, q: Optional[str] = None):
+    stmt = select(models.Agent).distinct()
+    
     if q:
         like = f"%{q}%"
-        stmt = stmt.where(
-            or_(
-                models.Agent.first_name.ilike(like),
-                models.Agent.last_name.ilike(like),
-                models.Agent.middle_name.ilike(like),
-            )
+        agent_cond = or_(
+            models.Agent.first_name.ilike(like),
+            models.Agent.last_name.ilike(like),
+            models.Agent.middle_name.ilike(like)
         )
+        
+        stmt = stmt.outerjoin(models.Client)
+        client_cond = or_(
+            models.Client.first_name.ilike(like),
+            models.Client.last_name.ilike(like)
+        )
+        
+        stmt = stmt.where(or_(agent_cond, client_cond))
+
     stmt = stmt.order_by(models.Agent.last_name, models.Agent.first_name).offset(skip).limit(limit)
     agents = db.execute(stmt).scalars().all()
+    # Используем существующую функцию _agent_to_dict
     return [_agent_to_dict(a) for a in agents]
 
 
@@ -445,23 +505,18 @@ def delete_agent(db: Session, agent_id: UUID) -> bool:
 
 
 # ----------------------------------
-# Phones, Passport, SNILS (НОВЫЕ И ОБНОВЛЕННЫЕ ФУНКЦИИ)
+# Phones, Passport, SNILS 
 # ----------------------------------
 
 def add_phone(db: Session, client_id: UUID, number: str) -> models.Phone:
     client = db.get(models.Client, client_id)
-    if not client:
-        raise ValueError("Client not found")
-
-    phone = models.Phone(client_id=client_id, number=number)
+    if not client: raise ValueError("Client not found")
+    
+    phone = models.Phone(client_id=client_id, number=number,  created_at=datetime.now(timezone.utc),)
     db.add(phone)
-    try:
-        db.commit()
-        db.refresh(phone)
-        return phone
-    except Exception:
-        db.rollback()
-        raise
+    db.commit()
+    db.refresh(phone)
+    return phone
 
 
 def list_phones(db: Session, client_id: UUID) -> List[Dict[str, Any]]:
@@ -482,13 +537,42 @@ def delete_phone(db: Session, phone_id: int) -> bool:
     except Exception:
         db.rollback()
         raise
+def update_phone(db: Session, phone_id: int, payload: Dict[str, Any]) -> Optional[models.Phone]:
+    phone = db.get(models.Phone, phone_id)
+    if not phone:
+        return None
+    
+    for key, value in payload.items():
+        setattr(phone, key, value)
+        
+    db.add(phone)
+    try:
+        db.commit()
+        db.refresh(phone)
+        return phone
+    except Exception:
+        db.rollback()
+        raise
 
 def create_passport(db: Session, client_id: UUID, passport_in: schemas.PassportCreate) -> models.Passport:
     client = db.get(models.Client, client_id)
     if not client:
         raise ValueError("Client not found")
     
-    passport = models.Passport(client_id=client_id, **passport_in.model_dump())
+    # Явная передача полей, чтобы избежать ошибок валидации
+    passport = models.Passport(
+        client_id=client_id,
+        full_name=passport_in.full_name,
+        birth_date=passport_in.birth_date,
+        birth_place=passport_in.birth_place,
+        series_number=passport_in.series_number,
+        issued_by=passport_in.issued_by,
+        issue_date=passport_in.issue_date,
+        department_code=passport_in.department_code,
+        expiry_date=passport_in.expiry_date,
+        registration_address=passport_in.registration_address,
+        created_at=datetime.now(timezone.utc),
+    )
     db.add(passport)
     try:
         db.commit()
@@ -515,12 +599,29 @@ def update_passport(db: Session, passport_id: UUID, payload: Dict[str, Any]) -> 
         db.rollback()
         raise
 
+def delete_passport(db: Session, passport_id: UUID) -> bool:
+    passport = db.get(models.Passport, passport_id)
+    if not passport:
+        return False
+    db.delete(passport)
+    try:
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+
 def create_snils(db: Session, client_id: UUID, snils_in: schemas.SnilsCreate) -> models.Snils:
     client = db.get(models.Client, client_id)
     if not client:
         raise ValueError("Client not found")
         
-    snils = models.Snils(client_id=client_id, **snils_in.model_dump())
+    snils = models.Snils(
+        client_id=client_id, 
+        number=snils_in.number, 
+        issued_date=snils_in.issued_date,
+        created_at=datetime.now(timezone.utc),
+    )
     db.add(snils)
     try:
         db.commit()
@@ -543,6 +644,18 @@ def update_snils(db: Session, snils_id: UUID, payload: Dict[str, Any]) -> Option
         db.commit()
         db.refresh(snils)
         return snils
+    except Exception:
+        db.rollback()
+        raise
+
+def delete_snils(db: Session, snils_id: UUID) -> bool:
+    snils = db.get(models.Snils, snils_id)
+    if not snils:
+        return False
+    db.delete(snils)
+    try:
+        db.commit()
+        return True
     except Exception:
         db.rollback()
         raise
@@ -590,3 +703,84 @@ def create_status(db: Session, status_in: schemas.StatusCreate):
     except Exception:
         db.rollback()
         raise
+
+
+# -------------------------
+# Module
+# -------------------------
+
+def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module:
+    """Создает модуль. Проверяет клиента, если ID передан."""
+    # Если client_id передан (не None), проверяем, существует ли такой клиент
+    if module_in.client_id:
+        client = db.get(models.Client, module_in.client_id)
+        if not client:
+            raise ValueError(f"Client with id {module_in.client_id} not found")
+    
+    # Создаем объект модели
+    db_module = models.Module(**module_in.model_dump())
+
+    db.add(db_module)
+    db.commit()
+    db.refresh(db_module)
+    return db_module
+
+def get_module(db: Session, module_id: UUID) -> Optional[models.Module]:
+    return db.get(models.Module, module_id)
+
+def list_modules(
+    db: Session, 
+    skip: int = 0, 
+    limit: int = 100, 
+    q: Optional[str] = None, 
+    supplier: Optional[str] = None, 
+    client_id: Optional[UUID] = None
+) -> List[models.Module]:
+    
+    stmt = select(models.Module).options(selectinload(models.Module.client))
+
+    # условия фильтрации
+    conditions = []
+    if q:
+        conditions.append(models.Module.module_name.ilike(f"%{q}%"))
+    if supplier:
+        conditions.append(models.Module.supplier.ilike(f"%{supplier}%"))
+    if client_id:
+        conditions.append(models.Module.client_id == client_id)
+    
+    if conditions:
+        stmt = stmt.where(and_(*conditions))
+    
+    stmt = stmt.order_by(models.Module.updated_at.desc())
+    stmt = stmt.offset(skip).limit(limit)
+    return db.execute(stmt).scalars().all()
+
+def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -> Optional[models.Module]:
+    db_module = db.get(models.Module, module_id)
+    if not db_module:
+        return None
+    
+    data = payload.model_dump(exclude_unset=True)
+    
+    # Если меняем владельца
+    if 'client_id' in data and data['client_id'] is not None:
+        client = db.get(models.Client, data['client_id'])
+        if not client: raise ValueError("Target client not found")
+
+    for k, v in data.items():
+        setattr(db_module, k, v)
+    
+    db.add(db_module)
+    db.commit()
+    db.refresh(db_module)
+    return db_module
+
+def delete_module(db: Session, module_id: UUID) -> bool:
+    db_module = db.get(models.Module, module_id)
+    if not db_module:
+        return False
+    db.delete(db_module)
+    db.commit()
+    return True
+
+

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from uuid import UUID
 
 from app import schemas, crud
 from app.db import get_db
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter()
 
@@ -14,13 +15,19 @@ def api_create_agent(payload: schemas.AgentCreate, db: Session = Depends(get_db)
     try:
         agent = crud.create_agent(db, payload)
         return agent
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent with such INN/OGRNIP might already exist."
+        )
     except Exception as e:
-        # можно уточнить ошибки IntegrityError -> 400, другое -> 500 и т.д.
-        raise HTTPException(status_code=500, detail=f"DB error: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 
 @router.get("/", response_model=List[schemas.AgentRead])
-def api_list_agents(skip: int = 0, limit: int = 50, q: Optional[str] = None, db: Session = Depends(get_db)):
+def api_list_agents(skip: int = 0, limit: int = Query(50, ge=1, le=100000), q: Optional[str] = None, db: Session = Depends(get_db)):
     return crud.list_agents(db, skip=skip, limit=limit, q=q)
 
 
