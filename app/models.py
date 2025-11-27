@@ -15,7 +15,7 @@
 """
 
 from sqlalchemy import (
-    Column, String, Text, Date, Integer, DateTime, ForeignKey, JSON, BigInteger, text, func, Float, Boolean
+    Column, String, Text, Date, Integer, DateTime, ForeignKey, JSON, BigInteger, text, func, Float, Boolean, Sequence
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -35,11 +35,12 @@ class Agent(Base):
     agent_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
 
     # Человекочитаемый порядковый идентификатор (external_id) — заполняется серверной последовательностью
+    # Человекочитаемый порядковый идентификатор (external_id)
     external_id = Column(
         BigInteger,
+        Sequence('agent_external_id_seq', start=1, increment=1), # <--- ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ
         nullable=False,
-        unique=True,
-        server_default=text("nextval('agent_external_id_seq')")
+        unique=True
     )
 
     last_name = Column(String(128), nullable=False)
@@ -91,11 +92,12 @@ class Client(Base):
     client_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
 
     # Человекочитаемый порядковый идентификатор (external_id) — заполняется последовательностью
+    # Человекочитаемый порядковый идентификатор (external_id)
     external_id = Column(
         BigInteger,
+        Sequence('client_external_id_seq', start=1, increment=1), # <--- ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ
         nullable=False,
-        unique=True,
-        server_default=text("nextval('client_external_id_seq')")
+        unique=True
     )
 
     last_name = Column(String(128), nullable=False)

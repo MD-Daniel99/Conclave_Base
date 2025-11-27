@@ -13,4 +13,4 @@ passlib[bcrypt]
 argon2-cffi
 pandas
 extra-streamlit-components
-
+pydantic-settings

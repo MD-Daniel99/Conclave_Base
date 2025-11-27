@@ -5,11 +5,9 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from config import settings
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://daniel:801599@localhost:5432/documents_db"
-)
+DATABASE_URL = settings.get_db_url()
 
 # Engine управляет пулом соединений, координирует работу между бэкендом и СУБД
 # pool - проверяет целостность соединения перед использованием
