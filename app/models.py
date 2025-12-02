@@ -1,3 +1,4 @@
+# Модели БД (models.py) - отображение на таблицы БД
 """
     Описание ORM-моделей и метаданных схемы:
      Уровни работы с БД:
@@ -22,7 +23,8 @@ from sqlalchemy.orm import declarative_base, relationship
 import uuid
 from datetime import datetime, timezone
 
-Base = declarative_base()
+Base = declarative_base() # объектно-реляционное отображение таблиц рел. базах данных в виде классов. Создается из экземпляра 
+# ORM класса, наследуемым, например, от declarative_base
 
 
 def gen_uuid():
@@ -33,9 +35,7 @@ class Agent(Base):
     __tablename__ = "AGENT"
 
     agent_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
-
     # Человекочитаемый порядковый идентификатор (external_id) — заполняется серверной последовательностью
-    # Человекочитаемый порядковый идентификатор (external_id)
     external_id = Column(
         BigInteger,
         Sequence('agent_external_id_seq', start=1, increment=1), # <--- ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ
@@ -109,11 +109,14 @@ class Client(Base):
 
     # на агента — запрещаем каскадное удаление (RESTRICT), чтобы случайно не потерять клиентов
     agent_id = Column(UUID(as_uuid=True), ForeignKey("AGENT.agent_id", ondelete="RESTRICT"), nullable=False)
-
     deadline = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     notes = Column(Text, nullable=True)
+
+    check_date = Column(Date, nullable=True)          
+    prosthesis_type = Column(String(255), nullable=True) 
+    certificate_price = Column(Float, nullable=True)
 
     # отношения
     agent = relationship("Agent", back_populates="clients")
@@ -127,25 +130,21 @@ class Client(Base):
     def __repr__(self):
         return f"<Client {self.client_id} {self.last_name}>"
 
-
-class DocumentType(Base):
-    __tablename__ = "DOCUMENT_TYPE"
-    type_code = Column(String(32), primary_key=True)
-    title = Column(Text, nullable=False)
-
-
+# Documents storage models
 class Document(Base):
     __tablename__ = "DOCUMENT"
     document_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     client_id = Column(UUID(as_uuid=True), ForeignKey("CLIENT.client_id", ondelete="CASCADE"), nullable=False)
-    type_code = Column(String(32), ForeignKey("DOCUMENT_TYPE.type_code"), nullable=False)
-    filename = Column(Text, nullable=False)
-    object_key = Column(Text, nullable=False)
-    version = Column(Integer, nullable=False, default=1)
-    uploaded_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Метаданные файла
+    filename = Column(Text, nullable=False)     # Оригинальное имя: "passport.pdf"
+    storage_path = Column(Text, nullable=False) # Путь на диске: "storage/uuid.pdf"
+    content_type = Column(String(100), nullable=True) # "application/pdf"
+    size = Column(Integer, nullable=True)       # Размер в байтах
+    
+    created_at = Column(DateTime(timezone=True), default=datetime.now, server_default=func.now())
 
     client = relationship("Client", back_populates="documents")
-    doc_type = relationship("DocumentType")
 
 
 class Phone(Base):

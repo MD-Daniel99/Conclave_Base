@@ -128,6 +128,13 @@ try:
 except Exception as e:
     warnings.warn(f"Docs router fail: {e!r}")
 
+# Documents api imports
+try:
+    from app.api import documents
+    documents_router = documents.router
+except Exception as e:
+    warnings.warn(f"Docs router fail: {e!r}")
+
 
 app = FastAPI(
     title="Documents API",
@@ -154,6 +161,8 @@ if passports_router: app.include_router(passports_router, prefix="/passports", t
 if snils_router: app.include_router(snils_router, prefix="/snils", tags=["documents"])
 if phones_router: app.include_router(phones_router, prefix="/phones", tags=["clients"])
 if modules_router: app.include_router(modules_router, prefix="/modules", tags=["modules"])
+if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
+# Documents connection
 if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
 
 @app.get("/health")

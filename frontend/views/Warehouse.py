@@ -50,7 +50,7 @@ def get_warehouse_csv():
             "Владелец": own,
             "Количество": m['quantity'],
             "Цена": m['price'],
-            "Себестоимость": m['cost'],
+            "Стоимость": m['cost'],
             "Ordered": m['ordered'],
             "Recd": m['recd'],
             "Pending": m['pending'],
@@ -159,6 +159,8 @@ if st.session_state.wh_active_id is None:
                 "ID": m["module_id"],
                 "Название": m["module_name"],
                 "Индекс": m["catalogue_index"],
+                "Цена": m["price"],
+                "Стоимость": m["cost"],
                 "Поставщик": m["supplier"],
                 "Владелец": own
             })
@@ -194,16 +196,16 @@ if st.session_state.wh_active_id is None:
             st.subheader("Финансы и Количество")
             f1, f2, f3 = st.columns(3)
             n_qty = f1.number_input("Количество (шт)", min_value=0, value=1, step=1)
-            n_cost = f2.number_input("Себестоимость", min_value=0.0, value=0.0, step=10.0)
-            n_price = f3.number_input("Цена продажи", min_value=0.0, value=0.0, step=10.0)
+            n_cost = f2.number_input("Стоимость", min_value=0.0, value=0.0, step=0.01)
+            n_price = f3.number_input("Цена", min_value=0.0, value=0.0, step=0.01)
 
             st.divider()
             st.subheader("Статусы и Детали")
             # Эти поля в вашей базе строковые (String), поэтому используем text_input
             s1, s2, s3 = st.columns(3)
-            n_ord = s1.text_input("Заказано (Ordered)", value="0")
-            n_recd = s2.text_input("Получено (Recd)", value="0")
-            n_pend = s3.text_input("Ожидается (Pending)", value="0")
+            n_ord = s1.text_input("Заказано", value="0")
+            n_recd = s2.text_input("Получено", value="0")
+            n_pend = s3.text_input("Ожидается", value="0")
 
             d1, d2 = st.columns(2)
             n_acc = d1.text_input("№ Счета / Дата заказа", value="-")
@@ -306,17 +308,17 @@ else:
         price_val = mod_detail.get('price') or 0.0
         
         eq = f1.number_input("Количество (шт)", min_value=0, value=int(qty_val), step=1)
-        ec = f2.number_input("Себестоимость", min_value=0.0, value=float(cost_val), step=10.0)
-        ep = f3.number_input("Цена продажи", min_value=0.0, value=float(price_val), step=10.0)
+        ec = f2.number_input("Стоимость", min_value=0.0, value=float(cost_val), step=0.01)
+        ep = f3.number_input("Цена", min_value=0.0, value=float(price_val), step=0.01)
 
         st.divider()
 
         # --- РАЗДЕЛ 3: СТАТУСЫ И ДЕТАЛИ ---
         st.caption("Статусы и Детали")
         s1, s2, s3 = st.columns(3)
-        e_ord = s1.text_input("Заказано (Ordered)", value=mod_detail.get('ordered', '0'))
-        e_recd = s2.text_input("Получено (Recd)", value=mod_detail.get('recd', '0'))
-        e_pend = s3.text_input("Ожидается (Pending)", value=mod_detail.get('pending', '0'))
+        e_ord = s1.text_input("Заказано", value=mod_detail.get('ordered', '0'))
+        e_recd = s2.text_input("Получено", value=mod_detail.get('recd', '0'))
+        e_pend = s3.text_input("Ожидается", value=mod_detail.get('pending', '0'))
 
         d1, d2 = st.columns(2)
         e_acc = d1.text_input("№ Счета / Дата заказа", value=mod_detail.get('order_date_acc_num', '-'))

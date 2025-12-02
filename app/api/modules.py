@@ -1,4 +1,5 @@
 # app/api/modules.py
+# API слой - HTTP-логика, роутинг, ошибки
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from uuid import UUID
@@ -6,15 +7,17 @@ from sqlalchemy.orm import Session
 from app import schemas, crud
 from app.db import get_db
 
-router = APIRouter()
+router = APIRouter() # объект, осущ. взаимодействие между ASGI сервером и клиентом; 
+# распределяет входящие запросы (Path, Query, etc) по корректным получателям и обеспечивает корректные ответы.
+# То есть, входящие данные передаются соответствующим им перменным в operation fuction под декоратором как параметры пути.
 
-@router.post("/", response_model=schemas.ModuleRead, status_code=201)
-def api_create_module(payload: schemas.ModuleCreate, db: Session = Depends(get_db)):
-    try:
-        return crud.create_module(db, payload)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
+@router.post("/", response_model=schemas.ModuleRead, status_code=201) # response_model - инструкция сериализации ответа
+def api_create_module(payload: schemas.ModuleCreate, db: Session = Depends(get_db)): # Зависимости (Depends) - инъекция сессии БД                                                                          
+    try:                                                # Автоматически: # читает JSON из запроса,
+        return crud.create_module(db, payload)                            # валидирует по модели ModuleCreate(наследует ModuleBase),
+    except ValueError as e:                                               # создает объект ModuleCreate,
+        raise HTTPException(status_code=404, detail=str(e))               # передает объект в функцию
+    except Exception as e:                                                
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
 @router.get("/", response_model=List[schemas.ModuleRead])

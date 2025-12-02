@@ -4,6 +4,7 @@ import streamlit as st
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional
 
+
 # --- CONFIG ---
 def get_secret(key: str, default=None):
     v = os.environ.get(key)
@@ -200,3 +201,23 @@ def patch_phone(pid, pl):
 def delete_phone(pid):
     handle_request("DELETE", f"{API_BASE}/phones/{pid}", headers=get_headers())
     st.cache_data.clear()
+
+# --- Documents API ---
+def upload_client_file(client_id, file_obj):
+    # Для отправки файлов requests использует параметр 'files'
+    # file_obj - это объект BytesIO от Streamlit
+    files = {"file": (file_obj.name, file_obj, file_obj.type)}
+    resp = requests.post(f"{API_BASE}/documents/clients/{client_id}/upload", files=files, headers=get_headers())
+    resp.raise_for_status()
+    st.cache_data.clear()
+
+def fetch_client_files(client_id):
+    return handle_request("GET", f"{API_BASE}/documents/clients/{client_id}/list", headers=get_headers())
+
+def delete_file(document_id):
+    handle_request("DELETE", f"{API_BASE}/documents/{document_id}", headers=get_headers())
+    st.cache_data.clear()
+
+# Функция для получения прямой ссылки (для скачивания)
+def get_download_url(document_id):
+    return f"{API_BASE}/documents/download/{document_id}"

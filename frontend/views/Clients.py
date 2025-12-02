@@ -3,9 +3,11 @@ import pandas as pd
 import sys
 import os
 from datetime import datetime, time, date
-
+import requests
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import utils
+
+MIN_DATE = date(1900, 1, 1)
 
 # --- AUTH ---
 if not st.session_state.get("token"):
@@ -57,11 +59,14 @@ def get_clients_csv():
                 "Фамилия": c['last_name'],
                 "Имя": c['first_name'],
                 "Отчество": c['middle_name'],
+                "Дата пробития": c.get('check_date'),
+                "Вид протеза": c.get('prosthesis_type'),
+                "Стоимость сертификата": c.get('certificate_price'),
                 "Статус": statuses_map.get(c['status_code'], c['status_code']),
                 "Этап": stages_map.get(c['current_stage'], c['current_stage']),
                 "Агент": aname,
-                "Дедлайн": c['deadline'],
-                "Заметки": c['notes']
+                "Повторное обращение": c['deadline'],
+                "Заметки": c['notes'],
             })
         return pd.DataFrame(export_rows).to_csv(index=False).encode('utf-8-sig')
     except Exception as e:
@@ -199,12 +204,24 @@ if st.session_state.cli_active_id is None:
             if c.get("agent"): 
                 agent_name = f"{c['agent']['last_name']} {c['agent']['first_name']}"
             
+            created_dt = c.get("created_at")[:10] if c.get("created_at") else "-"
+            updated_dt = c.get("updated_at")[:10] if c.get("updated_at") else "-"
+            deadline_dt = c.get("deadline")[:10] if c.get("deadline") else "-"
+            check_dt = c.get("check_date") if c.get("check_date") else "-"
+            cert_price = c.get("certificate_price") if c.get("certificate_price") is not None else "-"
+            
             rows.append({
                 "ID": c["client_id"],
                 "ФИО": f"{c['last_name']} {c['first_name']} {c['middle_name'] or ''}",
+                "Вид протеза": c.get("prosthesis_type") or "-",
+                "Дата пробития": check_dt,                     
+                "Стоимость серт.": cert_price,
                 "Статус": statuses_map.get(c["status_code"], c["status_code"]),
+                "Этап": stages_map.get(c["current_stage"], c["current_stage"]),
                 "Агент": agent_name,
-                "Дедлайн": c.get("deadline")
+                "Повторное обращение": deadline_dt,
+                "Создан": created_dt,       
+                "Обновлен": updated_dt
             })
         
         df = pd.DataFrame(rows)
@@ -231,14 +248,22 @@ if st.session_state.cli_active_id is None:
             nst = c2.selectbox("Статус *", list(statuses_map.keys()), format_func=lambda x: statuses_map.get(x))
             nsg = c2.selectbox("Этап *", list(stages_map.keys()), format_func=lambda x: stages_map.get(x))
             nag = c2.selectbox("Агент *", list(agents_map.keys()))
-            
-            ndead = st.date_input("Дедлайн", value=None)
-            nnotes = st.text_area("Заметки")
+            st.divider()
+            st.subheader("Сертификат и вид протеза")
+            d1, d2, d3 = st.columns(3)
+            n_prosthesis = d1.text_input("Вид протеза")
+            n_check_date = d2.date_input("Дата пробития", value=None)
+            n_price = d3.number_input("Стоимость сертификата", min_value=0.0, step=1.0, format="%.2f")
+            ndead = st.date_input("Повторное обращение", value=None)
+            nnotes = st.text_area("Заметки", key="new_client_notes")
             
             if st.form_submit_button("Создать"):
                 if nl and nf and nag:
                     pl = {
                         "last_name": nl, "first_name": nf, "middle_name": nm,
+                        "prosthesis_type": n_prosthesis,
+                        "check_date": n_check_date.isoformat() if n_check_date else None,
+                        "certificate_price": n_price,
                         "status_code": nst, "current_stage": nsg,
                         "agent_id": agents_map[nag],
                         "deadline": datetime.combine(ndead, time.min).isoformat() if ndead else None,
@@ -271,7 +296,7 @@ else:
 
     st.header(f"👤 {detail['last_name']} {detail['first_name']}")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["✏️ Редактирование", "📄 Документы", "📞 Телефоны", "📦 Модули"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["✏️ Редактирование", "📄 Документы", "📞 Телефоны", "📦 Модули", "📎 Файлы"])
 
     # --- TAB 1: ОСНОВНОЕ ---
     with tab1:
@@ -287,18 +312,38 @@ else:
             idx_sg = list(stages_map.keys()).index(detail['current_stage']) if detail['current_stage'] in stages_map else 0
             esg = c2.selectbox("Этап", list(stages_map.keys()), index=idx_sg, format_func=lambda x: stages_map.get(x))
 
+            st.divider()
+
+            st.caption("Данные протезирования")
+            
+            pd1, pd2, pd3 = st.columns(3)
+            e_prosthesis = pd1.text_input("Вид протеза", value=detail.get('prosthesis_type') or "")
+            e_check_date = pd2.date_input("Дата пробития", value=to_date(detail.get('check_date')))
+            
+            curr_price = detail.get('certificate_price') or 0.0
+            e_price = pd3.number_input("Стоимость сертификата", min_value=0.0, value=float(curr_price), step=1.0, format="%.2f")
+
+            st.divider()
+
             cur_ag_id = detail['agent_id']
             ag_name = next((k for k, v in agents_map.items() if v == cur_ag_id), list(agents_map.keys())[0])
             idx_ag = list(agents_map.keys()).index(ag_name)
             eag = c2.selectbox("Агент", list(agents_map.keys()), index=idx_ag)
-            
+
+            c3, c4 = st.columns(2)
+            edead = c3.date_input("Повторное обращение", value=to_date(detail.get('deadline')))
             enotes = st.text_area("Заметки", detail['notes'])
+            
 
             if st.form_submit_button("Сохранить изменения"):
                 pl = {
                     "last_name": el, "first_name": ef, "middle_name": em,
+                    "prosthesis_type": e_prosthesis,
+                    "check_date": e_check_date.isoformat() if e_check_date else None,
+                    "certificate_price": e_price,
                     "status_code": est, "current_stage": esg,
                     "agent_id": agents_map[eag],
+                    "deadline": datetime.combine(edead, time.min).isoformat() if edead else None,
                     "notes": enotes
                 }
                 utils.patch_client(cid, pl)
@@ -327,13 +372,13 @@ else:
                     e_p_code = pc4.text_input("Код подразделения", value=p.get('department_code'))
                     
                     pc5, pc6 = st.columns(2)
-                    e_p_date = pc5.date_input("Дата выдачи", value=to_date(p.get('issue_date')))
+                    e_p_date = pc5.date_input("Дата выдачи", value=to_date(p.get('issue_date')), min_value=MIN_DATE)
                     e_p_exp = pc6.date_input("Действителен до", value=to_date(p.get('expiry_date')))
                     
                     st.divider()
                     pc7, pc8 = st.columns(2)
                     e_p_bp = pc7.text_input("Место рождения", value=p.get('birth_place'))
-                    e_p_bd = pc8.date_input("Дата рождения", value=to_date(p.get('birth_date')))
+                    e_p_bd = pc8.date_input("Дата рождения", value=to_date(p.get('birth_date')), min_value=MIN_DATE)
                     e_p_addr = st.text_area("Адрес прописки", value=p.get('registration_address'))
 
                     col_save, col_del = st.columns([1, 1])
@@ -362,7 +407,7 @@ else:
                 n_sn = st.text_input("Серия/Номер *")
                 n_fn = st.text_input("ФИО *")
                 n_by = st.text_input("Кем выдан")
-                n_dt = st.date_input("Дата выдачи *", value=None)
+                n_dt = st.date_input("Дата выдачи *", value=None, min_value=MIN_DATE)
                 n_bp = st.text_input("Место рождения")
                 n_addr = st.text_area("Прописка")
                 
@@ -391,7 +436,7 @@ else:
                 with st.form(key=f"edit_snils_{s['snils_id']}"):
                     c1, c2 = st.columns(2)
                     e_s_num = c1.text_input("Номер", value=s['number'])
-                    e_s_dt = c2.date_input("Дата выдачи", value=to_date(s.get('issued_date')))
+                    e_s_dt = c2.date_input("Дата выдачи", value=to_date(s.get('issued_date')), min_value=MIN_DATE)
                     
                     if st.form_submit_button("Сохранить СНИЛС"):
                         pl = {"number": e_s_num, "issued_date": e_s_dt.isoformat() if e_s_dt else None}
@@ -406,7 +451,7 @@ else:
         with st.popover("➕ Добавить СНИЛС"):
             with st.form("new_snils"):
                 s_num = st.text_input("Номер")
-                s_dt = st.date_input("Дата выдачи", value=None)
+                s_dt = st.date_input("Дата выдачи", value=None, min_value=MIN_DATE)
                 
                 if st.form_submit_button("Сохранить"):
                     if s_num:
@@ -465,7 +510,7 @@ else:
                         f1, f2, f3 = st.columns(3)
                         mq = f1.number_input("Количество (шт)", min_value=0, value=int(m.get('quantity') or 1), step=1)
                         mc = f2.number_input("Себестоимость", min_value=0.0, value=float(m.get('cost') or 0.0), step=10.0)
-                        mp = f3.number_input("Цена продажи", min_value=0.0, value=float(m.get('price') or 0.0), step=10.0)
+                        mp = f3.number_input("Цена", min_value=0.0, value=float(m.get('price') or 0.0), step=10.0)
 
                         st.divider()
                         st.caption("Статусы и Детали")
@@ -519,7 +564,7 @@ else:
                 f1, f2, f3 = st.columns(3)
                 nq = f1.number_input("Количество (шт)", min_value=0, value=1, step=1)
                 nc = f2.number_input("Себестоимость", min_value=0.0, value=0.0, step=10.0)
-                np = f3.number_input("Цена продажи", min_value=0.0, value=0.0, step=10.0)
+                np = f3.number_input("Цена", min_value=0.0, value=0.0, step=10.0)
 
                 st.divider()
                 st.caption("Статусы и Детали")
@@ -555,3 +600,66 @@ else:
                             st.error(f"Ошибка создания: {e}")
                     else:
                         st.warning("Заполните поля со *")
+
+    # --- ФАЙЛЫ ---
+    with tab5:
+        st.info("Здесь хранятся сканы документов, фото и PDF.")
+        
+        # 1. Загрузка
+        with st.form("upload_form", clear_on_submit=True):
+            uploaded_file = st.file_uploader("Выберите файл (PDF, JPG, PNG)", type=["pdf", "png", "jpg", "jpeg"])
+            if st.form_submit_button("Загрузить на сервер"):
+                if uploaded_file:
+                    try:
+                        utils.upload_client_file(cid, uploaded_file)
+                        st.success("Файл загружен!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Ошибка загрузки: {e}")
+                else:
+                    st.warning("Файл не выбран")
+        
+        st.divider()
+        
+        # 2. Список файлов
+        try:
+            files = utils.fetch_client_files(cid)
+        except:
+            files = []
+        
+        if files:
+            for f in files:
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([4, 2, 1])
+                    
+                    # Иконка по типу
+                    icon = "📄"
+                    if "pdf" in f['content_type']: icon = "📕"
+                    elif "image" in f['content_type']: icon = "🖼️"
+                    
+                    c1.write(f"**{icon} {f['filename']}**")
+                    c1.caption(f"Загружено: {f['created_at'][:10]} | Размер: {f['size'] // 1024} KB")
+                    
+                    try:
+                        # Запрашиваем файл
+                        url = utils.get_download_url(f['document_id'])
+                        r = requests.get(url, headers=utils.get_headers())
+                        
+                        if r.status_code == 200:
+                            c2.download_button(
+                                "⬇️ Скачать", 
+                                data=r.content, 
+                                file_name=f['filename'], 
+                                key=f"dl_{f['document_id']}"
+                            )
+                        else:
+                            # ПОКАЗЫВАЕМ РЕАЛЬНУЮ ОШИБКУ
+                            c2.error(f"Err {r.status_code}")
+                    except Exception as e:
+                        c2.error(f"Ex: {e}")
+
+                    if c3.button("🗑️", key=f"rm_file_{f['document_id']}"):
+                        utils.delete_file(f['document_id'])
+                        st.rerun()
+        else:
+            st.write("Файлов пока нет.")

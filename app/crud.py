@@ -1,3 +1,5 @@
+# Бизнес-логика/CRUD - операции с данными
+
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
@@ -8,6 +10,10 @@ from datetime import datetime, timezone
 
 from . import models, schemas
 from passlib.context import CryptContext
+
+import os
+import shutil
+import uuid
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto") 
 
@@ -210,6 +216,9 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "created_at": client.created_at,
         "updated_at": client.updated_at,
         "notes": client.notes,
+        "check_date": client.check_date,
+        "prosthesis_type": client.prosthesis_type,
+        "certificate_price": client.certificate_price,
         # вложенные
         "agent": agent_summary,
         "status": status_summary,
@@ -245,6 +254,9 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         agent_id=client_in.agent_id,
         deadline=client_in.deadline,
         notes=client_in.notes,
+        check_date=client_in.check_date,
+        prosthesis_type=client_in.prosthesis_type,
+        certificate_price=client_in.certificate_price
     )
 
     db.add(client)
@@ -260,6 +272,8 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
     except IntegrityError as e:
         db.rollback()
         raise e
+    
+
 
 
 def get_client(db: Session, client_id: UUID) -> Optional[Dict[str, Any]]:
@@ -512,7 +526,7 @@ def add_phone(db: Session, client_id: UUID, number: str) -> models.Phone:
     client = db.get(models.Client, client_id)
     if not client: raise ValueError("Client not found")
     
-    phone = models.Phone(client_id=client_id, number=number,  created_at=datetime.now(timezone.utc),)
+    phone = models.Phone(client_id=client_id, number=number,  created_at=datetime.now(timezone.utc))
     db.add(phone)
     db.commit()
     db.refresh(phone)
@@ -783,4 +797,68 @@ def delete_module(db: Session, module_id: UUID) -> bool:
     db.commit()
     return True
 
+# Documents storage CRUD
+# -------------------------
+# FILE STORAGE CRUD
+# -------------------------
+UPLOAD_DIR = "storage"
 
+def upload_document(db: Session, client_id: UUID, file_obj, filename: str, content_type: str):
+    # 1. Проверяем клиента
+    if not db.get(models.Client, client_id):
+        raise ValueError("Client not found")
+    
+    # 2. Создаем уникальное имя для хранения, чтобы не было коллизий
+    # (например, два файла passport.pdf перезапишут друг друга, если не переименовать)
+    unique_name = f"{uuid.uuid4()}_{filename}"
+    file_path = os.path.join(UPLOAD_DIR, unique_name)
+    
+    # 3. Убедимся, что папка существует
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    
+    print(f"Attempting to save file to: {file_path}")
+
+    # 4. Сохраняем байты на диск
+    # file_obj - это SpooledTemporaryFile от FastAPI
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file_obj.file, buffer)
+    
+    # 5. Получаем размер
+    file_size = os.path.getsize(file_path)
+    
+    # 6. Запись в БД
+    db_doc = models.Document(
+        client_id=client_id,
+        filename=filename,
+        storage_path=file_path,
+        content_type=content_type,
+        size=file_size,
+        created_at=datetime.now(timezone.utc)
+    )
+    db.add(db_doc)
+    db.commit()
+    db.refresh(db_doc)
+    return db_doc
+
+def list_documents(db: Session, client_id: UUID):
+    return db.execute(
+        select(models.Document)
+        .where(models.Document.client_id == client_id)
+        .order_by(models.Document.created_at.desc())
+    ).scalars().all()
+
+def get_document(db: Session, document_id: UUID):
+    return db.get(models.Document, document_id)
+
+def delete_document(db: Session, document_id: UUID):
+    doc = db.get(models.Document, document_id)
+    if not doc: return False
+    
+    # 1. Удаляем файл с диска
+    if os.path.exists(doc.storage_path):
+        os.remove(doc.storage_path)
+    
+    # 2. Удаляем из БД
+    db.delete(doc)
+    db.commit()
+    return True

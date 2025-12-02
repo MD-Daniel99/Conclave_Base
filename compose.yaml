@@ -58,6 +58,9 @@ services:
       - "8000:8000"
     volumes:
     - .:/app  # монтирует текущую директорию в /app внутри контейнера
+    # Команда для обращения к локальной папке storage_data и подключение её 
+    # в папку /app/storage внутри контейнера бэкенда
+    - ./storage_data:/app/storage 
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload # включает авто-перезагрузку при изменениях
     depends_on:
       postgres:

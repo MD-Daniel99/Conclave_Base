@@ -1,11 +1,17 @@
+# Слой модели данных - структура и валидация
+# Описывают DTO (Data Transfer Objects) - объекты для передачи данных между слоями приложения
+# Для ввода (ModuleCreate) - валидация входящих данных
+# Для вывода (ModuleRead) - контроль того, что возвращается клиенту
+# Для внутренней передачи - между API, CRUD и сервисными слоями
 """
 Проверка заполняемых данных на соответствие заданным шаблонам; осуществляет промежуточный контроль между пользователем,
 базой данных и интерфейсом:
-- Валидирует входящие запросы (JSON → Python);
+- Валидирует/парсит входящие запросы (JSON → Python), из JSON-словарей в объекты Python;
 - Преобразует данные между форматами (Python-объекты ↔ JSON ↔ БД);
 - Документирует API (Swagger/OpenAPI автоматически);
 - Служит «границей» между HTTP и внутренним ORM/логикой;
-- Упрощает сериализацию SQLAlchemy-объектов в JSON (через orm_mode / from_attributes).
+- Упрощает сериализацию SQLAlchemy-объектов из Python в JSON (через orm_mode / from_attributes).
+Поддерживает значения полей по умолчанию.
 """
 
 from typing import Optional, List, Any, Dict
@@ -185,6 +191,9 @@ class ClientBase(BaseModel):
     agent_id: UUID = Field(..., description="ID агента (UUID)")
     deadline: Optional[datetime] = None
     notes: Optional[str] = None
+    check_date: Optional[date] = None
+    prosthesis_type: Optional[str] = None
+    certificate_price: Optional[float] = None
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -210,6 +219,9 @@ class ClientUpdate(BaseModel):
     deadline: Optional[datetime] = None
     notes: Optional[str] = None
     phones: Optional[List[PhoneCreate]] = None
+    check_date: Optional[date] = None
+    prosthesis_type: Optional[str] = None
+    certificate_price: Optional[float] = None
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -251,6 +263,8 @@ class ClientRead(ClientBase):
     modules: Optional[List["ModuleRead"]] = Field(default_factory = list)
 
     model_config = ConfigDict(from_attributes=True)
+
+    
 
 # -------------------------
 # Status / Stage / DocumentType
@@ -453,5 +467,19 @@ class Token(BaseModel):
     username: str
     user_id: UUID 
 
+# Documents storage
+class DocumentRead(BaseModel):
+    document_id: UUID
+    client_id: UUID
+    filename: str
+    content_type: str
+    size: int
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+DocumentRead.model_rebuild()
+
 ClientRead.model_rebuild() 
 UserRead.model_rebuild()
+

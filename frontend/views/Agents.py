@@ -50,7 +50,10 @@ if st.session_state.ag_active_id is None:
                 "ФИО": f"{a['last_name']} {a['first_name']} {a['middle_name'] or ''}".strip(),
                 "ИНН": a["inn"],
                 "БИК": a["bic"],
-                "Юр. адрес": a["legal_address"]
+                #"Юр. адрес": a["legal_address"]
+                "ОГРНИП": a["ogrnip"],
+                "Расчетный счет": a["account_number"]
+
             })
         
         df = pd.DataFrame(rows)
