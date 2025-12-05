@@ -181,83 +181,69 @@ if st.session_state.wh_active_id is None:
 
     # 3. CREATE
     st.divider()
-    with st.expander("➕ Создать модуль", expanded=False):
-        with st.form("new_mod"):
-            st.subheader("Основные данные")
-            c1, c2 = st.columns(2)
-            nn = c1.text_input("Название *")
-            ni = c2.text_input("Индекс в каталоге *")
-            
-            c3, c4 = st.columns(2)
-            ns = c3.text_input("Поставщик *")
-            no = c4.selectbox("Привязать к", ["На склад"] + list(clients_map.keys()))
+    with st.expander("➕ Создать модуль (с авто-расчетом)", expanded=False):
+        # УБРАЛИ st.form! Теперь работает пересчет.
+        st.subheader("Основные данные")
+        c1, c2 = st.columns(2)
+        # Добавляем key, чтобы не терять фокус
+        nn = c1.text_input("Название *", key="new_n")
+        ni = c2.text_input("Индекс в каталоге *", key="new_i")
+        
+        c3, c4 = st.columns(2)
+        ns = c3.text_input("Поставщик *", key="new_s")
+        no = c4.selectbox("Привязать к", ["На склад"] + list(clients_map.keys()), key="new_o")
 
-            st.divider()
-            st.subheader("Финансы и Количество")
-            f1, f2, f3 = st.columns(3)
-            n_qty = f1.number_input("Количество (шт)", min_value=0, value=1, step=1)
-            n_cost = f2.number_input("Стоимость", min_value=0.0, value=0.0, step=0.01)
-            n_price = f3.number_input("Цена", min_value=0.0, value=0.0, step=0.01)
+        st.divider()
+        st.subheader("Финансы")
+        f1, f2, f3, f4, f5 = st.columns(5)
 
-            st.divider()
-            st.subheader("Статусы и Детали")
-            # Эти поля в вашей базе строковые (String), поэтому используем text_input
-            s1, s2, s3 = st.columns(3)
-            n_ord = s1.text_input("Заказано", value="0")
-            n_recd = s2.text_input("Получено", value="0")
-            n_pend = s3.text_input("Ожидается", value="0")
+        # Ввод (с ключами!)
+        n_qty = f1.number_input("Кол-во", min_value=1, value=1, key="new_q")
+        n_unit_cost = f2.number_input("Себест. (ед)", 0.0, step=10.0, key="new_uc")
+        n_unit_price = f3.number_input("Цена (ед)", 0.0, step=10.0, key="new_up")
+    
+        # Расчет (мгновенный, т.к. нет формы)
+        n_total_cost = n_unit_cost * n_qty
+        n_total_price = n_unit_price * n_qty
+    
+        f4.metric("ИТОГО Стоимость", f"{n_total_cost:.2f}")
+        f5.metric("ИТОГО цена", f"{n_total_price:.2f}")
 
-            d1, d2 = st.columns(2)
-            n_acc = d1.text_input("№ Счета / Дата заказа", value="-")
-            n_props = d2.text_input("Характеристики", value="-")
-            
-            n_notes = st.text_area("Заметки")
-            
-            submit_btn = st.form_submit_button("Создать модуль", use_container_width=True)
+        st.divider()
+        st.subheader("Статусы")
+        s1, s2, s3 = st.columns(3)
+        n_ord = s1.text_input("Заказано", "0", key="new_ord")
+        n_recd = s2.text_input("Получено", "0", key="new_recd")
+        n_pend = s3.text_input("Ожидается", "0", key="new_pend")
 
-            if submit_btn:
-                if nn and ni and ns:
-                    # Определяем ID клиента (или None)
-                    cid_target = clients_map.get(no)
-                    
-                    pl = {
-                        # Обязательные
-                        "module_name": nn, 
-                        "catalogue_index": ni, 
-                        "supplier": ns,
-                        "client_id": cid_target,
-                        
-                        # Числовые
-                        "quantity": n_qty,
-                        "cost": n_cost,
-                        "price": n_price,
-                        
-                        # Строковые статусы
-                        "ordered": n_ord,
-                        "recd": n_recd,
-                        "pending": n_pend,
-                        "order_date_acc_num": n_acc,
-                        "properties": n_props,
-                        
-                        # Опциональные
-                        "notes": n_notes if n_notes else None
-                    }
-                    
-                    try:
-                        utils.create_module(pl)
-                        st.success("Модуль успешно создан!")
-                        st.rerun()
-                    except Exception as e: 
-                        st.error(f"Ошибка создания: {e}")
-                else:
-                    st.warning("Поля, отмеченные *, обязательны к заполнению")
+        d1, d2 = st.columns(2)
+        n_acc = d1.text_input("Счет", "-", key="new_acc")
+        n_props = d2.text_input("Хар-ки", "-", key="new_props")
+        
+        n_notes = st.text_area("Заметки", key="new_notes")
+        
+        # Кнопка теперь просто button
+        if st.button("Создать модуль", type="primary"):
+            if nn and ni and ns:
+                cid_target = clients_map.get(no)
+                pl = {
+                    "module_name": nn, "catalogue_index": ni, "supplier": ns, "client_id": cid_target,
+                    "quantity": n_qty, "cost": n_total_cost, "price": n_total_price,
+                    "ordered": n_ord, "recd": n_recd, "pending": n_pend,
+                    "order_date_acc_num": n_acc, "properties": n_props, "notes": n_notes
+                }
+                try:
+                    utils.create_module(pl)
+                    st.success("Создано!")
+                    st.rerun()
+                except Exception as e: st.error(f"Ошибка: {e}")
+            else:
+                st.warning("Заполните поля со *")
 
 # ==========================================
 # EDIT MODE (Если выбран модуль)
 # ==========================================
-# ==========================================
-# EDIT MODE (Если выбран модуль)
-# ==========================================
+
 else:
     mid = st.session_state.wh_active_id
     
@@ -274,92 +260,90 @@ else:
 
     st.subheader(f"Редактирование: {mod_detail['module_name']}")
 
-    with st.form("edit_wh_mod"):
-        # --- РАЗДЕЛ 1: ОСНОВНОЕ ---
-        st.caption("Основные данные")
-        c1, c2 = st.columns(2)
-        en = c1.text_input("Название", value=mod_detail['module_name'])
-        ei = c2.text_input("Индекс в каталоге", value=mod_detail['catalogue_index'])
-        
-        c3, c4 = st.columns(2)
-        es = c3.text_input("Поставщик", value=mod_detail['supplier'])
-        
-        # ЛОГИКА ВЫБОРА ВЛАДЕЛЬЦА (восстановленная)
-        curr_cid = mod_detail.get('client_id')
-        owner_options = ["На склад (Ничей)"] + list(clients_map.keys())
-        
-        default_idx = 0
-        if curr_cid:
-            # Ищем имя по ID в clients_map
-            found_name = next((name for name, uid in clients_map.items() if uid == curr_cid), None)
-            if found_name:
-                default_idx = owner_options.index(found_name)
-        
-        eo = c4.selectbox("Владелец", owner_options, index=default_idx)
-        
-        st.divider()
-        
-        # --- РАЗДЕЛ 2: ФИНАНСЫ ---
-        st.caption("Финансы и Количество")
-        f1, f2, f3 = st.columns(3)
-        # Используем get() or 0, чтобы не упало, если придет None
-        qty_val = mod_detail.get('quantity') or 0
-        cost_val = mod_detail.get('cost') or 0.0
-        price_val = mod_detail.get('price') or 0.0
-        
-        eq = f1.number_input("Количество (шт)", min_value=0, value=int(qty_val), step=1)
-        ec = f2.number_input("Стоимость", min_value=0.0, value=float(cost_val), step=0.01)
-        ep = f3.number_input("Цена", min_value=0.0, value=float(price_val), step=0.01)
+    # УБИРАЕМ with st.form!
+    
+    # --- РАЗДЕЛ 1: ОСНОВНОЕ ---
+    st.caption("Основные данные")
+    c1, c2 = st.columns(2)
+    en = c1.text_input("Название", value=mod_detail['module_name'], key="edit_n")
+    ei = c2.text_input("Индекс в каталоге", value=mod_detail['catalogue_index'], key="edit_i")
+    
+    c3, c4 = st.columns(2)
+    es = c3.text_input("Поставщик", value=mod_detail['supplier'], key="edit_s")
+    
+    # Владелец
+    curr_cid = mod_detail.get('client_id')
+    owner_options = ["На склад (Ничей)"] + list(clients_map.keys())
+    default_idx = 0
+    if curr_cid:
+        found_name = next((name for name, uid in clients_map.items() if uid == curr_cid), None)
+        if found_name: default_idx = owner_options.index(found_name)
+    
+    eo = c4.selectbox("Владелец", owner_options, index=default_idx, key="edit_o")
+    
+    st.divider()
+    
+    # --- РАЗДЕЛ 2: ФИНАНСЫ ---
+    st.caption("Финансы (Авто-пересчет)")
 
-        st.divider()
+    # ИСПРАВЛЕНИЕ: Используем mod_detail, а не mod
+    db_qty = int(mod_detail.get('quantity') or 1)
+    db_tot_cost = float(mod_detail.get('cost') or 0.0)
+    db_tot_price = float(mod_detail.get('price') or 0.0)
+    
+    # Вычисляем unit price для начального значения
+    init_uc = db_tot_cost / db_qty if db_qty > 0 else 0.0
+    init_up = db_tot_price / db_qty if db_qty > 0 else 0.0
 
-        # --- РАЗДЕЛ 3: СТАТУСЫ И ДЕТАЛИ ---
-        st.caption("Статусы и Детали")
-        s1, s2, s3 = st.columns(3)
-        e_ord = s1.text_input("Заказано", value=mod_detail.get('ordered', '0'))
-        e_recd = s2.text_input("Получено", value=mod_detail.get('recd', '0'))
-        e_pend = s3.text_input("Ожидается", value=mod_detail.get('pending', '0'))
+    f1, f2, f3, f4, f5 = st.columns(5)
+    # ВАЖНО: key обязателен
+    eq = f1.number_input("Кол-во", min_value=1, value=db_qty, key="edit_q")
+    e_unit_cost = f2.number_input("Себест. (ед)", 0.0, value=init_uc, step=10.0, key="edit_uc")
+    e_unit_price = f3.number_input("Цена (ед)", 0.0, value=init_up, step=10.0, key="edit_up")
+    
+    # ПЕРЕСЧЕТ
+    e_total_cost = e_unit_cost * eq
+    e_total_price = e_unit_price * eq
+    
+    f4.metric("ИТОГО стоимость", f"{e_total_cost:.2f}")
+    f5.metric("ИТОГО цена", f"{e_total_price:.2f}")
 
-        d1, d2 = st.columns(2)
-        e_acc = d1.text_input("№ Счета / Дата заказа", value=mod_detail.get('order_date_acc_num', '-'))
-        e_props = d2.text_input("Характеристики", value=mod_detail.get('properties', '-'))
+    st.divider()
+
+    # --- РАЗДЕЛ 3: СТАТУСЫ ---
+    s1, s2, s3 = st.columns(3)
+    e_ord = s1.text_input("Ordered", value=mod_detail.get('ordered', '0'), key="edit_ord")
+    e_recd = s2.text_input("Recd", value=mod_detail.get('recd', '0'), key="edit_recd")
+    e_pend = s3.text_input("Pending", value=mod_detail.get('pending', '0'), key="edit_pend")
+
+    d1, d2 = st.columns(2)
+    e_acc = d1.text_input("Счет", value=mod_detail.get('order_date_acc_num', '-'), key="edit_acc")
+    e_props = d2.text_input("Хар-ки", value=mod_detail.get('properties', '-'), key="edit_prop")
+    
+    e_notes = st.text_area("Заметки", value=mod_detail.get('notes') or "", key="edit_notes")
+    
+    # --- СОХРАНЕНИЕ (Обычная кнопка) ---
+    if st.button("Сохранить изменения", type="primary"):
+        cid_target = clients_map.get(eo)
         
-        e_notes = st.text_area("Заметки", value=mod_detail.get('notes') or "")
+        pl = {
+            "module_name": en, "catalogue_index": ei, "supplier": es, "client_id": cid_target,
+            "quantity": eq, 
+            "cost": e_total_cost, # Сохраняем ИТОГ
+            "price": e_total_price,
+            "ordered": e_ord, "recd": e_recd, "pending": e_pend,
+            "order_date_acc_num": e_acc, "properties": e_props, "notes": e_notes
+        }
         
-        # --- СОХРАНЕНИЕ ---
-        if st.form_submit_button("Сохранить изменения", use_container_width=True):
-            # Определяем новый ID клиента
-            cid_target = None
-            if eo != "На склад (Ничей)":
-                cid_target = clients_map[eo]
-            
-            pl = {
-                "module_name": en, 
-                "catalogue_index": ei, 
-                "supplier": es,
-                "client_id": cid_target, # Перепривязка
-                
-                "quantity": eq,
-                "cost": ec,
-                "price": ep,
-                
-                "ordered": e_ord,
-                "recd": e_recd,
-                "pending": e_pend,
-                "order_date_acc_num": e_acc,
-                "properties": e_props,
-                "notes": e_notes
-            }
-            
-            try:
-                utils.patch_module(mid, pl)
-                st.success("Обновлено!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Ошибка обновления: {e}")
+        try:
+            utils.patch_module(mid, pl)
+            st.success("Обновлено!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Ошибка обновления: {e}")
             
     st.divider()
-    if st.button("🗑️ Удалить модуль", type="primary"):
+    if st.button("🗑️ Удалить модуль"):
         try:
             utils.delete_module(mid)
             st.success("Удалено")

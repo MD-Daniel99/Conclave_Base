@@ -251,7 +251,7 @@ if st.session_state.cli_active_id is None:
             st.divider()
             st.subheader("Сертификат и вид протеза")
             d1, d2, d3 = st.columns(3)
-            n_prosthesis = d1.text_input("Вид протеза")
+            n_prosthesis = d1.text_area("Виды протезов (каждый с новой строки)", height=100)
             n_check_date = d2.date_input("Дата пробития", value=None)
             n_price = d3.number_input("Стоимость сертификата", min_value=0.0, step=1.0, format="%.2f")
             ndead = st.date_input("Повторное обращение", value=None)
@@ -317,7 +317,7 @@ else:
             st.caption("Данные протезирования")
             
             pd1, pd2, pd3 = st.columns(3)
-            e_prosthesis = pd1.text_input("Вид протеза", value=detail.get('prosthesis_type') or "")
+            e_prosthesis = pd1.text_area("Виды протезов", value=detail.get('prosthesis_type') or "", height=100)
             e_check_date = pd2.date_input("Дата пробития", value=to_date(detail.get('check_date')))
             
             curr_price = detail.get('certificate_price') or 0.0

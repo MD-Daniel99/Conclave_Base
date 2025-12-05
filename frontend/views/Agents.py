@@ -88,26 +88,33 @@ if st.session_state.ag_active_id is None:
             st.divider()
             st.caption("Реквизиты")
             r1, r2, r3 = st.columns(3)
-            ni = r1.text_input("ИНН *")
-            no = r2.text_input("ОГРНИП *")
-            nb = r3.text_input("БИК *")
+            ni = r1.text_input("ИНН")
+            no = r2.text_input("ОГРНИП")
+            nb = r3.text_input("БИК")
             
-            na = st.text_input("Расчетный счет *")
+            na = st.text_input("Расчетный счет")
             nc = st.text_input("Корр. счет")
             
             st.divider()
             st.caption("Адреса")
             a1, a2 = st.columns(2)
-            nla = a1.text_area("Юридический адрес *", height=100)
-            naa = a2.text_area("Фактический адрес *", height=100)
+            nla = a1.text_area("Юридический адрес", height=100)
+            naa = a2.text_area("Фактический адрес", height=100)
             
             if st.form_submit_button("Создать агента"):
-                if nl and nf and ni and no and nb and na and nla and naa:
+                if nl and nf:
                     pl = {
-                        "last_name": nl, "first_name": nf, "middle_name": nm,
+                        "last_name": nl, "first_name": nf,
                         "inn": ni, "ogrnip": no, "bic": nb, 
                         "account_number": na, "correspondent_account": nc,
-                        "legal_address": nla, "actual_address": naa
+                        "legal_address": nla, "actual_address": naa,
+                        "inn": ni if ni else None,
+                        "ogrnip": no if no else None,
+                        "bic": nb if nb else None,
+                        "account_number": na if na else None,
+                        "correspondent_account": nc if nc else None,
+                        "legal_address": nla if nla else None,
+                        "actual_address": naa if naa else None
                     }
                     try:
                         utils.create_agent(pl)

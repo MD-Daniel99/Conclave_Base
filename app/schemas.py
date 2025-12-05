@@ -95,14 +95,14 @@ class AgentBase(BaseModel):
     last_name: str = Field(..., description="Фамилия")
     first_name: Optional[str] = Field(None, description="Имя")
     middle_name: Optional[str] = Field(None, description="Отчество")
-    legal_address: str = Field(..., description="Юридический адрес")
-    actual_address: str = Field(..., description="Фактический адрес")
-    inn: InnType = Field(..., description="ИНН (10 или 12 цифр)")
-    ogrnip: OgrnipType = Field(..., description="ОГРНИП (15 цифр)")
-    account_number: AccountType = Field(..., description="Расчётный счёт (20–34 цифр)")
+    legal_address: Optional[str] = Field(None, description="Юридический адрес")
+    actual_address: Optional[str] = Field(None, description="Фактический адрес")
+    inn: Optional[InnType] = Field(None, description="ИНН (10 или 12 цифр)")
+    ogrnip: Optional[OgrnipType] = Field(None, description="ОГРНИП (15 цифр)")
+    account_number: Optional[AccountType] = Field(None, description="Расчётный счёт (20–34 цифр)")
     # ИЗМЕНЕНИЕ: делаем поле необязательным
     correspondent_account: Optional[AccountType] = Field(None, description="Корреспондентский счёт (20–34 цифр)")
-    bic: BicType = Field(..., description="БИК (9 цифр)")
+    bic: Optional[BicType] = Field(None, description="БИК (9 цифр)")
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:

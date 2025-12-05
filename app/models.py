@@ -47,13 +47,13 @@ class Agent(Base):
     first_name = Column(String(128), nullable=False)
     middle_name = Column(String(128), nullable=True)  # отчество — опционально
 
-    legal_address = Column(Text, nullable=False)
-    actual_address = Column(Text, nullable=False)
-    inn = Column(String(12), nullable=False)
-    ogrnip = Column(String(15), nullable=False)
-    account_number = Column(String(34), nullable=False)
+    legal_address = Column(Text, nullable=True)
+    actual_address = Column(Text, nullable=True)
+    inn = Column(String(12), nullable=True)
+    ogrnip = Column(String(15), nullable=True)
+    account_number = Column(String(34), nullable=True)
     correspondent_account = Column(String(34), nullable=True)
-    bic = Column(String(9), nullable=False)
+    bic = Column(String(9), nullable=True)
 
     # Relationship: один агент — много клиентов
     # Замечание: FK у CLIENT задан с ondelete="RESTRICT", поэтому здесь НЕ ставим cascade удаления.
