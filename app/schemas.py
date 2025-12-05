@@ -106,10 +106,14 @@ class AgentBase(BaseModel):
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
-        # Убираем пробелы по краям у всех строковых значений
         for k, v in list(values.items()):
             if isinstance(v, str):
-                values[k] = v.strip()
+                v = v.strip()
+                # ЕСЛИ СТРОКА ПУСТАЯ -> ПРЕВРАЩАЕМ В NONE
+                if v == "":
+                    values[k] = None
+                else:
+                    values[k] = v
         return values
 
 
@@ -137,7 +141,12 @@ class AgentUpdate(BaseModel):
     def _strip_strings(cls, values: dict) -> dict:
         for k, v in list(values.items()):
             if isinstance(v, str):
-                values[k] = v.strip()
+                v = v.strip()
+                # ЕСЛИ СТРОКА ПУСТАЯ -> ПРЕВРАЩАЕМ В NONE
+                if v == "":
+                    values[k] = None
+                else:
+                    values[k] = v
         return values
 
 
@@ -199,7 +208,12 @@ class ClientBase(BaseModel):
     def _strip_strings(cls, values: dict) -> dict:
         for k, v in list(values.items()):
             if isinstance(v, str):
-                values[k] = v.strip()
+                v = v.strip()
+                # ЕСЛИ СТРОКА ПУСТАЯ -> ПРЕВРАЩАЕМ В NONE
+                if v == "":
+                    values[k] = None
+                else:
+                    values[k] = v
         return values
 
 
@@ -227,7 +241,12 @@ class ClientUpdate(BaseModel):
     def _strip_strings(cls, values: dict) -> dict:
         for k, v in list(values.items()):
             if isinstance(v, str):
-                values[k] = v.strip()
+                v = v.strip()
+                # ЕСЛИ СТРОКА ПУСТАЯ -> ПРЕВРАЩАЕМ В NONE
+                if v == "":
+                    values[k] = None
+                else:
+                    values[k] = v
         return values
 
 

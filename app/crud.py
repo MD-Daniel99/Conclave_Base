@@ -416,12 +416,15 @@ def create_agent(db: Session, agent_in: schemas.AgentCreate) -> Dict[str, Any]:
         middle_name=agent_in.middle_name or "",
         legal_address=agent_in.legal_address,
         actual_address=agent_in.actual_address,
-        inn=str(agent_in.inn),
-        ogrnip=str(agent_in.ogrnip),
-        account_number=str(agent_in.account_number),
-        correspondent_account=corr_account, # <--- ИЗМЕНЕНИЕ
-        bic=str(agent_in.bic),
+        
+        # УБРАЛИ str(), теперь передается None, если поле пустое
+        inn=agent_in.inn,
+        ogrnip=agent_in.ogrnip,
+        account_number=agent_in.account_number,
+        correspondent_account=corr_account,
+        bic=agent_in.bic,
     )
+    
     db.add(agent)
     try:
         # flush чтобы DB присвоила external_id (если server_default/sequence настроены)
