@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sys
 import os
+import io
 from datetime import datetime, time, date
 import requests
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -72,6 +73,44 @@ def get_clients_csv():
     except Exception as e:
         return None
 
+# ... (функция get_clients_csv остается как была) ...
+
+@st.cache_data(ttl=60)
+def get_clients_excel():
+    try:
+        all_data = utils.fetch_clients(limit=100000)
+        if not all_data: return None
+        
+        export_rows = []
+        for c in all_data:
+            aname = ""
+            if c.get("agent"): aname = f"{c['agent']['last_name']} {c['agent']['first_name']}"
+            
+            export_rows.append({
+                "Фамилия": c['last_name'],
+                "Имя": c['first_name'],
+                "Отчество": c['middle_name'],
+                "Дата пробития": c.get('check_date'),
+                "Вид протеза": c.get('prosthesis_type'),
+                "Стоимость сертификата": c.get('certificate_price'),
+                "Статус": statuses_map.get(c['status_code'], c['status_code']),
+                "Этап": stages_map.get(c['current_stage'], c['current_stage']),
+                "Агент": aname,
+                "Повторное обращение": c['deadline'],
+                "Заметки": c['notes'],
+            })
+        
+        df = pd.DataFrame(export_rows)
+        
+        # Запись в буфер памяти вместо диска
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Clients')
+        
+        return buffer.getvalue()
+    except Exception:
+        return None
+
 # ==========================================
 # UI: LIST (Список клиентов)
 # ==========================================
@@ -82,18 +121,37 @@ if st.session_state.cli_active_id is None:
     with st.expander("📂 Импорт / Экспорт (CSV)"):
         tab_ex, tab_im = st.tabs(["Экспорт (Скачать)", "Импорт (Загрузить)"])
         
-        # ЭКСПОРТ (ТЕПЕРЬ ОДНА КНОПКА)
         with tab_ex:
-            csv_data = get_clients_csv()
-            if csv_data:
-                st.download_button(
-                    label="📥 Скачать всех клиентов (CSV)",
-                    data=csv_data,
-                    file_name=f"clients_export_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.warning("Нет данных для экспорта или ошибка соединения.")
+            st.write("Выберите формат для скачивания:")
+            col1, col2 = st.columns(2)
+            
+            # CSV
+            with col1:
+                csv_data = get_clients_csv()
+                if csv_data:
+                    st.download_button(
+                        label="📥 Скачать CSV",
+                        data=csv_data,
+                        file_name=f"clients_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("Нет данных (CSV)")
+            
+            # EXCEL
+            with col2:
+                excel_data = get_clients_excel()
+                if excel_data:
+                    st.download_button(
+                        label="📥 Скачать Excel (.xlsx)",
+                        data=excel_data,
+                        file_name=f"clients_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("Нет данных (Excel)")
 
         # ИМПОРТ
         with tab_im:
@@ -281,9 +339,11 @@ if st.session_state.cli_active_id is None:
 # ==========================================
 # UI: EDIT MODE (Карточка клиента)
 # ==========================================
+# ==========================================
+
 else:
     cid = st.session_state.cli_active_id
-    
+
     if st.button("⬅️ Вернуться к списку"):
         reset_state()
 
@@ -296,30 +356,37 @@ else:
 
     st.header(f"👤 {detail['last_name']} {detail['first_name']}")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["✏️ Редактирование", "📄 Документы", "📞 Телефоны", "📦 Модули", "📎 Файлы"])
+    # ---------- TAB CONTROL (с сохранением в session_state) ----------
+    TAB_NAMES = ["✏️ Редактирование", "📄 Документы", "👤 Личные данные", "📦 Модули", "📎 Файлы"]
+    if "cli_active_tab" not in st.session_state:
+        # по умолчанию открываем Модули (или 0 если хотите Редактирование)
+        st.session_state.cli_active_tab = 3
+
+    # радиопереключатель сохраняет выбор между rerun'ами
+    sel = st.radio("", TAB_NAMES, index=st.session_state.cli_active_tab, horizontal=True, key=f"client_tab_radio_{cid}")
+    st.session_state.cli_active_tab = TAB_NAMES.index(sel)
 
     # --- TAB 1: ОСНОВНОЕ ---
-    with tab1:
+    if sel == "✏️ Редактирование":
         with st.form("edit_main"):
             c1, c2 = st.columns(2)
             el = c1.text_input("Фамилия", detail['last_name'])
             ef = c1.text_input("Имя", detail['first_name'])
             em = c1.text_input("Отчество", detail['middle_name'])
-            
+
             idx_st = list(statuses_map.keys()).index(detail['status_code']) if detail['status_code'] in statuses_map else 0
             est = c2.selectbox("Статус", list(statuses_map.keys()), index=idx_st, format_func=lambda x: statuses_map.get(x))
-            
+
             idx_sg = list(stages_map.keys()).index(detail['current_stage']) if detail['current_stage'] in stages_map else 0
             esg = c2.selectbox("Этап", list(stages_map.keys()), index=idx_sg, format_func=lambda x: stages_map.get(x))
 
             st.divider()
-
             st.caption("Данные протезирования")
-            
+
             pd1, pd2, pd3 = st.columns(3)
             e_prosthesis = pd1.text_area("Виды протезов", value=detail.get('prosthesis_type') or "", height=100)
             e_check_date = pd2.date_input("Дата пробития", value=to_date(detail.get('check_date')))
-            
+
             curr_price = detail.get('certificate_price') or 0.0
             e_price = pd3.number_input("Стоимость сертификата", min_value=0.0, value=float(curr_price), step=1.0, format="%.2f")
 
@@ -333,7 +400,6 @@ else:
             c3, c4 = st.columns(2)
             edead = c3.date_input("Повторное обращение", value=to_date(detail.get('deadline')))
             enotes = st.text_area("Заметки", detail['notes'])
-            
 
             if st.form_submit_button("Сохранить изменения"):
                 pl = {
@@ -351,13 +417,13 @@ else:
                 utils.clear_caches()
                 del st.session_state["cli_active_id"]
                 st.rerun()
-        
+
         if st.button("Удалить клиента", type="primary"):
             utils.delete_client(cid)
             reset_state()
 
     # --- TAB 2: ДОКУМЕНТЫ ---
-    with tab2:
+    elif sel == "📄 Документы":
         # ПАСПОРТА
         st.subheader("Паспорта")
         for p in detail.get("passports", []):
@@ -366,15 +432,15 @@ else:
                     pc1, pc2 = st.columns(2)
                     e_p_sn = pc1.text_input("Серия/Номер", value=p.get('series_number'))
                     e_p_fn = pc2.text_input("ФИО", value=p.get('full_name'))
-                    
+
                     pc3, pc4 = st.columns(2)
                     e_p_by = pc3.text_input("Кем выдан", value=p.get('issued_by'))
                     e_p_code = pc4.text_input("Код подразделения", value=p.get('department_code'))
-                    
+
                     pc5, pc6 = st.columns(2)
                     e_p_date = pc5.date_input("Дата выдачи", value=to_date(p.get('issue_date')), min_value=MIN_DATE)
                     e_p_exp = pc6.date_input("Действителен до", value=to_date(p.get('expiry_date')))
-                    
+
                     st.divider()
                     pc7, pc8 = st.columns(2)
                     e_p_bp = pc7.text_input("Место рождения", value=p.get('birth_place'))
@@ -410,12 +476,12 @@ else:
                 n_dt = st.date_input("Дата выдачи *", value=None, min_value=MIN_DATE)
                 n_bp = st.text_input("Место рождения")
                 n_addr = st.text_area("Прописка")
-                
+
                 if st.form_submit_button("Добавить"):
                     if n_sn and n_fn and n_dt:
                         pl = {
-                            "full_name": n_fn, "series_number": n_sn, 
-                            "issued_by": n_by, "issue_date": n_dt.isoformat(), 
+                            "full_name": n_fn, "series_number": n_sn,
+                            "issued_by": n_by, "issue_date": n_dt.isoformat(),
                             "registration_address": n_addr, "birth_place": n_bp,
                             "department_code": None, "expiry_date": None
                         }
@@ -428,183 +494,299 @@ else:
                         st.warning("Заполните обязательные поля (*)")
 
         st.divider()
-        
-        # СНИЛС
-        st.subheader("СНИЛС")
-        for s in detail.get("snils", []):
-            with st.expander(f"📗 СНИЛС: {s.get('number')}"):
-                with st.form(key=f"edit_snils_{s['snils_id']}"):
-                    c1, c2 = st.columns(2)
-                    e_s_num = c1.text_input("Номер", value=s['number'])
-                    e_s_dt = c2.date_input("Дата выдачи", value=to_date(s.get('issued_date')), min_value=MIN_DATE)
+
+        c_snils, c_ipra = st.columns(2)
+
+        # --- ЛЕВАЯ КОЛОНКА: СНИЛС ---
+        with c_snils:
+            st.subheader("СНИЛС")
+            for s in detail.get("snils", []):
+                with st.expander(f"📗 {s.get('number')}"):
+                    with st.form(key=f"edit_snils_{s['snils_id']}"):
+                        e_s_num = st.text_input("Номер", value=s['number'])
+                        e_s_dt = st.date_input("Дата выдачи", value=to_date(s.get('issued_date')), min_value=MIN_DATE)
+                        
+                        if st.form_submit_button("Сохранить"):
+                            pl = {"number": e_s_num, "issued_date": e_s_dt.isoformat() if e_s_dt else None}
+                            utils.patch_snils(s['snils_id'], pl)
+                            st.success("Обновлено")
+                            st.rerun()
                     
-                    if st.form_submit_button("Сохранить СНИЛС"):
-                        pl = {"number": e_s_num, "issued_date": e_s_dt.isoformat() if e_s_dt else None}
-                        utils.patch_snils(s['snils_id'], pl)
-                        st.success("Обновлено")
+                    if st.button("Удалить СНИЛС", key=f"del_s_{s['snils_id']}"):
+                        utils.delete_snils(s['snils_id'])
                         st.rerun()
+
+            with st.popover("➕ Добавить СНИЛС"):
+                with st.form("new_snils"):
+                    s_num = st.text_input("Номер")
+                    s_dt = st.date_input("Дата выдачи", value=None, min_value=MIN_DATE)
+                    
+                    if st.form_submit_button("Сохранить"):
+                        if s_num:
+                            utils.post_snils(cid, {"number": s_num, "issued_date": s_dt.isoformat() if s_dt else None})
+                            st.rerun()
+                        else:
+                            st.warning("Введите номер")
+
+        # --- ПРАВАЯ КОЛОНКА: ИПРА ---
+        with c_ipra:
+            st.subheader("ИПРА")
+            # Получаем текущее значение из объекта клиента
+            current_ipra = detail.get("ipra_code") or ""
+            
+            with st.form("edit_ipra_form"):
+                new_ipra = st.text_input("Номер ИПРА", value=current_ipra)
                 
-                if st.button("Удалить СНИЛС", key=f"del_s_{s['snils_id']}"):
-                    utils.delete_snils(s['snils_id'])
+                if st.form_submit_button("Сохранить ИПРА"):
+                    # ИПРА - это поле самого клиента, поэтому обновляем через patch_client
+                    utils.patch_client(cid, {"ipra_code": new_ipra})
+                    st.success("Сохранено!")
+                    utils.clear_caches()
                     st.rerun()
 
-        with st.popover("➕ Добавить СНИЛС"):
-            with st.form("new_snils"):
-                s_num = st.text_input("Номер")
-                s_dt = st.date_input("Дата выдачи", value=None, min_value=MIN_DATE)
-                
-                if st.form_submit_button("Сохранить"):
-                    if s_num:
-                        d_val = s_dt.isoformat() if s_dt else None
-                        utils.post_snils(cid, {"number": s_num, "issued_date": d_val})
+    # --- TAB 3: ТЕЛЕФОНЫ ---
+    # --- TAB 3: ЛИЧНЫЕ ДАННЫЕ (ТЕЛЕФОНЫ И АДРЕС) ---
+    elif sel == "👤 Личные данные":
+        
+        col_phones, col_addr = st.columns([1, 1])
+
+        # ЛЕВАЯ КОЛОНКА: ТЕЛЕФОНЫ
+        with col_phones:
+            st.subheader("Телефоны")
+            
+            # Список существующих телефонов
+            for ph in detail.get("phones", []):
+                # Форма для каждого телефона
+                with st.form(key=f"edit_ph_{ph['phone_id']}"):
+                    # Поле ввода
+                    new_num = st.text_input("Номер", value=ph['number'], label_visibility="collapsed")
+                    
+                    # Кнопки в ряд (КАК ВЫ ПРОСИЛИ)
+                    c_save, c_del = st.columns(2)
+                    
+                    # Кнопка Сохранить
+                    if c_save.form_submit_button("💾 Сохранить", use_container_width=True):
+                        utils.patch_phone(ph['phone_id'], {"number": new_num})
+                        st.success("OK")
+                        st.rerun()
+                    
+                    # Кнопка Удалить (Теперь внутри формы и красная)
+                    if c_del.form_submit_button("🗑️ Удалить", type="primary", use_container_width=True):
+                        utils.delete_phone(ph['phone_id'])
+                        st.rerun()
+            
+            # Добавление нового телефона
+            st.write("---")
+            with st.form("new_phone"):
+                st.caption("Добавить новый номер")
+                pn = st.text_input("Номер")
+                if st.form_submit_button("Добавить", use_container_width=True):
+                    if pn:
+                        utils.add_phone(cid, pn)
                         st.rerun()
                     else:
                         st.warning("Введите номер")
 
-    # --- TAB 3: ТЕЛЕФОНЫ ---
-    with tab3:
-        st.subheader("Телефоны")
-        for ph in detail.get("phones", []):
-            with st.form(key=f"edit_ph_{ph['phone_id']}"):
-                c1, c2, c3 = st.columns([3, 1, 1])
-                new_num = c1.text_input("Номер", value=ph['number'], label_visibility="collapsed")
+        # ПРАВАЯ КОЛОНКА: МЕСТО ЖИТЕЛЬСТВА
+        with col_addr:
+            st.subheader("Место жительства")
+            
+            # Получаем текущее значение
+            # (Если после применения патча БД и рестарта сервера не работает - проверьте schemas.py еще раз)
+            current_addr = detail.get("place_of_residence") or ""
+            
+            with st.form("edit_address_form"):
+                new_addr = st.text_area("Адрес", value=current_addr, height=150, help="Фактический адрес проживания")
                 
-                if c2.form_submit_button("💾"):
-                    utils.patch_phone(ph['phone_id'], {"number": new_num})
-                    st.success("OK")
+                # Кнопки в одну строку
+                c_save, c_del = st.columns(2)
+                
+                # Кнопка сохранения
+                if c_save.form_submit_button("💾 Сохранить", use_container_width=True):
+                    utils.patch_client(cid, {"place_of_residence": new_addr})
+                    st.success("Сохранено!")
+                    utils.clear_caches()
                     st.rerun()
                 
-            if st.button("Удалить", key=f"del_ph_{ph['phone_id']}"):
-                utils.delete_phone(ph['phone_id'])
-                st.rerun()
-        
-        st.write("---")
-        with st.form("new_phone"):
-            st.write("Новый телефон")
-            pn = st.text_input("Номер")
-            if st.form_submit_button("Добавить"):
-                utils.add_phone(cid, pn)
-                st.rerun()
+                # Кнопка удаления (Очистки)
+                if c_del.form_submit_button("🗑️ Удалить адрес", type="primary", use_container_width=True):
+                    utils.patch_client(cid, {"place_of_residence": None})
+                    st.success("Удалено!")
+                    utils.clear_caches()
+                    st.rerun()
 
-    # --- TAB 4: МОДУЛИ (ПОЛНЫЙ ИНТЕРФЕЙС КАК НА СКЛАДЕ) ---
-    with tab4:
+    # --- TAB 4: МОДУЛИ (Синхронизировано со Складом) ---
+    elif sel == "📦 Модули":
         st.info("Модули, созданные или измененные здесь, автоматически синхронизируются со Складом.")
-        
+
         # 1. СПИСОК СУЩЕСТВУЮЩИХ МОДУЛЕЙ
-        if detail.get("modules"):
-            for m in detail["modules"]:
-                with st.expander(f"📦 {m['module_name']} ({m['catalogue_index']})"):
-                    with st.form(f"edit_mod_{m['module_id']}"):
-                        st.caption("Основные данные")
-                        c1, c2 = st.columns(2)
-                        mn = c1.text_input("Название", value=m['module_name'])
-                        mi = c2.text_input("Индекс в каталоге", value=m['catalogue_index'])
-                        
-                        c3, c4 = st.columns(2)
-                        ms = c3.text_input("Поставщик", value=m['supplier'])
-                        # Владелец тут фиксирован (текущий клиент), но можно отобразить
-                        c4.text_input("Владелец", value=f"{detail['last_name']} {detail['first_name']}", disabled=True)
+        # СОРТИРОВКА — важно для детерминированности виджет-дерева
+        modules = sorted(detail.get("modules", []) or [], key=lambda m: m['module_id'])
+        if modules:
+            for m in modules:
+                mid = m['module_id']
+                # Заголовок экспандера
+                label = f"📦 {m['module_name']}"
+                if m.get('catalogue_index'): label += f" ({m['catalogue_index']})"
 
-                        st.divider()
-                        st.caption("Финансы и Количество")
-                        f1, f2, f3 = st.columns(3)
-                        mq = f1.number_input("Количество (шт)", min_value=0, value=int(m.get('quantity') or 1), step=1)
-                        mc = f2.number_input("Себестоимость", min_value=0.0, value=float(m.get('cost') or 0.0), step=10.0)
-                        mp = f3.number_input("Цена", min_value=0.0, value=float(m.get('price') or 0.0), step=10.0)
+                with st.expander(label):
+                    # --- БЕЗ ST.FORM (Для авто-пересчета) ---
 
-                        st.divider()
-                        st.caption("Статусы и Детали")
-                        s1, s2, s3 = st.columns(3)
-                        m_ord = s1.text_input("Заказано (Ordered)", value=m.get('ordered', '0'))
-                        m_recd = s2.text_input("Получено (Recd)", value=m.get('recd', '0'))
-                        m_pend = s3.text_input("Ожидается (Pending)", value=m.get('pending', '0'))
+                    # 1. ОСНОВНОЕ
+                    st.caption("Основные данные")
+                    c1, c2 = st.columns(2)
+                    mn = c1.text_input("Название", value=m['module_name'], key=f"nm_{mid}")
+                    mi = c2.text_input("Индекс в каталоге", value=m['catalogue_index'], key=f"idx_{mid}")
 
-                        d1, d2 = st.columns(2)
-                        m_acc = d1.text_input("№ Счета / Дата заказа", value=m.get('order_date_acc_num', '-'))
-                        m_prop = d2.text_input("Характеристики", value=m.get('properties', '-'))
-                        
-                        m_notes = st.text_area("Заметки", value=m.get('notes') or "")
-                        
-                        if st.form_submit_button("Сохранить изменения модуля"):
-                            pl = {
-                                "module_name": mn, "catalogue_index": mi, "supplier": ms,
-                                "quantity": mq, "cost": mc, "price": mp,
-                                "ordered": m_ord, "recd": m_recd, "pending": m_pend,
-                                "order_date_acc_num": m_acc, "properties": m_prop,
-                                "notes": m_notes
-                            }
-                            utils.patch_module(m['module_id'], pl)
-                            st.success("Обновлено!")
-                            st.rerun()
-                    
-                    if st.button("Удалить модуль", key=f"del_mod_{m['module_id']}"):
-                        utils.delete_module(m['module_id'])
-                        st.rerun()
-        else:
-            st.write("Нет модулей.")
+                    c3, c4 = st.columns(2)
+                    ms = c3.text_input("Поставщик", value=m['supplier'], key=f"sup_{mid}")
+                    c4.text_input("Владелец", value="Текущий клиент", disabled=True, key=f"own_{mid}")
 
-        st.divider()
-        
-        # 2. СОЗДАНИЕ НОВОГО МОДУЛЯ
-        with st.expander("➕ Создать модуль для этого клиента", expanded=False):
-            with st.form("add_client_mod_full"):
-                st.subheader("Новый модуль")
-                
-                st.caption("Основные данные")
-                c1, c2 = st.columns(2)
-                nn = c1.text_input("Название *")
-                ni = c2.text_input("Индекс в каталоге *")
-                
-                c3, c4 = st.columns(2)
-                ns = c3.text_input("Поставщик *")
-                c4.text_input("Владелец", value="Будет привязан к текущему клиенту", disabled=True)
+                    st.divider()
 
-                st.divider()
-                st.caption("Финансы и Количество")
-                f1, f2, f3 = st.columns(3)
-                nq = f1.number_input("Количество (шт)", min_value=0, value=1, step=1)
-                nc = f2.number_input("Себестоимость", min_value=0.0, value=0.0, step=10.0)
-                np = f3.number_input("Цена", min_value=0.0, value=0.0, step=10.0)
+                    # 2. ФИНАНСЫ (С ПЕРЕСЧЕТОМ)
+                    st.caption("Финансы (Авто-пересчет)")
 
-                st.divider()
-                st.caption("Статусы и Детали")
-                s1, s2, s3 = st.columns(3)
-                n_ord = s1.text_input("Заказано (Ordered)", value="0")
-                n_recd = s2.text_input("Получено (Recd)", value="0")
-                n_pend = s3.text_input("Ожидается (Pending)", value="0")
+                    db_qty = int(m.get('quantity') or 1)
+                    db_cost = float(m.get('cost') or 0.0)
+                    db_price = float(m.get('price') or 0.0)
 
-                d1, d2 = st.columns(2)
-                n_acc = d1.text_input("№ Счета / Дата заказа", value="-")
-                n_prop = d2.text_input("Характеристики", value="-")
-                
-                n_notes = st.text_area("Заметки")
-                
-                if st.form_submit_button("Создать модуль"):
-                    if nn and ni and ns:
+                    init_uc = db_cost / db_qty if db_qty > 0 else 0.0
+                    init_up = db_price / db_qty if db_qty > 0 else 0.0
+
+                    f1, f2, f3, f4, f5 = st.columns(5)
+
+                    mq = f1.number_input("Кол-во", min_value=1, value=db_qty, key=f"qty_{mid}")
+                    mc_unit = f2.number_input("Себест. (ед)", min_value=0.0, value=init_uc, step=10.0, key=f"uc_{mid}")
+                    mp_unit = f3.number_input("Цена (ед)", min_value=0.0, value=init_up, step=10.0, key=f"up_{mid}")
+
+                    m_total_cost = mc_unit * mq
+                    m_total_price = mp_unit * mq
+
+                    f4.metric("ИТОГО Cost", f"{m_total_cost:.2f}")
+                    f5.metric("ИТОГО Price", f"{m_total_price:.2f}")
+
+                    st.divider()
+
+                    # 3. ХАРАКТЕРИСТИКИ (НОВОЕ)
+                    st.caption("Характеристики")
+                    h1, h2, h3 = st.columns(3)
+                    m_size = h1.text_input("Размер", value=m.get('size') or "", key=f"sz_{mid}")
+                    m_stiff = h2.text_input("Жесткость", value=m.get('stiffness') or "", key=f"st_{mid}")
+                    m_side = h3.text_input("Сторона", value=m.get('side') or "", key=f"sd_{mid}")
+
+                    st.divider()
+
+                    # 4. СТАТУСЫ И ДЕТАЛИ
+                    st.caption("Статусы и Детали")
+                    s1, s2, s3 = st.columns(3)
+                    m_ord = s1.text_input("Ordered", value=m.get('ordered', '0'), key=f"ord_{mid}")
+                    m_recd = s2.text_input("Recd", value=m.get('recd', '0'), key=f"rcd_{mid}")
+                    m_pend = s3.text_input("Pending", value=m.get('pending', '0'), key=f"pnd_{mid}")
+
+                    d1, d2 = st.columns(2)
+                    m_acc = d1.text_input("Счет", value=m.get('order_date_acc_num', '-'), key=f"acc_{mid}")
+                    m_prop = d2.text_input("Доп. св-ва", value=m.get('properties', '-'), key=f"prp_{mid}")
+
+                    m_notes = st.text_area("Заметки", value=m.get('notes') or "", key=f"nts_{mid}")
+
+                    # КНОПКИ
+                    col_save, col_del = st.columns([1, 4])
+
+                    if col_save.button("💾", key=f"save_{mid}", help="Сохранить изменения"):
                         pl = {
-                            "module_name": nn, 
-                            "catalogue_index": ni, 
-                            "supplier": ns,
-                            "client_id": cid, # Привязка к текущему клиенту
-                            
-                            "quantity": nq, "cost": nc, "price": np,
-                            "ordered": n_ord, "recd": n_recd, "pending": n_pend,
-                            "order_date_acc_num": n_acc, "properties": n_prop,
-                            "notes": n_notes
+                            "module_name": mn, "catalogue_index": mi, "supplier": ms,
+                            "quantity": mq,
+                            "cost": m_total_cost,   # ИТОГ
+                            "price": m_total_price, # ИТОГ
+                            "ordered": m_ord, "recd": m_recd, "pending": m_pend,
+                            "order_date_acc_num": m_acc, "properties": m_prop, "notes": m_notes,
+                            # Новые поля
+                            "size": m_size, "stiffness": m_stiff, "side": m_side
                         }
                         try:
-                            utils.create_module(pl)
-                            st.success("Модуль создан!")
+                            utils.patch_module(mid, pl)
+                            st.success("ОК")
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Ошибка создания: {e}")
-                    else:
-                        st.warning("Заполните поля со *")
+                        except Exception as e: st.error(f"Ошибка: {e}")
 
-    # --- ФАЙЛЫ ---
-    with tab5:
+                    if col_del.button("🗑️ Удалить", key=f"del_{mid}"):
+                        utils.delete_module(mid)
+                        st.rerun()
+        else:
+            st.write("Нет привязанных модулей.")
+
+        st.divider()
+
+        # 2. СОЗДАНИЕ НОВОГО МОДУЛЯ
+        with st.expander("➕ Создать модуль для этого клиента", expanded=False):
+
+            st.caption("Основные данные")
+            c1, c2 = st.columns(2)
+            nn = c1.text_input("Название *", key=f"new_cl_mn_{cid}")
+            ni = c2.text_input("Индекс *", key=f"new_cl_mi_{cid}")
+
+            c3, c4 = st.columns(2)
+            ns = c3.text_input("Поставщик *", key=f"new_cl_ms_{cid}")
+            c4.text_input("Владелец", value="Текущий клиент", disabled=True, key=f"new_cl_own_{cid}")
+
+            st.divider()
+
+            st.caption("Финансы (Авто-пересчет)")
+            f1, f2, f3, f4, f5 = st.columns(5)
+            nq = f1.number_input("Кол-во", min_value=1, value=1, key=f"new_cl_qty_{cid}")
+            nuc = f2.number_input("Себест. (ед)", 0.0, step=10.0, key=f"new_cl_uc_{cid}")
+            nup = f3.number_input("Цена (ед)", 0.0, step=10.0, key=f"new_cl_up_{cid}")
+
+            n_total_cost = nuc * nq
+            n_total_price = nup * nq
+
+            f4.metric("ИТОГО Cost", f"{n_total_cost:.2f}")
+            f5.metric("ИТОГО Price", f"{n_total_price:.2f}")
+
+            st.divider()
+            st.caption("Характеристики")
+            h1, h2, h3 = st.columns(3)
+            n_size = h1.text_input("Размер", key=f"new_cl_sz_{cid}")
+            n_stiff = h2.text_input("Жесткость", key=f"new_cl_st_{cid}")
+            n_side = h3.text_input("Сторона", key=f"new_cl_sd_{cid}")
+
+            st.divider()
+            st.caption("Статусы")
+            s1, s2, s3 = st.columns(3)
+            no = s1.text_input("Ordered", "0", key=f"new_cl_ord_{cid}")
+            nr = s2.text_input("Recd", "0", key=f"new_cl_rcd_{cid}")
+            npe = s3.text_input("Pending", "0", key=f"new_cl_pend_{cid}")
+
+            d1, d2 = st.columns(2)
+            na = d1.text_input("Счет", "-", key=f"new_cl_acc_{cid}")
+            npr = d2.text_input("Доп. св-ва", "-", key=f"new_cl_prop_{cid}")
+
+            n_notes = st.text_area("Заметки", key=f"new_cl_nts_{cid}")
+
+            if st.button("Создать модуль", type="primary", key=f"btn_create_cl_mod_{cid}"):
+                if nn and ni and ns:
+                    pl = {
+                        "module_name": nn, "catalogue_index": ni, "supplier": ns,
+                        "client_id": cid, # Привязка
+                        "quantity": nq, "cost": n_total_cost, "price": n_total_price,
+                        "ordered": no, "recd": nr, "pending": npe,
+                        "order_date_acc_num": na, "properties": npr, "notes": n_notes,
+                        "size": n_size, "stiffness": n_stiff, "side": n_side
+                    }
+                    try:
+                        utils.create_module(pl)
+                        st.success("Модуль создан!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Ошибка создания: {e}")
+                else:
+                    st.warning("Заполните поля со *")
+
+    # --- TAB 5: ФАЙЛЫ ---
+    elif sel == "📎 Файлы":
         st.info("Здесь хранятся сканы документов, фото и PDF.")
-        
+
         # 1. Загрузка
         with st.form("upload_form", clear_on_submit=True):
             uploaded_file = st.file_uploader("Выберите файл (PDF, JPG, PNG)", type=["pdf", "png", "jpg", "jpeg"])
@@ -618,42 +800,41 @@ else:
                         st.error(f"Ошибка загрузки: {e}")
                 else:
                     st.warning("Файл не выбран")
-        
+
         st.divider()
-        
+
         # 2. Список файлов
         try:
             files = utils.fetch_client_files(cid)
         except:
             files = []
-        
+
         if files:
             for f in files:
                 with st.container(border=True):
                     c1, c2, c3 = st.columns([4, 2, 1])
-                    
+
                     # Иконка по типу
                     icon = "📄"
                     if "pdf" in f['content_type']: icon = "📕"
                     elif "image" in f['content_type']: icon = "🖼️"
-                    
+
                     c1.write(f"**{icon} {f['filename']}**")
                     c1.caption(f"Загружено: {f['created_at'][:10]} | Размер: {f['size'] // 1024} KB")
-                    
+
                     try:
                         # Запрашиваем файл
                         url = utils.get_download_url(f['document_id'])
                         r = requests.get(url, headers=utils.get_headers())
-                        
+
                         if r.status_code == 200:
                             c2.download_button(
-                                "⬇️ Скачать", 
-                                data=r.content, 
-                                file_name=f['filename'], 
+                                "⬇️ Скачать",
+                                data=r.content,
+                                file_name=f['filename'],
                                 key=f"dl_{f['document_id']}"
                             )
                         else:
-                            # ПОКАЗЫВАЕМ РЕАЛЬНУЮ ОШИБКУ
                             c2.error(f"Err {r.status_code}")
                     except Exception as e:
                         c2.error(f"Ex: {e}")

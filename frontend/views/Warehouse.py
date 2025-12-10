@@ -221,10 +221,11 @@ if st.session_state.wh_active_id is None:
 
         st.divider()
         st.subheader("Статусы")
-        s1, s2, s3 = st.columns(3)
+        s1, s2, s3, s4 = st.columns(4)
         n_ord = s1.text_input("Заказано", "0", key="new_ord")
         n_recd = s2.text_input("Получено", "0", key="new_recd")
         n_pend = s3.text_input("Ожидается", "0", key="new_pend")
+        n_pr_keep = s4.text_input("У протезиста", "0", key="new_pr_keep")
 
         d1, d2 = st.columns(2)
         n_acc = d1.text_input("Счет", "-", key="new_acc")
@@ -241,7 +242,7 @@ if st.session_state.wh_active_id is None:
                     "quantity": n_qty, "cost": n_total_cost, "price": n_total_price,
                     "ordered": n_ord, "recd": n_recd, "pending": n_pend,
                     "order_date_acc_num": n_acc, "properties": n_props, "notes": n_notes,
-                    "size": n_size, "stiffness": n_stiff, "side": n_side
+                    "size": n_size, "stiffness": n_stiff, "side": n_side, "prosthetist_keep": n_pr_keep,
                 }
                 try:
                     utils.create_module(pl)
@@ -328,10 +329,11 @@ else:
 
     st.divider()
     # --- РАЗДЕЛ 3: СТАТУСЫ ---
-    s1, s2, s3 = st.columns(3)
+    s1, s2, s3, s4 = st.columns(4)
     e_ord = s1.text_input("Заказано", value=mod_detail.get('ordered', '0'), key="edit_ord")
     e_recd = s2.text_input("Получено", value=mod_detail.get('recd', '0'), key="edit_recd")
     e_pend = s3.text_input("В ожидании", value=mod_detail.get('pending', '0'), key="edit_pend")
+    e_pr_keep = s4.text_input("У протезиста", value=mod_detail.get('prosthetist_keep', '0') or "", key="e_pr_keep")
 
     d1, d2 = st.columns(2)
     e_acc = d1.text_input("Счет", value=mod_detail.get('order_date_acc_num', '-'), key="edit_acc")
@@ -353,6 +355,7 @@ else:
             "size": e_size,
             "stiffness": e_stiff,
             "side": e_side,
+            "prosthetist_keep": e_pr_keep,
         }
         
         try:

@@ -219,6 +219,8 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "check_date": client.check_date,
         "prosthesis_type": client.prosthesis_type,
         "certificate_price": client.certificate_price,
+        "ipra_code": client.ipra_code,
+        "place_of_residence": client.place_of_residence,
         # вложенные
         "agent": agent_summary,
         "status": status_summary,
@@ -256,7 +258,9 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         notes=client_in.notes,
         check_date=client_in.check_date,
         prosthesis_type=client_in.prosthesis_type,
-        certificate_price=client_in.certificate_price
+        certificate_price=client_in.certificate_price,
+        place_of_residence=client_in.place_of_residence,
+        ipra_code=client_in.ipra_code,
     )
 
     db.add(client)

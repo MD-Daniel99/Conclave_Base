@@ -117,6 +117,8 @@ class Client(Base):
     check_date = Column(Date, nullable=True)          
     prosthesis_type = Column(String(255), nullable=True) 
     certificate_price = Column(Float, nullable=True)
+    ipra_code = Column(String(64), nullable = True)
+    place_of_residence = Column(String(255), nullable = True)
 
     # отношения
     agent = relationship("Agent", back_populates="clients")
@@ -229,6 +231,7 @@ class Module(Base):
     price = Column(Float)
     recd = Column(String(64), nullable = False)
     pending = Column(String(64), nullable = False)
+    prosthetist_keep = Column(String(64), nullable = True)
     properties = Column(String(64), nullable = False)
     created_at = Column(DateTime(timezone = True), server_default = func.now(), nullable = False)
     updated_at = Column(DateTime(timezone = True), server_default = func.now(), onupdate = func.now(), nullable = False)
