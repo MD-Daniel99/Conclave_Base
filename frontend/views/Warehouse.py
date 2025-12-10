@@ -154,13 +154,16 @@ if st.session_state.wh_active_id is None:
             # Бэкенд возвращает объект client внутри модуля (благодаря selectinload)
             if m.get("client"): 
                 own = f"{m['client']['last_name']} {m['client']['first_name']}"
-            
+            # добавление данных в датафрейм
             rows.append({
                 "ID": m["module_id"],
                 "Название": m["module_name"],
                 "Индекс": m["catalogue_index"],
                 "Цена": m["price"],
                 "Стоимость": m["cost"],
+                "Размер": m.get("size", ""),
+                "Жесткость": m.get("stiffness", ""),
+                "Сторона": m.get("side", ""),
                 "Поставщик": m["supplier"],
                 "Владелец": own
             })
@@ -206,8 +209,15 @@ if st.session_state.wh_active_id is None:
         n_total_cost = n_unit_cost * n_qty
         n_total_price = n_unit_price * n_qty
     
-        f4.metric("ИТОГО Стоимость", f"{n_total_cost:.2f}")
+        f4.metric("ИТОГО стоимость", f"{n_total_cost:.2f}")
         f5.metric("ИТОГО цена", f"{n_total_price:.2f}")
+
+        st.divider()
+        st.subheader("Характеристики")
+        ch1, ch2, ch3 = st.columns(3)
+        n_size = ch1.text_input("Размер", key="new_size")
+        n_stiff = ch2.text_input("Жесткость", key="new_stiff")
+        n_side = ch3.text_input("Сторона", key="new_side")
 
         st.divider()
         st.subheader("Статусы")
@@ -230,7 +240,8 @@ if st.session_state.wh_active_id is None:
                     "module_name": nn, "catalogue_index": ni, "supplier": ns, "client_id": cid_target,
                     "quantity": n_qty, "cost": n_total_cost, "price": n_total_price,
                     "ordered": n_ord, "recd": n_recd, "pending": n_pend,
-                    "order_date_acc_num": n_acc, "properties": n_props, "notes": n_notes
+                    "order_date_acc_num": n_acc, "properties": n_props, "notes": n_notes,
+                    "size": n_size, "stiffness": n_stiff, "side": n_side
                 }
                 try:
                     utils.create_module(pl)
@@ -309,12 +320,18 @@ else:
     f5.metric("ИТОГО цена", f"{e_total_price:.2f}")
 
     st.divider()
+    st.caption("Характеристики")
+    ch1, ch2, ch3 = st.columns(3)
+    e_size = ch1.text_input("Размер", value=mod_detail.get('size') or "", key="e_size")
+    e_stiff = ch2.text_input("Жесткость", value=mod_detail.get('stiffness') or "", key="e_stiff")
+    e_side = ch3.text_input("Сторона", value=mod_detail.get('side') or "", key="e_side")
 
+    st.divider()
     # --- РАЗДЕЛ 3: СТАТУСЫ ---
     s1, s2, s3 = st.columns(3)
-    e_ord = s1.text_input("Ordered", value=mod_detail.get('ordered', '0'), key="edit_ord")
-    e_recd = s2.text_input("Recd", value=mod_detail.get('recd', '0'), key="edit_recd")
-    e_pend = s3.text_input("Pending", value=mod_detail.get('pending', '0'), key="edit_pend")
+    e_ord = s1.text_input("Заказано", value=mod_detail.get('ordered', '0'), key="edit_ord")
+    e_recd = s2.text_input("Получено", value=mod_detail.get('recd', '0'), key="edit_recd")
+    e_pend = s3.text_input("В ожидании", value=mod_detail.get('pending', '0'), key="edit_pend")
 
     d1, d2 = st.columns(2)
     e_acc = d1.text_input("Счет", value=mod_detail.get('order_date_acc_num', '-'), key="edit_acc")
@@ -332,7 +349,10 @@ else:
             "cost": e_total_cost, # Сохраняем ИТОГ
             "price": e_total_price,
             "ordered": e_ord, "recd": e_recd, "pending": e_pend,
-            "order_date_acc_num": e_acc, "properties": e_props, "notes": e_notes
+            "order_date_acc_num": e_acc, "properties": e_props, "notes": e_notes,
+            "size": e_size,
+            "stiffness": e_stiff,
+            "side": e_side,
         }
         
         try:

@@ -43,6 +43,9 @@ class ModuleBase(BaseModel):
     supplier: str
     ordered: str
     order_date_acc_num: str
+    size: Optional[str] = None
+    stiffness: Optional[str] = None
+    side: Optional[str] = None
     quantity: int = 0
     cost: float = 0.0
     price: float = 0.0
@@ -64,6 +67,9 @@ class ModuleUpdate(BaseModel):
     supplier: Optional[str] = None
     ordered: Optional[str] = None
     order_date_acc_num: Optional[str] = None
+    size: Optional[str] = None
+    stiffness: Optional[str] = None
+    side: Optional[str] = None
     cost: Optional[float] = None
     price: Optional[float] = None
     recd: Optional[str] = None
