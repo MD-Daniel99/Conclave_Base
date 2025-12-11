@@ -1,0 +1,34 @@
+[theme]
+# Основные цвета темы
+primaryColor = "#5E81AC"           # Приятный синий
+backgroundColor = "#F8F9FA"        # Очень светлый серый фон
+secondaryBackgroundColor = "#FFFFFF" # Белый для карточек
+textColor = "#2E3440"              # Темно-серый почти черный
+font = "sans serif"
+
+# Дополнительные настройки темы
+base = "light"
+
+# Акцентные цвета
+[theme.accent]
+background = "#88C0D0"             # Светло-голубой
+text = "#5E81AC"                   # Синий
+
+# Кастомные цвета (не все поддерживаются Streamlit напрямую, но можно использовать через CSS)
+[theme.custom]
+sidebarBackground = "#ECEFF4"      # Светлый фон для сайдбара
+cardShadow = "0 4px 6px rgba(0,0,0,0.1)"
+borderRadius = "10px"
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[client]
+toolbarMode = "viewer"
+showErrorDetails = false
+
+# Опционально: настройки для мобильных устройств
+[browser]
+gatherUsageStats = false
