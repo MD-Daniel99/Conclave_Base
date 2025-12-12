@@ -1,9 +1,8 @@
 [theme]
-# Основные цвета темы
-primaryColor = "#5E81AC"           # Приятный синий
-backgroundColor = "#F8F9FA"        # Очень светлый серый фон
+primaryColor = "#8A4FFF"           # Яркий фиолетовый
+backgroundColor = "#F9F7FF"        # Светло-лавандовый фон
 secondaryBackgroundColor = "#FFFFFF" # Белый для карточек
-textColor = "#2E3440"              # Темно-серый почти черный
+textColor = "#3C3744"              # Темно-серый с фиолетовым оттенком
 font = "sans serif"
 
 # Дополнительные настройки темы
@@ -11,12 +10,12 @@ base = "light"
 
 # Акцентные цвета
 [theme.accent]
-background = "#88C0D0"             # Светло-голубой
-text = "#5E81AC"                   # Синий
+background = "#B19CD9"             # Пастельно-фиолетовый
+text = "#8A4FFF"                   # Яркий фиолетовый
 
 # Кастомные цвета (не все поддерживаются Streamlit напрямую, но можно использовать через CSS)
 [theme.custom]
-sidebarBackground = "#ECEFF4"      # Светлый фон для сайдбара
+sidebarBackground = "#E6E0FF"      # Светло-лавандовый для сайдбара
 cardShadow = "0 4px 6px rgba(0,0,0,0.1)"
 borderRadius = "10px"
 

@@ -10,7 +10,7 @@ st.markdown("""
 <style>
     /* ===== ОСНОВНЫЕ НАСТРОЙКИ ===== */
     .stApp {
-        background: linear-gradient(135deg, #f5f7fa 0%, #e4e7eb 100%);
+        background: linear-gradient(135deg, #F9F7FF 0%, #F0EBFF 100%);
     }
     
     /* Убираем лишние отступы */
@@ -21,13 +21,13 @@ st.markdown("""
     
     /* ===== ЗАГОЛОВКИ ===== */
     h1 {
-        color: #5E81AC !important;
+        color: #8A4FFF !important;
         font-size: 2.8rem !important;
         font-weight: 800 !important;
         margin-bottom: 1.5rem !important;
         padding-bottom: 15px;
-        border-bottom: 3px solid #88C0D0;
-        background: linear-gradient(90deg, #5E81AC, #81A1C1);
+        border-bottom: 3px solid #B19CD9;
+        background: linear-gradient(90deg, #8A4FFF, #9B6BFF);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -35,16 +35,16 @@ st.markdown("""
     }
     
     h2 {
-        color: #4C566A !important;
+        color: #3C3744 !important;
         font-size: 2rem !important;
         font-weight: 700 !important;
         margin-top: 2rem !important;
         padding-left: 15px;
-        border-left: 4px solid #5E81AC;
+        border-left: 4px solid #8A4FFF;
     }
     
     h3 {
-        color: #4C566A !important;
+        color: #3C3744 !important;
         font-size: 1.5rem !important;
         font-weight: 600 !important;
         margin-top: 1.5rem !important;
@@ -52,14 +52,14 @@ st.markdown("""
     
     /* ===== ТАБЛИЦЫ (DATAFRAME) ===== */
     [data-testid="stDataFrame"] {
-        border: 1px solid #D8DEE9 !important;
+        border: 1px solid #B19CD9 !important;
         border-radius: 10px !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
     }
     
     /* Заголовки таблиц */
     [data-testid="stDataFrame"] th {
-        background: linear-gradient(90deg, #5E81AC, #81A1C1) !important;
+        background: linear-gradient(90deg, #8A4FFF, #9B6BFF) !important;
         color: white !important;
         font-weight: 600 !important;
         padding: 12px 8px !important;
@@ -67,46 +67,46 @@ st.markdown("""
     
     /* Чередование строк */
     [data-testid="stDataFrame"] tbody tr:nth-child(even) {
-        background-color: #F8F9FA !important;
+        background-color: #F9F7FF !important;
     }
     
     [data-testid="stDataFrame"] tbody tr:hover {
-        background-color: rgba(136, 192, 208, 0.1) !important;
+        background-color: rgba(177, 156, 217, 0.1) !important;
     }
     
     /* ===== КНОПКИ ===== */
     .stButton > button {
-        background: linear-gradient(90deg, #5E81AC, #81A1C1) !important;
+        background: linear-gradient(90deg, #8A4FFF, #9B6BFF) !important;
         color: white !important;
         border: none !important;
         padding: 10px 24px !important;
         border-radius: 8px !important;
         font-weight: 600 !important;
         transition: all 0.3s ease !important;
-        box-shadow: 0 2px 4px rgba(94, 129, 172, 0.3) !important;
+        box-shadow: 0 2px 4px rgba(138, 79, 255, 0.3) !important;
     }
     
     .stButton > button:hover {
         transform: translateY(-2px) !important;
-        box-shadow: 0 4px 8px rgba(94, 129, 172, 0.4) !important;
-        background: linear-gradient(90deg, #81A1C1, #5E81AC) !important;
+        box-shadow: 0 4px 8px rgba(138, 79, 255, 0.4) !important;
+        background: linear-gradient(90deg, #9B6BFF, #8A4FFF) !important;
     }
     
     /* Primary кнопки */
     .stButton > button[kind="primary"] {
-        background: linear-gradient(90deg, #88C0D0, #8FBCBB) !important;
-        box-shadow: 0 2px 4px rgba(136, 192, 208, 0.3) !important;
+        background: linear-gradient(90deg, #B19CD9, #C2B0E5) !important;
+        box-shadow: 0 2px 4px rgba(177, 156, 217, 0.3) !important;
     }
     
     .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(90deg, #8FBCBB, #88C0D0) !important;
-        box-shadow: 0 4px 8px rgba(136, 192, 208, 0.4) !important;
+        background: linear-gradient(90deg, #C2B0E5, #B19CD9) !important;
+        box-shadow: 0 4px 8px rgba(177, 156, 217, 0.4) !important;
     }
     
     /* ===== SIDEBAR ===== */
     section[data-testid="stSidebar"] > div {
-        background: linear-gradient(180deg, #ECEFF4 0%, #E5E9F0 100%) !important;
-        border-right: 1px solid #D8DEE9 !important;
+        background: linear-gradient(180deg, #E6E0FF 0%, #D9D0FF 100%) !important;
+        border-right: 1px solid #8A4FFF !important;
         padding: 2rem 1rem !important;
     }
     
@@ -115,30 +115,30 @@ st.markdown("""
         width: 100%;
         margin: 6px 0;
         background: white !important;
-        color: #4C566A !important;
-        border: 2px solid #D8DEE9 !important;
+        color: #3C3744 !important;
+        border: 2px solid #B19CD9 !important;
         box-shadow: none !important;
     }
     
     section[data-testid="stSidebar"] .stButton > button:hover {
-        border-color: #5E81AC !important;
-        background: rgba(94, 129, 172, 0.05) !important;
+        border-color: #8A4FFF !important;
+        background: rgba(138, 79, 255, 0.05) !important;
         transform: translateX(5px) !important;
     }
     
     /* ===== КАРТОЧКИ И КОНТЕЙНЕРЫ ===== */
     .stExpander {
-        border: 1px solid #D8DEE9 !important;
+        border: 1px solid #B19CD9 !important;
         border-radius: 10px !important;
         margin-bottom: 1rem !important;
     }
     
     .stExpander summary {
-        background: linear-gradient(90deg, #F8F9FA, #FFFFFF) !important;
+        background: linear-gradient(90deg, #F9F7FF, #FFFFFF) !important;
         border-radius: 10px 10px 0 0 !important;
         padding: 1rem !important;
         font-weight: 600 !important;
-        color: #4C566A !important;
+        color: #3C3744 !important;
     }
     
     /* Формы в expander */
@@ -154,7 +154,7 @@ st.markdown("""
     .stSelectbox > div > div > div,
     .stDateInput > div > div > input,
     .stTextArea > textarea {
-        border: 2px solid #D8DEE9 !important;
+        border: 2px solid #B19CD9 !important;
         border-radius: 8px !important;
         transition: all 0.3s ease !important;
     }
@@ -164,8 +164,8 @@ st.markdown("""
     .stSelectbox > div > div > div:focus,
     .stDateInput > div > div > input:focus,
     .stTextArea > textarea:focus {
-        border-color: #5E81AC !important;
-        box-shadow: 0 0 0 3px rgba(94, 129, 172, 0.1) !important;
+        border-color: #8A4FFF !important;
+        box-shadow: 0 0 0 3px rgba(138, 79, 255, 0.1) !important;
     }
     
     /* ===== РАДИО-КНОПКИ И ЧЕКБОКСЫ ===== */
@@ -173,21 +173,21 @@ st.markdown("""
         background: white;
         padding: 10px;
         border-radius: 8px;
-        border: 1px solid #D8DEE9;
+        border: 1px solid #B19CD9;
     }
     
     .stCheckbox {
         background: white;
         padding: 8px 12px;
         border-radius: 8px;
-        border: 1px solid #D8DEE9;
+        border: 1px solid #B19CD9;
         margin: 4px 0;
     }
     
     /* ===== ВКЛАДКИ (TABS) ===== */
     .stTabs [data-baseweb="tab-list"] {
         gap: 4px;
-        background-color: #F8F9FA;
+        background-color: #F9F7FF;
         padding: 4px;
         border-radius: 10px;
     }
@@ -195,15 +195,15 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] {
         border-radius: 8px !important;
         padding: 10px 20px !important;
-        color: #4C566A !important;
+        color: #3C3744 !important;
         font-weight: 500 !important;
         transition: all 0.3s ease !important;
     }
     
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(90deg, #5E81AC, #81A1C1) !important;
+        background: linear-gradient(90deg, #8A4FFF, #9B6BFF) !important;
         color: white !important;
-        box-shadow: 0 2px 4px rgba(94, 129, 172, 0.3) !important;
+        box-shadow: 0 2px 4px rgba(138, 79, 255, 0.3) !important;
     }
     
     /* ===== УВЕДОМЛЕНИЯ ===== */
@@ -221,8 +221,8 @@ st.markdown("""
     
     /* Info */
     .stAlert [data-testid="stMarkdownContainer"]:has(svg[aria-label="info"]) {
-        border-left-color: #2196F3 !important;
-        background: linear-gradient(90deg, rgba(33, 150, 243, 0.1), white) !important;
+        border-left-color: #8A4FFF !important;
+        background: linear-gradient(90deg, rgba(138, 79, 255, 0.1), white) !important;
     }
     
     /* Warning */
@@ -241,12 +241,12 @@ st.markdown("""
     [data-testid="stMetricValue"] {
         font-size: 2rem !important;
         font-weight: 700 !important;
-        color: #5E81AC !important;
+        color: #8A4FFF !important;
     }
     
     [data-testid="stMetricLabel"] {
         font-size: 1rem !important;
-        color: #4C566A !important;
+        color: #3C3744 !important;
         font-weight: 500 !important;
     }
     
@@ -254,31 +254,31 @@ st.markdown("""
     hr {
         margin: 2rem 0 !important;
         height: 2px !important;
-        background: linear-gradient(90deg, transparent, #D8DEE9, transparent) !important;
+        background: linear-gradient(90deg, transparent, #B19CD9, transparent) !important;
         border: none !important;
     }
     
     /* ===== СЛАЙДЕР ===== */
     .stSlider > div > div > div {
-        background: linear-gradient(90deg, #5E81AC, #81A1C1) !important;
+        background: linear-gradient(90deg, #8A4FFF, #9B6BFF) !important;
     }
     
     /* ===== ПРОГРЕСС-БАР ===== */
     .stProgress > div > div > div {
-        background: linear-gradient(90deg, #88C0D0, #8FBCBB) !important;
+        background: linear-gradient(90deg, #B19CD9, #C2B0E5) !important;
     }
     
     /* ===== ВЫПАДАЮЩИЕ СПИСКИ (SELECTBOX) ===== */
     [data-baseweb="select"] > div {
         border-radius: 8px !important;
-        border: 2px solid #D8DEE9 !important;
+        border: 2px solid #B19CD9 !important;
     }
     
     /* ===== КАРТОЧКИ В ТАБЛИЦЕ (для Clients, Warehouse и т.д.) ===== */
     /* Создаем эффект карточек для строк таблицы */
     [data-testid="stDataFrame"] td {
         padding: 12px 8px !important;
-        border-bottom: 1px solid #ECEFF4 !important;
+        border-bottom: 1px solid #F0EBFF !important;
     }
     
     /* ===== КНОПКИ В ТАБЛИЦАХ ===== */
@@ -328,17 +328,51 @@ st.markdown("""
     }
     
     ::-webkit-scrollbar-track {
-        background: #F8F9FA;
+        background: #F9F7FF;
         border-radius: 4px;
     }
     
     ::-webkit-scrollbar-thumb {
-        background: #88C0D0;
+        background: #B19CD9;
         border-radius: 4px;
     }
     
     ::-webkit-scrollbar-thumb:hover {
-        background: #5E81AC;
+        background: #8A4FFF;
+    }
+    
+    /* ===== ДОПОЛНИТЕЛЬНЫЕ СТИЛИ ===== */
+    /* Красивые карточки */
+    .card-style {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 4px 12px rgba(138, 79, 255, 0.08);
+        border: 1px solid rgba(177, 156, 217, 0.3);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    
+    .card-style:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 16px rgba(138, 79, 255, 0.12);
+    }
+    
+    /* Выделенный текст */
+    .highlight {
+        background: linear-gradient(120deg, rgba(138, 79, 255, 0.15) 0%, rgba(177, 156, 217, 0.15) 100%);
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-weight: 600;
+        color: #8A4FFF;
+    }
+    
+    /* Красивые кнопки в сайдбаре */
+    section[data-testid="stSidebar"] .stInfo {
+        background: rgba(255, 255, 255, 0.9) !important;
+        border-radius: 10px;
+        padding: 1rem;
+        border: 2px solid #B19CD9;
+        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
