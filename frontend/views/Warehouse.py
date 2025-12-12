@@ -173,9 +173,18 @@ if st.session_state.wh_active_id is None:
             })
         
         df = pd.DataFrame(rows)
+        df.insert(0, "№", range(skip + 1, skip + len(df) + 1))
         
         event = st.dataframe(
-            df, use_container_width=True, hide_index=True, selection_mode="single-row", on_select="rerun"
+            df, 
+            use_container_width=True, 
+            hide_index=True, 
+            selection_mode="single-row", 
+            on_select="rerun",
+            column_config={
+                "ID": None, 
+                "№": st.column_config.NumberColumn("№", width="small")
+            }
         )
         
         if event.selection.rows:

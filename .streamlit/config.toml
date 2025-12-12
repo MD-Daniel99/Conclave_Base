@@ -1,7 +1,7 @@
 [theme]
 primaryColor = "#8A4FFF"           # Яркий фиолетовый
 backgroundColor = "#F9F7FF"        # Светло-лавандовый фон
-secondaryBackgroundColor = "#FFFFFF" # Белый для карточек
+secondaryBackgroundColor = "#9779d2ff" # Белый для карточек
 textColor = "#3C3744"              # Темно-серый с фиолетовым оттенком
 font = "sans serif"
 
