@@ -7,6 +7,7 @@ import os
 
 from app import schemas, crud
 from app.db import get_db
+from app.services import contracts
 
 router = APIRouter()
 
@@ -50,3 +51,15 @@ def download_file(document_id: UUID, db: Session = Depends(get_db)):
 def delete_file(document_id: UUID, db: Session = Depends(get_db)):
     if not crud.delete_document(db, document_id):
         raise HTTPException(status_code=404, detail="File not found")
+
+@router.post("/clients/{client_id}/generate_contract", response_model = schemas.DocumentRead)
+def gen_contract(client_id: UUID, payload: schemas.ContractGeneration, db: Session = Depends(get_db)):
+    try:
+        contract = contracts.generate_contract(db, client_id, payload)
+        return contract
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="Template file missing on server")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Generation failed: {e}")

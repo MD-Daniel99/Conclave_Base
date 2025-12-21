@@ -1,6 +1,5 @@
 # Бизнес-логика/CRUD - операции с данными
 
-
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from sqlalchemy import select, or_, func, and_
@@ -142,6 +141,8 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
                 "client_id": ps.client_id,
                 "full_name": ps.full_name,
                 "birth_place": ps.birth_place,
+                "birth_date": ps.birth_date,
+                "department_code": ps.department_code,
                 "series_number": ps.series_number,
                 "issued_by": ps.issued_by,
                 "issue_date": ps.issue_date,

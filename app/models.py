@@ -95,7 +95,7 @@ class Client(Base):
     # Человекочитаемый порядковый идентификатор (external_id)
     external_id = Column(
         BigInteger,
-        Sequence('client_external_id_seq', start=1, increment=1), # <--- ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ
+        Sequence('client_external_id_seq', start=1, increment=1), 
         nullable=False,
         unique=True
     )
@@ -233,6 +233,7 @@ class Module(Base):
     pending = Column(String(64), nullable = False)
     prosthetist_keep = Column(String(64), nullable = True)
     properties = Column(String(64), nullable = False)
+    tsr_code =  Column(String(64), nullable = True)
     created_at = Column(DateTime(timezone = True), server_default = func.now(), nullable = False)
     updated_at = Column(DateTime(timezone = True), server_default = func.now(), onupdate = func.now(), nullable = False)
     notes = Column(Text, nullable=True)

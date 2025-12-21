@@ -53,6 +53,7 @@ class ModuleBase(BaseModel):
     pending: str
     prosthetist_keep: Optional[str] = None
     properties: str
+    tsr_code: Optional[str] = None
     notes: Optional[str] = None
 
 class ModuleCreate(ModuleBase):
@@ -77,6 +78,7 @@ class ModuleUpdate(BaseModel):
     pending: Optional[str] = None
     prosthetist_keep: Optional[str] = None
     properties: Optional[str] = None
+    tsr_code: Optional[str] = None
     notes: Optional[str] = None
 
 class ModuleRead(ModuleBase):
@@ -508,6 +510,13 @@ class DocumentRead(BaseModel):
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
+
+
+# Contract generation
+class ContractGeneration(BaseModel):
+    contract_number: str
+    contract_date: str
+    plan_date: str
 
 DocumentRead.model_rebuild()
 

@@ -221,3 +221,12 @@ def delete_file(document_id):
 # Функция для получения прямой ссылки (для скачивания)
 def get_download_url(document_id):
     return f"{API_BASE}/documents/download/{document_id}"
+
+def generate_contract(client_id, payload):
+    handle_request(
+        "POST", 
+        f"{API_BASE}/documents/clients/{client_id}/generate_contract", 
+        json=payload, 
+        headers=get_headers()
+    )
+    st.cache_data.clear()

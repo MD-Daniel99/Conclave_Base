@@ -54,7 +54,7 @@ def get_warehouse_csv():
             "Ordered": m['ordered'],
             "Recd": m['recd'],
             "Pending": m['pending'],
-            "Счет": m['order_date_acc_num'],
+            "Номер счета и дата заказа": m['order_date_acc_num'],
             "Заметки": m['notes']
         })
     
@@ -112,7 +112,7 @@ if st.session_state.wh_active_id is None:
                             "ordered": str(row.get("Ordered", "0")),
                             "recd": str(row.get("Recd", "0")),
                             "pending": str(row.get("Pending", "0")),
-                            "order_date_acc_num": str(row.get("Счет", "-")),
+                            "order_date_acc_num": str(row.get("Номер счета и дата заказа", "-")),
                             "notes": str(row.get("Заметки", "")),
                             "properties": "-"
                         }
@@ -197,17 +197,18 @@ if st.session_state.wh_active_id is None:
 
     # 3. CREATE
     st.divider()
-    with st.expander("➕ Создать модуль (с авто-расчетом)", expanded=False):
+    with st.expander("➕ Создать модуль", expanded=False):
         # УБРАЛИ st.form! Теперь работает пересчет.
         st.subheader("Основные данные")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         # Добавляем key, чтобы не терять фокус
         nn = c1.text_input("Название *", key="new_n")
+        tsr = c3.text_input("Код и название ТСР", key = "new_tsr")
         ni = c2.text_input("Индекс в каталоге *", key="new_i")
         
-        c3, c4 = st.columns(2)
-        ns = c3.text_input("Поставщик *", key="new_s")
-        no = c4.selectbox("Привязать к", ["На склад"] + list(clients_map.keys()), key="new_o")
+        c4, c5 = st.columns(2)
+        ns = c4.text_input("Поставщик *", key="new_s")
+        no = c5.selectbox("Привязать к", ["На склад"] + list(clients_map.keys()), key="new_o")
 
         st.divider()
         st.subheader("Финансы")
@@ -241,7 +242,7 @@ if st.session_state.wh_active_id is None:
         n_pr_keep = s4.text_input("У протезиста", "0", key="new_pr_keep")
 
         d1, d2 = st.columns(2)
-        n_acc = d1.text_input("Счет", "-", key="new_acc")
+        n_acc = d1.text_input("Номер счета и дата заказа", "-", key="new_acc")
         n_props = d2.text_input("Хар-ки", "-", key="new_props")
         
         n_notes = st.text_area("Заметки", key="new_notes")
@@ -289,12 +290,13 @@ else:
     
     # --- РАЗДЕЛ 1: ОСНОВНОЕ ---
     st.caption("Основные данные")
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     en = c1.text_input("Название", value=mod_detail['module_name'], key="edit_n")
+    edit_tsr = c3.text_input("Код и название ТСР", value = mod_detail['tsr_code'], key = "edit_tsr")
     ei = c2.text_input("Индекс в каталоге", value=mod_detail['catalogue_index'], key="edit_i")
     
-    c3, c4 = st.columns(2)
-    es = c3.text_input("Поставщик", value=mod_detail['supplier'], key="edit_s")
+    c4, c5 = st.columns(2)
+    es = c4.text_input("Поставщик", value=mod_detail['supplier'], key="edit_s")
     
     # Владелец
     curr_cid = mod_detail.get('client_id')
@@ -304,7 +306,7 @@ else:
         found_name = next((name for name, uid in clients_map.items() if uid == curr_cid), None)
         if found_name: default_idx = owner_options.index(found_name)
     
-    eo = c4.selectbox("Владелец", owner_options, index=default_idx, key="edit_o")
+    eo = c5.selectbox("Владелец", owner_options, index=default_idx, key="edit_o")
     
     st.divider()
     
@@ -349,7 +351,7 @@ else:
     e_pr_keep = s4.text_input("У протезиста", value=mod_detail.get('prosthetist_keep', '0') or "", key="e_pr_keep")
 
     d1, d2 = st.columns(2)
-    e_acc = d1.text_input("Счет", value=mod_detail.get('order_date_acc_num', '-'), key="edit_acc")
+    e_acc = d1.text_input("Номер счета и дата заказа", value=mod_detail.get('order_date_acc_num', '-'), key="edit_acc")
     e_props = d2.text_input("Хар-ки", value=mod_detail.get('properties', '-'), key="edit_prop")
     
     e_notes = st.text_area("Заметки", value=mod_detail.get('notes') or "", key="edit_notes")
@@ -369,6 +371,7 @@ else:
             "stiffness": e_stiff,
             "side": e_side,
             "prosthetist_keep": e_pr_keep,
+            "tsr_code": edit_tsr,
         }
         
         try:

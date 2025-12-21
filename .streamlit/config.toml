@@ -1,23 +1,15 @@
 [theme]
-primaryColor = "#8A4FFF"           # Яркий фиолетовый
-backgroundColor = "#F9F7FF"        # Светло-лавандовый фон
-secondaryBackgroundColor = "#9779d2ff" # Белый для карточек
-textColor = "#3C3744"              # Темно-серый с фиолетовым оттенком
+primaryColor = "#45bea6ff"           # Морская волна
+backgroundColor = "#f2f2f2ff"        # Белый фон
+secondaryBackgroundColor = "#45bea6ff" # Очень светло-зеленый (для фона инпутов)
+textColor = "#2D3748"              # Темно-серый
 font = "sans serif"
 
-# Дополнительные настройки темы
 base = "light"
 
-# Акцентные цвета
 [theme.accent]
-background = "#B19CD9"             # Пастельно-фиолетовый
-text = "#8A4FFF"                   # Яркий фиолетовый
-
-# Кастомные цвета (не все поддерживаются Streamlit напрямую, но можно использовать через CSS)
-[theme.custom]
-sidebarBackground = "#E6E0FF"      # Светло-лавандовый для сайдбара
-cardShadow = "0 4px 6px rgba(0,0,0,0.1)"
-borderRadius = "10px"
+background = "#45bea6ff"
+text = "#2E8B57"
 
 [server]
 headless = true
@@ -28,6 +20,5 @@ enableXsrfProtection = false
 toolbarMode = "viewer"
 showErrorDetails = false
 
-# Опционально: настройки для мобильных устройств
 [browser]
 gatherUsageStats = false

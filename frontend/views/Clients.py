@@ -3,7 +3,8 @@ import pandas as pd
 import sys
 import os
 import io
-from datetime import datetime, time, date
+import time
+from datetime import datetime, date, time as dt_time
 import requests
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import utils
@@ -26,8 +27,10 @@ def reset_state():
 def to_date(iso_str):
     """Конвертирует ISO строку (YYYY-MM-DD) в объект date для st.date_input"""
     if not iso_str: return None
-    try: return date.fromisoformat(iso_str)
-    except: return None
+    try: 
+        return date.fromisoformat(str(iso_str)[:10])
+    except: 
+        return None
 
 # Загрузка справочников
 try:
@@ -334,7 +337,7 @@ if st.session_state.cli_active_id is None:
                         "certificate_price": n_price,
                         "status_code": nst, "current_stage": nsg,
                         "agent_id": agents_map[nag],
-                        "deadline": datetime.combine(ndead, time.min).isoformat() if ndead else None,
+                        "deadline": datetime.combine(ndead, dt_time.min).isoformat() if ndead else None,
                         "notes": nnotes
                     }
                     try:
@@ -373,7 +376,7 @@ else:
         st.session_state.cli_active_tab = 3
 
     # радиопереключатель сохраняет выбор между rerun'ами
-    sel = st.radio("", TAB_NAMES, index=st.session_state.cli_active_tab, horizontal=True, key=f"client_tab_radio_{cid}")
+    sel = st.radio("Client menu", TAB_NAMES, index=st.session_state.cli_active_tab, horizontal=True, key=f"client_tab_radio_{cid}", label_visibility="collapsed")
     st.session_state.cli_active_tab = TAB_NAMES.index(sel)
 
     # --- TAB 1: ОСНОВНОЕ ---
@@ -419,13 +422,13 @@ else:
                     "certificate_price": e_price,
                     "status_code": est, "current_stage": esg,
                     "agent_id": agents_map[eag],
-                    "deadline": datetime.combine(edead, time.min).isoformat() if edead else None,
+                    "deadline": datetime.combine(edead, dt_time.min).isoformat() if edead else None,
                     "notes": enotes
                 }
                 utils.patch_client(cid, pl)
                 st.success("Сохранено")
                 utils.clear_caches()
-                del st.session_state["cli_active_id"]
+                #del st.session_state["cli_active_id"]
                 st.rerun()
 
         if st.button("Удалить клиента", type="primary"):
@@ -449,7 +452,7 @@ else:
 
                     pc5, pc6 = st.columns(2)
                     e_p_date = pc5.date_input("Дата выдачи", value=to_date(p.get('issue_date')), min_value=MIN_DATE)
-                    e_p_exp = pc6.date_input("Действителен до", value=to_date(p.get('expiry_date')))
+                    #e_p_exp = pc6.date_input("Действителен до", value=to_date(p.get('expiry_date')))
 
                     st.divider()
                     pc7, pc8 = st.columns(2)
@@ -462,7 +465,7 @@ else:
                         pl = {
                             "full_name": e_p_fn, "series_number": e_p_sn, "issued_by": e_p_by, "department_code": e_p_code,
                             "issue_date": e_p_date.isoformat() if e_p_date else None,
-                            "expiry_date": e_p_exp.isoformat() if e_p_exp else None,
+                            #"expiry_date": e_p_exp.isoformat() if e_p_exp else None,
                             "birth_place": e_p_bp, "birth_date": e_p_bd.isoformat() if e_p_bd else None,
                             "registration_address": e_p_addr
                         }
@@ -482,7 +485,9 @@ else:
                 st.write("Заполните данные паспорта")
                 n_sn = st.text_input("Серия/Номер *")
                 n_fn = st.text_input("ФИО *")
+                n_bd = st.date_input("Дата рождения", value=None, min_value=MIN_DATE)
                 n_by = st.text_input("Кем выдан")
+                n_code = st.text_input("Код подразделения", max_chars=7, help="Формат 000-000")
                 n_dt = st.date_input("Дата выдачи *", value=None, min_value=MIN_DATE)
                 n_bp = st.text_input("Место рождения")
                 n_addr = st.text_area("Прописка")
@@ -490,10 +495,15 @@ else:
                 if st.form_submit_button("Добавить"):
                     if n_sn and n_fn and n_dt:
                         pl = {
-                            "full_name": n_fn, "series_number": n_sn,
-                            "issued_by": n_by, "issue_date": n_dt.isoformat(),
-                            "registration_address": n_addr, "birth_place": n_bp,
-                            "department_code": None, "expiry_date": None
+                            "full_name": n_fn, 
+                            "series_number": n_sn,
+                            "issued_by": n_by, 
+                            "issue_date": n_dt.isoformat(),
+                            "registration_address": n_addr, 
+                            "birth_place": n_bp,
+                            "department_code": n_code, 
+                            #"expiry_date": None
+                            "birth_date": n_bd.isoformat() if n_bd else None
                         }
                         try:
                             utils.post_passport(cid, pl)
@@ -644,9 +654,10 @@ else:
 
                     # 1. ОСНОВНОЕ
                     st.caption("Основные данные")
-                    c1, c2 = st.columns(2)
+                    c1, c2, c3 = st.columns(3)
                     mn = c1.text_input("Название", value=m['module_name'], key=f"nm_{mid}")
                     mi = c2.text_input("Индекс в каталоге", value=m['catalogue_index'], key=f"idx_{mid}")
+                    tsr = c3.text_input("Код и название ТСР", value = m['tsr_code'], key = f"tsr_{mid}")
 
                     c3, c4 = st.columns(2)
                     ms = c3.text_input("Поставщик", value=m['supplier'], key=f"sup_{mid}")
@@ -695,7 +706,7 @@ else:
                     m_pend = s3.text_input("Pending", value=m.get('pending', '0'), key=f"pnd_{mid}")
 
                     d1, d2 = st.columns(2)
-                    m_acc = d1.text_input("Счет", value=m.get('order_date_acc_num', '-'), key=f"acc_{mid}")
+                    m_acc = d1.text_input("Номер счёта и дата заказа", value=m.get('order_date_acc_num', '-'), key=f"acc_{mid}")
                     m_prop = d2.text_input("Доп. св-ва", value=m.get('properties', '-'), key=f"prp_{mid}")
 
                     m_notes = st.text_area("Заметки", value=m.get('notes') or "", key=f"nts_{mid}")
@@ -712,7 +723,8 @@ else:
                             "ordered": m_ord, "recd": m_recd, "pending": m_pend,
                             "order_date_acc_num": m_acc, "properties": m_prop, "notes": m_notes,
                             # Новые поля
-                            "size": m_size, "stiffness": m_stiff, "side": m_side
+                            "size": m_size, "stiffness": m_stiff, "side": m_side,
+                            "tsr_code": tsr,
                         }
                         try:
                             utils.patch_module(mid, pl)
@@ -732,9 +744,10 @@ else:
         with st.expander("➕ Создать модуль для этого клиента", expanded=False):
 
             st.caption("Основные данные")
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             nn = c1.text_input("Название *", key=f"new_cl_mn_{cid}")
-            ni = c2.text_input("Индекс *", key=f"new_cl_mi_{cid}")
+            create_tsr = c3.text_input("Код и название ТСР", key=f"new_cl_tsr_{cid}")
+            ni = c2.text_input("Индекс в каталоге*", key=f"new_cl_mi_{cid}")
 
             c3, c4 = st.columns(2)
             ns = c3.text_input("Поставщик *", key=f"new_cl_ms_{cid}")
@@ -769,7 +782,7 @@ else:
             npe = s3.text_input("Pending", "0", key=f"new_cl_pend_{cid}")
 
             d1, d2 = st.columns(2)
-            na = d1.text_input("Счет", "-", key=f"new_cl_acc_{cid}")
+            na = d1.text_input("Номер счёта и дата заказа", "-", key=f"new_cl_acc_{cid}")
             npr = d2.text_input("Доп. св-ва", "-", key=f"new_cl_prop_{cid}")
 
             n_notes = st.text_area("Заметки", key=f"new_cl_nts_{cid}")
@@ -782,7 +795,8 @@ else:
                         "quantity": nq, "cost": n_total_cost, "price": n_total_price,
                         "ordered": no, "recd": nr, "pending": npe,
                         "order_date_acc_num": na, "properties": npr, "notes": n_notes,
-                        "size": n_size, "stiffness": n_stiff, "side": n_side
+                        "size": n_size, "stiffness": n_stiff, "side": n_side,
+                        "tsr_code": create_tsr,
                     }
                     try:
                         utils.create_module(pl)
@@ -796,6 +810,38 @@ else:
     # --- TAB 5: ФАЙЛЫ ---
     elif sel == "📎 Файлы":
         st.info("Здесь хранятся сканы документов, фото и PDF.")
+
+        with st.expander("📝 Генерация договора", expanded=False):
+            st.write("Автоматическое создание договора по шаблону на основе данных клиента и модулей.")
+            
+            with st.form("contract_gen_form"):
+                gc1, gc2 = st.columns(2)
+                c_num = gc1.text_input("Номер договора", value=f"{datetime.now().strftime('%y-%m')}/01")
+                c_date = gc2.date_input("Дата договора", value=datetime.now())
+                
+                gc3, gc4 = st.columns(2)
+                p_date = gc3.date_input("Дата Плана/Акта", value=datetime.now())
+                #l_type = gc4.selectbox("Тип конечности", ["нижних конечностей", "верхних конечностей"])
+                
+                # Кнопка подтверждения внутри формы
+                if st.form_submit_button("🚀 Сформировать договор", type="primary"):
+                    if c_num:
+                        payload = {
+                            "contract_number": c_num,
+                            "contract_date": c_date.isoformat(),
+                            "plan_date": p_date.isoformat(),
+                            #"limb_type": l_type
+                        }
+                        try:
+                            utils.generate_contract(cid, payload)
+                            st.success("Договор успешно создан и добавлен в список файлов!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Ошибка генерации: {e}")
+                    else:
+                        st.warning("Укажите номер договора")
+
+        st.divider()
 
         # 1. Загрузка
         with st.form("upload_form", clear_on_submit=True):
