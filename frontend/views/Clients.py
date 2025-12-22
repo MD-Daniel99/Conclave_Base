@@ -311,21 +311,37 @@ if st.session_state.cli_active_id is None:
     st.divider()
     with st.expander("➕ Создать нового клиента"):
         with st.form("new_client_form"):
+            # БЛОК 1: Основная информация
             c1, c2 = st.columns(2)
+            
+            # Левая колонка - ФИО
             nl = c1.text_input("Фамилия *")
             nf = c1.text_input("Имя *")
             nm = c1.text_input("Отчество")
             
+            # Правая колонка - Статусы
             nst = c2.selectbox("Статус *", list(statuses_map.keys()), format_func=lambda x: statuses_map.get(x))
             nsg = c2.selectbox("Этап *", list(stages_map.keys()), format_func=lambda x: stages_map.get(x))
             nag = c2.selectbox("Агент *", list(agents_map.keys()))
+            
             st.divider()
-            st.subheader("Сертификат и вид протеза")
-            d1, d2, d3 = st.columns(3)
-            n_prosthesis = d1.text_area("Виды протезов (каждый с новой строки)", height=100)
-            n_check_date = d2.date_input("Дата пробития", value=None)
-            n_price = d3.number_input("Стоимость сертификата", min_value=0.0, step=1.0, format="%.2f")
-            ndead = st.date_input("Повторное обращение", value=None)
+            
+            # БЛОК 2: ИПРА и ТСР
+            st.subheader("Сведения о протезировании")
+            d1, d2 = st.columns(2)
+            
+            # Левая колонка - Текстовые описания
+            with d1:
+                n_tsr_code = st.text_area("Коды ТСР (список)", height=100, help="Каждый код с новой строки. Пример: - 8-07-12 Протез бедра модульный с микропроцессорным управлением")
+                n_prosthesis = st.text_area("Виды протезов", height=100, help="Для автозаполнения типов конечностей в договоре.")
+            
+            # Правая колонка - Даты и Деньги
+            with d2:
+                n_check_date = st.date_input("Дата пробития", value=None)
+                n_price = st.number_input("Стоимость сертификата", min_value=0.0, step=1.0, format="%.2f")
+                ndead = st.date_input("Повторное обращение", value=None, help="Дата следующего контакта")
+
+            # БЛОК 3: Заметки
             nnotes = st.text_area("Заметки", key="new_client_notes")
             
             if st.form_submit_button("Создать"):
@@ -338,7 +354,8 @@ if st.session_state.cli_active_id is None:
                         "status_code": nst, "current_stage": nsg,
                         "agent_id": agents_map[nag],
                         "deadline": datetime.combine(ndead, dt_time.min).isoformat() if ndead else None,
-                        "notes": nnotes
+                        "notes": nnotes,
+                        "tsr_code": n_tsr_code, # Сохраняем коды ТСР
                     }
                     try:
                         utils.create_client(pl)
@@ -382,36 +399,46 @@ else:
     # --- TAB 1: ОСНОВНОЕ ---
     if sel == "✏️ Редактирование":
         with st.form("edit_main"):
+            # БЛОК 1: Основная информация
             c1, c2 = st.columns(2)
+            
+            # Левая колонка - ФИО
             el = c1.text_input("Фамилия", detail['last_name'])
             ef = c1.text_input("Имя", detail['first_name'])
             em = c1.text_input("Отчество", detail['middle_name'])
 
+            # Правая колонка - Статусы
             idx_st = list(statuses_map.keys()).index(detail['status_code']) if detail['status_code'] in statuses_map else 0
             est = c2.selectbox("Статус", list(statuses_map.keys()), index=idx_st, format_func=lambda x: statuses_map.get(x))
 
             idx_sg = list(stages_map.keys()).index(detail['current_stage']) if detail['current_stage'] in stages_map else 0
             esg = c2.selectbox("Этап", list(stages_map.keys()), index=idx_sg, format_func=lambda x: stages_map.get(x))
 
-            st.divider()
-            st.caption("Данные протезирования")
-
-            pd1, pd2, pd3 = st.columns(3)
-            e_prosthesis = pd1.text_area("Виды протезов", value=detail.get('prosthesis_type') or "", height=100)
-            e_check_date = pd2.date_input("Дата пробития", value=to_date(detail.get('check_date')))
-
-            curr_price = detail.get('certificate_price') or 0.0
-            e_price = pd3.number_input("Стоимость сертификата", min_value=0.0, value=float(curr_price), step=1.0, format="%.2f")
-
-            st.divider()
-
+            # Агент
             cur_ag_id = detail['agent_id']
-            ag_name = next((k for k, v in agents_map.items() if v == cur_ag_id), list(agents_map.keys())[0])
-            idx_ag = list(agents_map.keys()).index(ag_name)
+            ag_name = next((k for k, v in agents_map.items() if v == cur_ag_id), None)
+            if not ag_name: ag_name = list(agents_map.keys())[0] if agents_map else None
+            idx_ag = list(agents_map.keys()).index(ag_name) if ag_name else 0
             eag = c2.selectbox("Агент", list(agents_map.keys()), index=idx_ag)
 
-            c3, c4 = st.columns(2)
-            edead = c3.date_input("Повторное обращение", value=to_date(detail.get('deadline')))
+            st.divider()
+            
+            # БЛОК 2: ИПРА и ТСР
+            st.subheader("Сведения о протезировании")
+            d1, d2 = st.columns(2)
+
+            with d1:
+                # Берем данные из базы (tsr_code)
+                e_tsr = st.text_area("Коды ТСР (список)", value=detail.get('tsr_code') or "", height=100, help="Каждый код с новой строки. Пример: - 8-07-12 Протез бедра модульный с микропроцессорным управлением")
+                e_prosthesis = st.text_area("Виды протезов", value=detail.get('prosthesis_type') or "", height=100, help="Для автозаполнения типа конечности в договоре.")
+
+            with d2:
+                e_check_date = st.date_input("Дата пробития", value=to_date(detail.get('check_date')))
+                curr_price = detail.get('certificate_price') or 0.0
+                e_price = st.number_input("Стоимость сертификата", min_value=0.0, value=float(curr_price), step=1.0, format="%.2f")
+                edead = st.date_input("Повторное обращение", value=to_date(detail.get('deadline')), help="Дата следующего контакта")
+
+            # БЛОК 3: Заметки
             enotes = st.text_area("Заметки", detail['notes'])
 
             if st.form_submit_button("Сохранить изменения"):
@@ -423,12 +450,12 @@ else:
                     "status_code": est, "current_stage": esg,
                     "agent_id": agents_map[eag],
                     "deadline": datetime.combine(edead, dt_time.min).isoformat() if edead else None,
-                    "notes": enotes
+                    "notes": enotes,
+                    "tsr_code": e_tsr, # Сохраняем ТСР
                 }
                 utils.patch_client(cid, pl)
                 st.success("Сохранено")
                 utils.clear_caches()
-                #del st.session_state["cli_active_id"]
                 st.rerun()
 
         if st.button("Удалить клиента", type="primary"):
@@ -650,14 +677,12 @@ else:
                 if m.get('catalogue_index'): label += f" ({m['catalogue_index']})"
 
                 with st.expander(label):
-                    # --- БЕЗ ST.FORM (Для авто-пересчета) ---
 
                     # 1. ОСНОВНОЕ
                     st.caption("Основные данные")
                     c1, c2, c3 = st.columns(3)
                     mn = c1.text_input("Название", value=m['module_name'], key=f"nm_{mid}")
                     mi = c2.text_input("Индекс в каталоге", value=m['catalogue_index'], key=f"idx_{mid}")
-                    tsr = c3.text_input("Код и название ТСР", value = m['tsr_code'], key = f"tsr_{mid}")
 
                     c3, c4 = st.columns(2)
                     ms = c3.text_input("Поставщик", value=m['supplier'], key=f"sup_{mid}")
@@ -744,9 +769,8 @@ else:
         with st.expander("➕ Создать модуль для этого клиента", expanded=False):
 
             st.caption("Основные данные")
-            c1, c2, c3 = st.columns(3)
+            c1, c2 = st.columns(2)
             nn = c1.text_input("Название *", key=f"new_cl_mn_{cid}")
-            create_tsr = c3.text_input("Код и название ТСР", key=f"new_cl_tsr_{cid}")
             ni = c2.text_input("Индекс в каталоге*", key=f"new_cl_mi_{cid}")
 
             c3, c4 = st.columns(2)
@@ -796,7 +820,6 @@ else:
                         "ordered": no, "recd": nr, "pending": npe,
                         "order_date_acc_num": na, "properties": npr, "notes": n_notes,
                         "size": n_size, "stiffness": n_stiff, "side": n_side,
-                        "tsr_code": create_tsr,
                     }
                     try:
                         utils.create_module(pl)

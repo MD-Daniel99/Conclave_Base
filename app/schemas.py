@@ -53,7 +53,6 @@ class ModuleBase(BaseModel):
     pending: str
     prosthetist_keep: Optional[str] = None
     properties: str
-    tsr_code: Optional[str] = None
     notes: Optional[str] = None
 
 class ModuleCreate(ModuleBase):
@@ -78,7 +77,6 @@ class ModuleUpdate(BaseModel):
     pending: Optional[str] = None
     prosthetist_keep: Optional[str] = None
     properties: Optional[str] = None
-    tsr_code: Optional[str] = None
     notes: Optional[str] = None
 
 class ModuleRead(ModuleBase):
@@ -215,6 +213,7 @@ class ClientBase(BaseModel):
     ipra_code: Optional[str] = None
     certificate_price: Optional[float] = None
     place_of_residence: Optional[str] = None
+    tsr_code: Optional[str] = None
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -250,6 +249,7 @@ class ClientUpdate(BaseModel):
     ipra_code: Optional[str] = None
     certificate_price: Optional[float] = None
     place_of_residence: Optional[str] = None
+    tsr_code: Optional[str] = None
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:

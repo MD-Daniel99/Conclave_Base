@@ -230,6 +230,7 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "passports": passports_list,
         "snils": snils_list,
         "modules": modules_list,
+        "tsr_code": client.tsr_code,
     }
     return result
 
@@ -262,6 +263,7 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         certificate_price=client_in.certificate_price,
         place_of_residence=client_in.place_of_residence,
         ipra_code=client_in.ipra_code,
+        tsr_code = client_in.tsr_code,
     )
 
     db.add(client)

@@ -1,7 +1,7 @@
 [theme]
-primaryColor = "#45bea6ff"           # Морская волна
+primaryColor = "#1fb1aaff"           # Морская волна
 backgroundColor = "#f2f2f2ff"        # Белый фон
-secondaryBackgroundColor = "#45bea6ff" # Очень светло-зеленый (для фона инпутов)
+secondaryBackgroundColor = "#67cbc6ff" # Очень светло-зеленый (для фона инпутов)
 textColor = "#2D3748"              # Темно-серый
 font = "sans serif"
 

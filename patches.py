@@ -21,7 +21,8 @@ def add_columns(db: Session):
         # CLIENT
         db.execute(text("ALTER TABLE \"CLIENT\" ADD COLUMN IF NOT EXISTS ipra_code VARCHAR(64)"))
         db.execute(text("ALTER TABLE \"CLIENT\" ADD COLUMN IF NOT EXISTS place_of_residence VARCHAR(255)"))
-        db.execute(text("ALTER TABLE \"MODULES\" ADD COLUMN IF NOT EXISTS tsr_code VARCHAR(64)"))
+        db.execute(text("ALTER TABLE \"MODULES\" DROP COLUMN IF EXISTS tsr_code"))
+        db.execute(text("ALTER TABLE \"CLIENT\" ADD COLUMN IF NOT EXISTS tsr_code TEXT"))
         
         db.commit()
         print("✅ Колонки успешно добавлены (или уже существовали).")

@@ -78,25 +78,50 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
         "ВерхнихилиНижнихконечностей": client.get('prosthesis_type', ' ')
     }
 
-    # Заполнение модулей ТСР
+    # 1. Получаем строку с кодами из клиента и превращаем её в список строк
+    raw_tsr_source = client.get('tsr_code') or ""
+    # Разбиваем текст по переносам строки (\n) и убираем пустые пробелы
+    tsr_names_list = [line.strip() for line in raw_tsr_source.split('\n') if line.strip()]
+
+    # 2. Получаем список модулей (там лежат цены и количество)
+    modules_list = client.get("modules", [])
+
+    # Заполнение таблицы (идем по строкам шаблона от 1 до 4)
     for i in range(1, 5):
         idx = i - 1
-        if idx < len(modules):
-            module = modules[idx]
-            tsr_full = module.get('tsr_code') or "Не указан ТСР"
-            tsr_code = extract_tsr_numeric(tsr_full)
-            qty = module.get("quantity", " ")
-            price = float(module.get("price", 0))
-            price_fmt = f"{price:,.2f}".replace(",", " ")
-
-            context[f"Наименование{i}_ТСР_И_ЕГО_КОД"] = tsr_full
-            context[f"Количество_{i}_ТСР"] = str(qty)
-            context[f"Цена{i}_ТСР_И_ЕГО_КОД"] = price_fmt
         
+        # --- ШАГ А: Ищем Название ТСР (в списке из клиента) ---
+        if idx < len(tsr_names_list):
+            tsr_full = tsr_names_list[idx]
+            tsr_numeric = extract_tsr_numeric(tsr_full) # Вытаскиваем "8-07-12"
         else:
-            context[f"Наименование{i}_ТСР_И_ЕГО_КОД"] = "—"
-            context[f"Количество_{i}_ТСР"] = "—"
-            context[f"Цена{i}_ТСР_И_ЕГО_КОД"] = "—"
+            tsr_full = "—"
+            tsr_numeric = ""
+
+        # --- ШАГ Б: Ищем Цену и Количество (в списке модулей) ---
+        # Мы предполагаем, что порядок строк в ТСР совпадает с порядком модулей
+        if idx < len(modules_list):
+            mod = modules_list[idx]
+            qty = mod.get("quantity", 1)
+            price = float(mod.get("price", 0))
+            price_fmt = f"{price:,.2f}".replace(",", " ")
+        else:
+            qty = 1 # Если модуля нет, но название есть - ставим 1 шт по умолчанию
+            price_fmt = "—"
+
+        # --- ШАГ В: Формируем строку количества ---
+        # Если есть название ТСР, но нет модуля -> "1 шт 8-07..."
+        # Если нет названия ТСР -> прочерки
+        if tsr_full != "—":
+            qty_str = f"{qty} {tsr_numeric}".strip()
+        else:
+            qty_str = "—"
+            price_fmt = "—" # Если нет названия, то и цены нет
+
+        # Записываем в контекст
+        context[f"Наименование{i}_ТСР_И_ЕГО_КОД"] = tsr_full
+        context[f"Количество_{i}_ТСР"] = qty_str
+        context[f"Цена{i}_ТСР_И_ЕГО_КОД"] = price_fmt
 
     # --- ЛОГИКА ПОИСКА ПУТИ (ПЕРЕНЕСЕНА ВНУТРЬ ФУНКЦИИ) ---
     POSSIBLE_PATHS = [
