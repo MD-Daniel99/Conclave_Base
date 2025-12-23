@@ -113,7 +113,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
         # Если есть название ТСР, но нет модуля -> "1 шт 8-07..."
         # Если нет названия ТСР -> прочерки
         if tsr_full != "—":
-            qty_str = f"{qty} {tsr_numeric}".strip()
+            qty_str = f"{qty}".strip()
         else:
             qty_str = "—"
             price_fmt = "—" # Если нет названия, то и цены нет
