@@ -203,7 +203,6 @@ if st.session_state.wh_active_id is None:
         c1, c2, c3 = st.columns(3)
         # Добавляем key, чтобы не терять фокус
         nn = c1.text_input("Название *", key="new_n")
-        tsr = c3.text_input("Код и название ТСР", key = "new_tsr")
         ni = c2.text_input("Индекс в каталоге *", key="new_i")
         
         c4, c5 = st.columns(2)
@@ -292,7 +291,6 @@ else:
     st.caption("Основные данные")
     c1, c2, c3 = st.columns(3)
     en = c1.text_input("Название", value=mod_detail['module_name'], key="edit_n")
-    edit_tsr = c3.text_input("Код и название ТСР", value = mod_detail['tsr_code'], key = "edit_tsr")
     ei = c2.text_input("Индекс в каталоге", value=mod_detail['catalogue_index'], key="edit_i")
     
     c4, c5 = st.columns(2)
@@ -371,7 +369,6 @@ else:
             "stiffness": e_stiff,
             "side": e_side,
             "prosthetist_keep": e_pr_keep,
-            "tsr_code": edit_tsr,
         }
         
         try:

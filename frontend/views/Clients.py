@@ -749,7 +749,7 @@ else:
                             "order_date_acc_num": m_acc, "properties": m_prop, "notes": m_notes,
                             # Новые поля
                             "size": m_size, "stiffness": m_stiff, "side": m_side,
-                            "tsr_code": tsr,
+                            
                         }
                         try:
                             utils.patch_module(mid, pl)
@@ -839,11 +839,11 @@ else:
             
             with st.form("contract_gen_form"):
                 gc1, gc2 = st.columns(2)
-                c_num = gc1.text_input("Номер договора", value=f"{datetime.now().strftime('%y-%m')}/01")
-                c_date = gc2.date_input("Дата договора", value=datetime.now())
+                c_num = gc1.text_input("Номер договора",  value=f"{datetime.now().strftime('%d.%m.%y')}")
+                c_date = gc2.date_input("Дата договора", value=datetime.now(), format="DD.MM.YYYY")
                 
                 gc3, gc4 = st.columns(2)
-                p_date = gc3.date_input("Дата Плана/Акта", value=datetime.now())
+                p_date = gc3.date_input("Дата Плана/Акта", value=datetime.now(), format="DD.MM.YYYY")
                 #l_type = gc4.selectbox("Тип конечности", ["нижних конечностей", "верхних конечностей"])
                 
                 # Кнопка подтверждения внутри формы

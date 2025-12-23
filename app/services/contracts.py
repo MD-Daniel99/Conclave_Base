@@ -93,7 +93,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
         # --- ШАГ А: Ищем Название ТСР (в списке из клиента) ---
         if idx < len(tsr_names_list):
             tsr_full = tsr_names_list[idx]
-            tsr_numeric = extract_tsr_numeric(tsr_full) # Вытаскиваем "8-07-12"
+            tsr_numeric = extract_tsr_numeric(tsr_full) 
         else:
             tsr_full = "—"
             tsr_numeric = ""
