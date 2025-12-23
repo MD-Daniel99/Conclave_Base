@@ -851,8 +851,8 @@ else:
                     if c_num:
                         payload = {
                             "contract_number": c_num,
-                            "contract_date": c_date.isoformat(),
-                            "plan_date": p_date.isoformat(),
+                           "contract_date": c_date.strftime('%d.%m.%Y'), 
+                            "plan_date": p_date.strftime('%d.%m.%Y'),  
                             #"limb_type": l_type
                         }
                         try:
