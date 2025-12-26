@@ -838,31 +838,53 @@ else:
             st.write("Автоматическое создание договора по шаблону на основе данных клиента и модулей.")
             
             with st.form("contract_gen_form"):
+                TEMPLATES = {
+                    "ООО Соц. фонд Движение (договор)": "llc_contract",
+                    "ИП ДМК (договор)": "DMK_contract",
+                    "ИП СДВ (договор)": "SDV_contract",
+                    "ИП ДМК (акт)": "DMK_instrument",
+                    "ИП СДВ (акт)": "SDV_instrument",
+                }
+
+                gc0 = st.selectbox(
+                    "Шаблон документа",
+                    options=list(TEMPLATES.keys())
+                )
+
                 gc1, gc2 = st.columns(2)
-                c_num = gc1.text_input("Номер договора",  value=f"{datetime.now().strftime('%d.%m.%y')}")
-                c_date = gc2.date_input("Дата договора", value=datetime.now(), format="DD.MM.YYYY")
-                
-                gc3, gc4 = st.columns(2)
-                p_date = gc3.date_input("Дата Плана/Акта", value=datetime.now(), format="DD.MM.YYYY")
-                #l_type = gc4.selectbox("Тип конечности", ["нижних конечностей", "верхних конечностей"])
-                
-                # Кнопка подтверждения внутри формы
-                if st.form_submit_button("🚀 Сформировать договор", type="primary"):
+                c_num = gc1.text_input(
+                    "Номер документа",
+                    value=f"{datetime.now().strftime('%d.%m.%y')}"
+                )
+                c_date = gc2.date_input(
+                    "Дата документа",
+                    value=datetime.now(),
+                    format="DD.MM.YYYY"
+                )
+
+                gc3 = st.columns(1)[0]
+                p_date = gc3.date_input(
+                    "Дата Плана / Акта",
+                    value=datetime.now(),
+                    format="DD.MM.YYYY"
+                )
+
+                if st.form_submit_button("🚀 Сформировать документ", type="primary"):
                     if c_num:
                         payload = {
-                            "contract_number": c_num,
-                           "contract_date": c_date.strftime('%d.%m.%Y'), 
-                            "plan_date": p_date.strftime('%d.%m.%Y'),  
-                            #"limb_type": l_type
+                            "document_number": c_num,
+                            "document_date": c_date.strftime('%d.%m.%Y'),
+                            "plan_date": p_date.strftime('%d.%m.%Y'),
+                            "template_type": TEMPLATES[gc0],  # 🔥 КЛЮЧЕВОЕ
                         }
                         try:
                             utils.generate_contract(cid, payload)
-                            st.success("Договор успешно создан и добавлен в список файлов!")
+                            st.success("Документ успешно создан и добавлен в файлы!")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Ошибка генерации: {e}")
                     else:
-                        st.warning("Укажите номер договора")
+                        st.warning("Укажите номер документа")
 
         st.divider()
 

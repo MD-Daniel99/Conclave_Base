@@ -511,12 +511,19 @@ class DocumentRead(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
+class DocumentType:
+    DMK_CONTRACT = "dmk_contract"      
+    SDV_CONTRACT = "sdv_contract"       
+    DMK_INSTRUMENT = "dmk_instrument"   
+    SDV_INSTRUMENT = "sdv_instrument"   
+    LLC_CONTRACT = "llc_contract" 
 
 # Contract generation
 class ContractGeneration(BaseModel):
-    contract_number: str
-    contract_date: str
-    plan_date: str
+    template_type: str = DocumentType.LLC_CONTRACT
+    document_number: str
+    document_date: str
+    plan_date: Optional[str] = None
 
 DocumentRead.model_rebuild()
 
