@@ -5,6 +5,7 @@ from docxtpl import DocxTemplate
 from sqlalchemy.orm import Session
 from app import models, crud
 import uuid
+from datetime import datetime
 
 # Папка для сохранения готовых документов
 STORAGE_DIR = "/app/storage"
@@ -31,6 +32,19 @@ TEMPLATES_CONFIG = {
         "doc_type_name": "ИП СДВ Акт", 
     },
 }
+
+def format_date_ru(d):
+    if not d: return "__________"
+    if isinstance(d, str):
+        try: 
+            d_obj = datetime.strptime(d[:10], "%Y-%m-%d")
+            return d_obj.strftime("%d.%m.%Y")
+        except: 
+            return d
+    try:
+        return d.strftime("%d.%m.%Y")
+    except:
+        return str(d)
 
 def rub_to_words(amount: float) -> str:
     """Конвертация числа в сумму прописью"""
@@ -122,6 +136,31 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
     sum_formatted = f"{total_sum:,.2f}".replace(",", " ")
     sum_with_cover_formatted = f"{total_sum_with_cover:,.2f}".replace(",", " ")
 
+    # --- 3. Подготовка данных для шаблона ---
+
+    # Исправление даты рождения (Задача 5)
+    birth_date_raw = passport.get('birth_date')
+    birth_date_ru = format_date_ru(birth_date_raw)
+
+    passport_date_raw = passport.get("issue_date")
+    passport_date_ru = format_date_ru(passport_date_raw)
+
+    # Исправление названия протеза (Задача 4)
+    # Убираем слово "Протез" или "протез" из начала строки, чтобы не было дублей
+    raw_p_type = client.get('prosthesis_type') or ''
+    clean_p_type = re.sub(r'(?i)^протез\s+', '', raw_p_type.strip())
+
+    # --- ИСПРАВЛЕНИЯ ---
+    
+    # Задача 5: Даты в русском формате
+    birth_date_ru = format_date_ru(passport.get('birth_date'))
+    passport_date_ru = format_date_ru(passport.get("issue_date"))
+
+    # Задача 4: Убираем дублирование слова "Протез"
+    # Ищем слово "протез" (в любом регистре) в начале строки и удаляем его
+    raw_p_type = client.get('prosthesis_type') or ''
+    clean_p_type = re.sub(r'(?i)^протез\s*', '', raw_p_type.strip())
+
     context = {
         "НомерДоговора": payload.document_number,
         "ДатаДоговора": payload.document_date,
@@ -129,11 +168,11 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
         "Название акта": payload.document_number,
 
         "ФИОЗаказчика": f"{client['last_name']} {client['first_name']} {client['middle_name'] or ''}".strip(),
-        "ДатаРожденияЗаказчика": passport.get('birth_date') if passport.get('birth_date') else "__________",
+        "ДатаРожденияЗаказчика": birth_date_ru,
         "ПаспортСерия": series,
         "ПаспортНомер": number,
         "КемВыданПаспорт": passport.get('issued_by', "________"),
-        "ДатаВыдачиПаспорта": passport.get("issue_date", "________"),
+        "ДатаВыдачиПаспорта": passport_date_ru,
         "КодПодразделения": passport.get("department_code", "______"),
         "АдресРегистрацииЗаказчика": passport.get("registration_address", "__________________"),
         "МестоРожденияЗаказчика": birth_place,
@@ -146,87 +185,64 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
         "СуммаПрописью": rub_to_words(total_sum),
         "ИнициалыЗаказчикаКратко": get_initials(client['last_name'], client['first_name'], client['middle_name']),
         
-        "ВерхнихилиНижнихконечностей": client.get('prosthesis_type', ' ')
+        "ВерхнихилиНижнихконечностей": clean_p_type 
     }
 
-    # 1. Получаем строку с кодами из клиента и превращаем её в список строк
+    # --- ЛОГИКА ТОВАРОВ И МОДУЛЕЙ ---
+    
     raw_tsr_source = client.get('tsr_code') or ""
-    # Разбиваем текст по переносам строки (\n) и убираем пустые пробелы
     tsr_names_list = [line.strip() for line in raw_tsr_source.split('\n') if line.strip()]
 
-    # АГРЕГАЦИЯ ДЛЯ НОВЫХ ДОГОВОРОВ / АКТОВ
+    act_full_descriptions = [] # Для сборки строки в Акте
+    total_qty_counter = 0 # Для подсчета общего количества
 
-
-    names = []
-    codes = []
-    quantities = []
-    description_parts = []
-
-    items_count = max(len(tsr_names_list), len(modules))
-
-    for idx in range(items_count):
+    # Проходим циклом по строкам таблицы (в шаблоне их 4, сделаем с запасом до 5)
+    for i in range(1, 5):
+        idx = i - 1
+        
+        # 1. Получаем данные по ТСР (из текстового поля клиента)
         if idx < len(tsr_names_list):
             tsr_full = tsr_names_list[idx]
             tsr_code = extract_tsr_numeric(tsr_full)
             tsr_name = extract_tsr_literals(tsr_full)
         else:
-            continue
+            # Если данных нет, переменные будут пустыми
+            tsr_code = ""
+            tsr_name = ""
 
-        if idx < len(modules):
-            qty = modules[idx].get("quantity", 1)
-        else:
-            qty = 1
-
-        names.append(tsr_name)
-        codes.append(tsr_code)
-        quantities.append(str(qty))
-        description_parts.append(f"{tsr_code} {tsr_name}")
-
-    # КЛЮЧЕВОЙ МОМЕНТ — ДОБАВЛЯЕМ В CONTEXT
-    context.update({
-        "Наименованиетовара": "; ".join(names),
-        "КодТовара": "; ".join(codes),
-        "КолТовара": "; ".join(quantities),
-        "ОписаниеТовара": "; ".join(description_parts),
-    })
-
-    # Заполнение таблицы (идем по строкам шаблона от 1 до 4)
-    for i in range(1, 5):
-        idx = i - 1
-        
-        # --- ШАГ А: Ищем Название ТСР (в списке из клиента) ---
-        if idx < len(tsr_names_list):
-            tsr_full = tsr_names_list[idx]
-            tsr_numeric = extract_tsr_numeric(tsr_full) 
-            tsr_literal = extract_tsr_literals(tsr_full)
-        else:
-            tsr_full = "—"
-            tsr_numeric = ""
-
-        # --- ШАГ Б: Ищем Цену и Количество (в списке модулей) ---
-        # Мы предполагаем, что порядок строк в ТСР совпадает с порядком модулей
+        # 2. Получаем данные по Модулю (со склада)
         if idx < len(modules):
             mod = modules[idx]
-            qty = mod.get("quantity", 1)
-            price = float(mod.get("price", 0))
-            price_fmt = f"{price:,.2f}".replace(",", " ")
+            qty_val = int(mod.get("quantity", 1))
+            
+            # Задача 3: Считаем общее кол-во только по реальным модулям
+            total_qty_counter += qty_val
         else:
-            qty = 1 # Если модуля нет, но название есть - ставим 1 шт по умолчанию
-            price_fmt = "—"
+            qty_val = "" # Если модуля нет, кол-во пустое
 
-        # --- ШАГ В: Формируем строку количества ---
-        # Если есть название ТСР, но нет модуля -> "1 шт 8-07..."
-        # Если нет названия ТСР -> прочерки
-        if tsr_full != "—":
-            qty = f"{qty}".strip()
-        else:
-            qty_str = "—"
-            price_fmt = "—" # Если нет названия, то и цены нет
+        # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ (Задача 1 и 2) ---
+        # Заполняем переменные ТОЧНО как в вашем шаблоне
+        context[f"Наименованиетовара{i}"] = tsr_name
+        context[f"КодТовара{i}"] = tsr_code
+        context[f"КолТовара{i}"] = str(qty_val) if qty_val else ""
 
-        # Записываем в контекст
-        context[f"Наименование{i}_ТСР_И_ЕГО_КОД"] = tsr_full
-        context[f"Количество_{i}_ТСР"] = qty
-        context[f"Цена{i}_ТСР_И_ЕГО_КОД"] = price_fmt
+        # Готовим строку для Акта ("Код Название")
+        if tsr_code or tsr_name:
+            act_full_descriptions.append(f"{tsr_code} {tsr_name}".strip())
+
+    # --- ЗАПОЛНЕНИЕ ОБЩИХ ПЕРЕМЕННЫХ ДЛЯ АКТОВ ---
+
+    # Задача для Актов: "Код Название; Код Название..."
+    final_act_string = "; ".join(act_full_descriptions)
+    
+    # В Акте используем одну переменную {{ОписаниеТовара}}, чтобы всё было в одной строке
+    context["ОписаниеТовара"] = final_act_string
+    # Для совместимости со старыми шаблонами актов, где было две переменных
+    context["КодТовара"] = final_act_string
+    context["Наименованиетовара"] = ""
+
+    # Общее количество для актов
+    context["КолТовара"] = str(total_qty_counter)
 
     # --- ЛОГИКА ПОИСКА ПУТИ ---
    
