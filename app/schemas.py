@@ -211,7 +211,7 @@ class ClientBase(BaseModel):
     check_date: Optional[date] = None
     prosthesis_type: Optional[str] = None
     ipra_code: Optional[str] = None
-    certificate_price: Optional[float] = None
+    certificate_price: Optional[str] = None
     place_of_residence: Optional[str] = None
     tsr_code: Optional[str] = None
 
@@ -247,7 +247,7 @@ class ClientUpdate(BaseModel):
     check_date: Optional[date] = None
     prosthesis_type: Optional[str] = None
     ipra_code: Optional[str] = None
-    certificate_price: Optional[float] = None
+    certificate_price: Optional[str] = None
     place_of_residence: Optional[str] = None
     tsr_code: Optional[str] = None
 

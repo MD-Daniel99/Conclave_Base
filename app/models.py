@@ -38,14 +38,14 @@ class Agent(Base):
     # Человекочитаемый порядковый идентификатор (external_id) — заполняется серверной последовательностью
     external_id = Column(
         BigInteger,
-        Sequence('agent_external_id_seq', start=1, increment=1), # <--- ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ
+        Sequence('agent_external_id_seq', start=1, increment=1), 
         nullable=False,
         unique=True
     )
 
     last_name = Column(String(128), nullable=False)
     first_name = Column(String(128), nullable=False)
-    middle_name = Column(String(128), nullable=True)  # отчество — опционально
+    middle_name = Column(String(128), nullable=True)  
 
     legal_address = Column(Text, nullable=True)
     actual_address = Column(Text, nullable=True)
@@ -56,7 +56,7 @@ class Agent(Base):
     bic = Column(String(9), nullable=True)
 
     # Relationship: один агент — много клиентов
-    # Замечание: FK у CLIENT задан с ondelete="RESTRICT", поэтому здесь НЕ ставим cascade удаления.
+    # FK у CLIENT задан с ondelete="RESTRICT", поэтому здесь НЕ ставится cascade удаления.
     clients = relationship(
         "Client",
         back_populates="agent",
@@ -116,7 +116,7 @@ class Client(Base):
 
     check_date = Column(Date, nullable=True)          
     prosthesis_type = Column(String(255), nullable=True) 
-    certificate_price = Column(Float, nullable=True)
+    certificate_price = Column(String(255), nullable=True)
     ipra_code = Column(String(64), nullable = True)
     place_of_residence = Column(String(255), nullable = True)
     tsr_code =  Column(Text, nullable = True)

@@ -99,12 +99,31 @@ def update_stages(db: Session):
         print(f"❌ Ошибка при обновлении этапов: {e}")
         db.rollback()
 
+def migrate_price_to_string(db):
+    print("\n--- Миграция certificate_price в String... ---")
+    try:
+        # Команда ALTER TABLE с указанием USING для конвертации данных
+        # ::varchar превращает число 1000.0 в строку "1000.0"
+        sql = """
+        ALTER TABLE "CLIENT" 
+        ALTER COLUMN certificate_price TYPE VARCHAR(255) 
+        USING certificate_price::varchar;
+        """
+        
+        db.execute(text(sql))
+        db.commit()
+        print("✅ Успешно конвертировано!")
+    except Exception as e:
+        print(f"⚠️ Ошибка (возможно, уже применено): {e}")
+        db.rollback()
+
 def main():
     # Создаем сессию вручную
     db = SessionLocal()
     try:
         add_columns(db)
         update_stages(db)
+        migrate_price_to_string(db)
     finally:
         db.close()
 

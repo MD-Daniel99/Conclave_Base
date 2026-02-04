@@ -29,7 +29,7 @@ def init_db_data():
             db.add_all(statuses)
             db.commit()
 
-        # --- ЭТАПЫ (Stages) ---
+        # --- ЭТАПЫ ---
         if db.query(models.Stage).count() == 0:
             print("Initializing Stages...")
             stages = [
@@ -53,8 +53,6 @@ def init_db_data():
 
 # 3. Запускаем инициализацию
 init_db_data()
-
-# --- ДАЛЕЕ ВАШ ОБЫЧНЫЙ КОД ПРИЛОЖЕНИЯ ---
 
 # Попытка импортировать роутеры
 clients_router = None

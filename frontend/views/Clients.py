@@ -337,9 +337,9 @@ if st.session_state.cli_active_id is None:
             
             # Правая колонка - Даты и Деньги
             with d2:
-                n_check_date = st.date_input("Дата пробития", value=None)
-                n_price = st.number_input("Стоимость сертификата", min_value=0.0, step=1.0, format="%.2f")
-                ndead = st.date_input("Повторное обращение", value=None, help="Дата следующего контакта")
+                n_check_date = st.date_input("Дата пробития", value=None, format="DD.MM.YYYY")
+                n_price = st.text_input("Стоимость сертификата")
+                ndead = st.date_input("Повторное обращение", value=None, format="DD.MM.YYYY", help="Дата следующего контакта")
 
             # БЛОК 3: Заметки
             nnotes = st.text_area("Заметки", key="new_client_notes")
@@ -433,10 +433,10 @@ else:
                 e_prosthesis = st.text_area("Виды протезов", value=detail.get('prosthesis_type') or "", height=100, help="Для автозаполнения типа конечности в договоре.")
 
             with d2:
-                e_check_date = st.date_input("Дата пробития", value=to_date(detail.get('check_date')))
-                curr_price = detail.get('certificate_price') or 0.0
-                e_price = st.number_input("Стоимость сертификата", min_value=0.0, value=float(curr_price), step=1.0, format="%.2f")
-                edead = st.date_input("Повторное обращение", value=to_date(detail.get('deadline')), help="Дата следующего контакта")
+                e_check_date = st.date_input("Дата пробития", value=to_date(detail.get('check_date')), format="DD.MM.YYYY")
+                curr_price = detail.get('certificate_price') or ""
+                e_price = st.text_input("Стоимость сертификата", value = curr_price)
+                edead = st.date_input("Повторное обращение", value=to_date(detail.get('deadline')),format="DD.MM.YYYY" , help="Дата следующего контакта")
 
             # БЛОК 3: Заметки
             enotes = st.text_area("Заметки", detail['notes'])
