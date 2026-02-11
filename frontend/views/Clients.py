@@ -550,7 +550,7 @@ else:
         eag = c2.selectbox("Агент", list(agents_map.keys()), index=idx_ag, key="ed_ag")
 
         st.divider()
-        st.caption("Данные протезирования")
+        st.caption("Виды протезов")
         
         col_1, col_2 = st.columns(2)
         
@@ -562,6 +562,7 @@ else:
                 f"ed_pros_{cid}"
             )
         with col_1:
+            st.caption("Коды ТСР")
             etsr = render_smart_field(
                 "Код ТСР и название протеза", detail.get('tsr_code') or "", 
                 utils.get_ref_tsr, utils.add_ref_tsr, utils.delete_ref_tsr, 
