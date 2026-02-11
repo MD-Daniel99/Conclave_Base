@@ -382,10 +382,11 @@ if st.session_state.cli_active_id is None:
             if c.get("agent"): 
                 agent_name = f"{c['agent']['last_name']} {c['agent']['first_name']}"
             
-            created_dt = c.get("created_at")[:10] if c.get("created_at") else "-"
-            updated_dt = c.get("updated_at")[:10] if c.get("updated_at") else "-"
-            deadline_dt = c.get("deadline")[:10] if c.get("deadline") else "-"
-            check_dt = c.get("check_date") if c.get("check_date") else "-"
+            created_dt = to_date(c.get("created_at"))
+            updated_dt = to_date(c.get("updated_at"))
+            deadline_dt = to_date(c.get("deadline"))
+            check_dt = to_date(c.get("check_date"))
+            
             cert_price = c.get("certificate_price") if c.get("certificate_price") is not None else "-"
             
             rows.append({
@@ -414,7 +415,12 @@ if st.session_state.cli_active_id is None:
             on_select="rerun",
             column_config={
                 "ID": None, 
-                "№": st.column_config.NumberColumn("№", width="small")
+                "№": st.column_config.NumberColumn("№", width="small"),
+                # ДОБАВЛЯЕМ ФОРМАТИРОВАНИЕ ДАТ:
+                "Дата пробития": st.column_config.DateColumn("Дата пробития", format="DD.MM.YYYY"),
+                "Повторное обращение": st.column_config.DateColumn("Повторное обращение", format="DD.MM.YYYY"),
+                "Создан": st.column_config.DateColumn("Создан", format="DD.MM.YYYY"),
+                "Обновлен": st.column_config.DateColumn("Обновлен", format="DD.MM.YYYY"),
             }
         )
         
