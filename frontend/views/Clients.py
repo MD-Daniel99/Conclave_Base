@@ -161,11 +161,11 @@ def render_smart_field(label, current_value_str, ref_getter, ref_adder, ref_dele
                 st.session_state[session_key].append(selected_option)
                 st.rerun()
     
-    with col_btn_clear:
-        if st.button("🗑️", key=f"{key_prefix}_clear", help="Очистить список"):
-            if st.session_state[session_key]:
-                st.session_state[session_key] = []
-                st.rerun()
+    # with col_btn_clear:
+    #     if st.button("🗑️", key=f"{key_prefix}_clear", help="Очистить список"):
+    #         if st.session_state[session_key]:
+    #             st.session_state[session_key] = []
+    #             st.rerun()
     
     # 4. Быстрый ручной ввод в той же строке (под выпадающим списком)
     if not options_list:  # Если справочник пустой, показываем поле ввода
@@ -360,7 +360,7 @@ if st.session_state.cli_active_id is None:
         ag_filter = c4.selectbox("Агент", ["(Все)"] + list(agents_map.keys()))
         
         c5, c6 = st.columns([1, 5])
-        limit = c5.number_input("На стр.", 5, 200, 20)
+        limit = c5.number_input("На стр.", 5, 200, 200)
         page = c6.number_input("Страница", 1, 100, 1)
         skip = (page - 1) * limit
 
