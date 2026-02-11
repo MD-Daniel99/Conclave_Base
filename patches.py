@@ -43,6 +43,7 @@ def add_columns(db: Session):
                 name TEXT NOT NULL UNIQUE
             )
         """))
+        db.execute(text("ALTER TABLE \"MODULES\" ALTER COLUMN module_name TYPE VARCHAR(512)"))
         
         # 2. TSR
         db.execute(text("""

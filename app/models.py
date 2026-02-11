@@ -222,7 +222,7 @@ class Module(Base):
 
     module_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
     client_id = Column(UUID(as_uuid = True), ForeignKey("CLIENT.client_id", ondelete = "CASCADE"), nullable = True)
-    module_name = Column(String(64), nullable = False)
+    module_name = Column(String(512), nullable = False)
     catalogue_index = Column(String(64), nullable = False)
     supplier = Column(String(64), nullable = False)
     ordered = Column(String(64), nullable = False)
