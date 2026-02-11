@@ -494,6 +494,14 @@ else:
     cid = st.session_state.cli_active_id
 
     if st.button("⬅️ Вернуться к списку"):
+        keys_to_del = []
+        for key in st.session_state.keys():
+            if key.startswith(f"ed_pros_{cid}") or key.startswith(f"ed_tsr_{cid}"):
+                keys_to_del.append(key)
+        
+        for k in keys_to_del:
+            del st.session_state[k]
+
         reset_state()
 
     try:
@@ -545,13 +553,13 @@ else:
             epr = render_smart_field(
                 "Виды протезов", detail.get('prosthesis_type') or "", 
                 utils.get_ref_prosthesis, utils.add_ref_prosthesis, utils.delete_ref_prosthesis, 
-                "ed_pros"
+                f"ed_pros_{cid}"
             )
         with col_1:
             etsr = render_smart_field(
                 "Код ТСР и название протеза", detail.get('tsr_code') or "", 
                 utils.get_ref_tsr, utils.add_ref_tsr, utils.delete_ref_tsr, 
-                "ed_tsr"
+                f"ed_tsr_{cid}"
             )
 
         ecd = col_2.date_input("Дата пробития", value=to_date(detail.get('check_date')), key="ed_cd", format="DD.MM.YYYY")
