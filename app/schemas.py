@@ -525,8 +525,28 @@ class ContractGeneration(BaseModel):
     document_date: str
     plan_date: Optional[str] = None
 
+# References
+
+class ProsthesisRefCreate(BaseModel):
+    name: str
+
+class ProsthesisRefRead(BaseModel):
+    id: UUID = Field(validation_alias = "prosthesis_id")
+    name: str
+    model_config = ConfigDict(from_attributes = True)
+
+class TstCodeRefCreate(BaseModel):
+    full_tsr_code: str
+
+class TstCodeRefRead(BaseModel):
+    id: UUID = Field(validation_alias="tsr_id")
+    full_tsr_code: Optional[str]
+    model_config = ConfigDict(from_attributes = True)
+
+
 DocumentRead.model_rebuild()
 
 ClientRead.model_rebuild() 
 UserRead.model_rebuild()
+
 

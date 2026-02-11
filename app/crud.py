@@ -872,3 +872,54 @@ def delete_document(db: Session, document_id: UUID):
     db.delete(doc)
     db.commit()
     return True
+
+
+# -------------------------
+# Prosthesis / TSR
+# -------------------------
+
+def get_prosthesis(db: Session):
+    return db.execute(select(models.ProsthesisRef).order_by(models.ProsthesisRef.name)).scalars().all()
+
+def create_prosthesis(db: Session, name: str):
+    exists = db.execute(select(models.ProsthesisRef).where(models.ProsthesisRef.name == name)).scalars().first()
+    if exists: 
+        return exists
+    
+    new_prosthesis = models.ProsthesisRef(name = name)
+    db.add(new_prosthesis)
+    db.commit()
+    db.refresh(new_prosthesis)
+    return new_prosthesis
+
+def delete_prosthesis(db: Session, prosthesis_id: UUID):
+    prosthesis_to_delete = db.get(models.ProsthesisRef, prosthesis_id)
+    if prosthesis_to_delete:
+        db.delete(prosthesis_to_delete)
+        db.commit()
+        return True
+    else:
+        return False
+
+def get_tsr(db: Session):
+    return db.execute(select(models.TstCodeRef).order_by(models.TstCodeRef.full_tsr_code)).scalars().all()
+
+def create_tsr(db: Session, full_tsr_code: str):
+    exists = db.execute(select(models.TstCodeRef).where(models.TstCodeRef.full_tsr_code == full_tsr_code)).scalars().first()
+    if exists:
+        return exists
+    
+    new_tsr = models.TstCodeRef(full_tsr_code = full_tsr_code)
+    db.add(new_tsr)
+    db.commit()
+    db.refresh(new_tsr)
+    return new_tsr
+
+def delete_tsr(db: Session, tsr_id: UUID):
+    tsr_to_delete = db.get(models.TstCodeRef, tsr_id)
+    if tsr_to_delete:
+        db.delete(tsr_to_delete)
+        db.commit()
+        return True
+    else:
+        return False

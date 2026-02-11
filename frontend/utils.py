@@ -28,6 +28,9 @@ def handle_request(method, url, **kwargs):
         except:
             error_detail = e.response.text
         
+        #logger.error(f"HTTP error: {e}")
+        #raise APIException("Ошибка сервера")
+        
         # Показываем ошибку в UI
         st.error(f"Ошибка сервера ({e.response.status_code}): {error_detail}")
         raise e # Пробрасываем дальше, чтобы остановить выполнение
@@ -230,3 +233,28 @@ def generate_contract(client_id, payload):
         headers=get_headers()
     )
     st.cache_data.clear()
+
+# --- REFERENCES ---
+@st.cache_data(ttl=60)
+def get_ref_prosthesis():
+    return handle_request("GET", f"{API_BASE}/references/prosthesis", headers=get_headers())
+
+def add_ref_prosthesis(name):
+    handle_request("POST", f"{API_BASE}/references/prosthesis", json={"name": name}, headers=get_headers())
+    st.cache_data.clear()
+
+def delete_ref_prosthesis(rid):
+    get_ref_prosthesis.clear()
+    handle_request("DELETE", f"{API_BASE}/references/prosthesis/{rid}", headers=get_headers())
+
+@st.cache_data(ttl=60)
+def get_ref_tsr():
+    return handle_request("GET", f"{API_BASE}/references/tsr", headers=get_headers())
+
+def add_ref_tsr(text):
+    handle_request("POST", f"{API_BASE}/references/tsr", json={"full_tsr_code": text}, headers=get_headers())
+    st.cache_data.clear()
+
+def delete_ref_tsr(rid):
+    get_ref_tsr.clear()
+    handle_request("DELETE", f"{API_BASE}/references/tsr/{rid}", headers=get_headers())

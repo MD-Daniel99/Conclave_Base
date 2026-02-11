@@ -9,6 +9,7 @@ import requests
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import utils
 
+
 MIN_DATE = date(1900, 1, 1)
 
 # --- AUTH ---
@@ -114,6 +115,122 @@ def get_clients_excel():
     except Exception:
         return None
 
+def render_smart_field(label, current_value_str, ref_getter, ref_adder, ref_deleter, key_prefix):
+    """
+    Компактный интерфейс для выбора значений с возможностью дублирования.
+    """
+    # 1. Загружаем справочник
+    try: 
+        refs = ref_getter() 
+    except: 
+        refs = []
+    
+    # Маппинг для поиска ID по тексту
+    options_map = {}
+    for r in refs:
+        val = r.get('full_tsr_code') or r.get('name') or r.get('full_text')
+        if val: 
+            options_map[val] = r['id']
+    
+    options_list = sorted(list(options_map.keys()))
+    
+    # 2. Инициализируем session_state для хранения выбранных значений
+    session_key = f"{key_prefix}_values"
+    if session_key not in st.session_state:
+        if current_value_str:
+            initial_values = [x.strip() for x in str(current_value_str).split('\n') if x.strip()]
+        else:
+            initial_values = []
+        st.session_state[session_key] = initial_values
+    
+    # 3. Компактный UI: одна строка с выпадающим списком и кнопкой добавления
+    col_select, col_btn_add, col_btn_clear = st.columns([3, 1, 1])
+    
+    with col_select:
+        selected_option = st.selectbox(
+            f"Выберите {label}",
+            options=[""] + options_list,
+            key=f"{key_prefix}_select",
+            label_visibility="collapsed",
+            help="Выберите значение из списка"
+        )
+    
+    with col_btn_add:
+        if st.button("➕", key=f"{key_prefix}_add", help="Добавить выбранное"):
+            if selected_option:
+                st.session_state[session_key].append(selected_option)
+                st.rerun()
+    
+    with col_btn_clear:
+        if st.button("🗑️", key=f"{key_prefix}_clear", help="Очистить список"):
+            if st.session_state[session_key]:
+                st.session_state[session_key] = []
+                st.rerun()
+    
+    # 4. Быстрый ручной ввод в той же строке (под выпадающим списком)
+    if not options_list:  # Если справочник пустой, показываем поле ввода
+        col_input, col_add_manual = st.columns([3, 1])
+        with col_input:
+            manual_value = st.text_input(
+                "Введите значение",
+                key=f"{key_prefix}_manual",
+                label_visibility="collapsed",
+                placeholder="Введите значение..."
+            )
+        with col_add_manual:
+            if st.button("📝", key=f"{key_prefix}_add_manual"):
+                if manual_value.strip():
+                    st.session_state[session_key].append(manual_value.strip())
+                    st.rerun()
+    
+    # 5. Компактный вид списка выбранных значений
+    if st.session_state[session_key]:
+        # Показываем количество выбранных
+        count = len(st.session_state[session_key])
+        
+        # Сворачиваемый блок со списком
+        with st.expander(f"📋 Выбрано {count} значений", expanded=False):
+            # Группируем дубликаты для компактности
+            from collections import Counter
+            counter = Counter(st.session_state[session_key])
+            
+            for value, qty in counter.items():
+                cols = st.columns([5, 2, 1])
+                with cols[0]:
+                    st.write(f"• {value}")
+                with cols[1]:
+                    if qty > 1:
+                        st.write(f"(×{qty})")
+                with cols[2]:
+                    if st.button("❌", key=f"{key_prefix}_del_{value}", help="Удалить все вхождения"):
+                        # Удаляем все вхождения этого значения
+                        st.session_state[session_key] = [v for v in st.session_state[session_key] if v != value]
+                        st.rerun()
+    else:
+        st.caption("Список пуст")
+    
+    # 6. Минималистичное управление справочником
+    with st.popover("⚙️", help="Управление справочником"):
+        # Добавление в справочник
+        new_val = st.text_input("Новое значение для справочника", key=f"{key_prefix}_new_ref")
+        if st.button("Добавить", key=f"{key_prefix}_add_ref"):
+            if new_val:
+                ref_adder(new_val)
+                st.success("Добавлено")
+                st.rerun()
+        
+        # Удаление из справочника
+        if options_list:
+            st.divider()
+            val_to_delete = st.selectbox("Удалить из справочника", [""] + options_list, key=f"{key_prefix}_del_ref")
+            if val_to_delete and st.button("Удалить", type="secondary", key=f"{key_prefix}_btn_del_ref"):
+                rid = options_map.get(val_to_delete)
+                if rid:
+                    ref_deleter(rid)
+                    st.rerun()
+    
+    # 7. Возвращаем строку с переносами
+    return "\n".join(st.session_state[session_key])
 # ==========================================
 # UI: LIST (Список клиентов)
 # ==========================================
@@ -310,61 +427,63 @@ if st.session_state.cli_active_id is None:
 
     st.divider()
     with st.expander("➕ Создать нового клиента"):
-        with st.form("new_client_form"):
-            # БЛОК 1: Основная информация
-            c1, c2 = st.columns(2)
-            
-            # Левая колонка - ФИО
-            nl = c1.text_input("Фамилия *")
-            nf = c1.text_input("Имя *")
-            nm = c1.text_input("Отчество")
-            
-            # Правая колонка - Статусы
-            nst = c2.selectbox("Статус *", list(statuses_map.keys()), format_func=lambda x: statuses_map.get(x))
-            nsg = c2.selectbox("Этап *", list(stages_map.keys()), format_func=lambda x: stages_map.get(x))
-            nag = c2.selectbox("Агент *", list(agents_map.keys()))
-            
-            st.divider()
-            
-            # БЛОК 2: ИПРА и ТСР
-            st.subheader("Сведения о протезировании")
-            d1, d2 = st.columns(2)
-            
-            # Левая колонка - Текстовые описания
-            with d1:
-                n_tsr_code = st.text_area("Коды ТСР (список)", height=100, help="Каждый код с новой строки. Пример: - 8-07-12 Протез бедра модульный с микропроцессорным управлением")
-                n_prosthesis = st.text_area("Виды протезов", height=100, help="Для автозаполнения типов конечностей в договоре.")
-            
-            # Правая колонка - Даты и Деньги
-            with d2:
-                n_check_date = st.date_input("Дата пробития", value=None, format="DD.MM.YYYY")
-                n_price = st.text_input("Стоимость сертификата")
-                ndead = st.date_input("Повторное обращение", value=None, format="DD.MM.YYYY", help="Дата следующего контакта")
-
-            # БЛОК 3: Заметки
-            nnotes = st.text_area("Заметки", key="new_client_notes")
-            
-            if st.form_submit_button("Создать"):
-                if nl and nf and nag:
-                    pl = {
-                        "last_name": nl, "first_name": nf, "middle_name": nm,
-                        "prosthesis_type": n_prosthesis,
-                        "check_date": n_check_date.isoformat() if n_check_date else None,
-                        "certificate_price": n_price,
-                        "status_code": nst, "current_stage": nsg,
-                        "agent_id": agents_map[nag],
-                        "deadline": datetime.combine(ndead, dt_time.min).isoformat() if ndead else None,
-                        "notes": nnotes,
-                        "tsr_code": n_tsr_code, # Сохраняем коды ТСР
-                    }
-                    try:
-                        utils.create_client(pl)
-                        st.success("Создан!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Ошибка: {e}")
-                else:
-                    st.warning("Заполните обязательные поля")
+        # УБРАЛИ with st.form("new_client_form") - это важно!
+        
+        c1, c2 = st.columns(2)
+        # Добавляем ключи (key), чтобы не терять фокус при вводе
+        nl = c1.text_input("Фамилия *", key="new_l")
+        nf = c1.text_input("Имя *", key="new_f")
+        nm = c1.text_input("Отчество", key="new_m")
+        
+        nst = c2.selectbox("Статус *", list(statuses_map.keys()), format_func=lambda x: statuses_map.get(x), key="new_st")
+        nsg = c2.selectbox("Этап *", list(stages_map.keys()), format_func=lambda x: stages_map.get(x), key="new_sg")
+        nag = c2.selectbox("Агент *", list(agents_map.keys()), key="new_ag")
+        
+        st.divider()
+        st.subheader("Сертификат и вид протеза")
+        #d1, d2, d3 = st.columns(3)
+        col_1, col_2 = st.columns(2)
+        with col_1:
+            n_prosthesis = render_smart_field(
+                "Виды протезов", "", 
+                utils.get_ref_prosthesis, utils.add_ref_prosthesis, utils.delete_ref_prosthesis, 
+                "new_pros"
+            )
+        with col_1:
+            n_tsr = render_smart_field(
+                "Код ТСР и название протеза", "", 
+                utils.get_ref_tsr, utils.add_ref_tsr, utils.delete_ref_tsr, 
+                "new_tsr"
+            )
+        
+        n_check_date = col_2.date_input("Дата пробития", value=None, key="new_cd", format="DD.MM.YYYY")
+         
+        n_price = col_2.text_input("Стоимость сертификата", key="new_cp")
+        
+        ndead = st.date_input("Повторное обращение", value=None, key="new_dd", format="DD.MM.YYYY")
+        nnotes = st.text_area("Заметки", key="new_nt")
+        
+        # Кнопка теперь st.button (type="primary")
+        if st.button("Создать", type="primary", key="btn_create_client"):
+            if nl and nf and nag:
+                pl = {
+                    "last_name": nl, "first_name": nf, "middle_name": nm,
+                    "prosthesis_type": n_prosthesis, "tsr_code": n_tsr,
+                    "check_date": n_check_date.isoformat() if n_check_date else None,
+                    "certificate_price": n_price,
+                    "status_code": nst, "current_stage": nsg,
+                    "agent_id": agents_map[nag],
+                    "deadline": datetime.combine(ndead, dt_time.min).isoformat() + "Z" if ndead else None,
+                    "notes": nnotes
+                }
+                try:
+                    utils.create_client(pl)
+                    st.success("Создан!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Ошибка: {e}")
+            else:
+                st.warning("Заполните обязательные поля")
 
 # ==========================================
 # UI: EDIT MODE (Карточка клиента)
@@ -398,65 +517,67 @@ else:
 
     # --- TAB 1: ОСНОВНОЕ ---
     if sel == "✏️ Редактирование":
-        with st.form("edit_main"):
-            # БЛОК 1: Основная информация
-            c1, c2 = st.columns(2)
-            
-            # Левая колонка - ФИО
-            el = c1.text_input("Фамилия", detail['last_name'])
-            ef = c1.text_input("Имя", detail['first_name'])
-            em = c1.text_input("Отчество", detail['middle_name'])
+        # УБРАЛИ with st.form("edit_main")
+        
+        c1, c2 = st.columns(2)
+        el = c1.text_input("Фамилия", detail['last_name'], key="ed_l")
+        ef = c1.text_input("Имя", detail['first_name'], key="ed_f")
+        em = c1.text_input("Отчество", detail['middle_name'], key="ed_m")
+        
+        idx_st = list(statuses_map.keys()).index(detail['status_code']) if detail['status_code'] in statuses_map else 0
+        est = c2.selectbox("Статус", list(statuses_map.keys()), index=idx_st, format_func=lambda x: statuses_map.get(x), key="ed_st")
+        
+        idx_sg = list(stages_map.keys()).index(detail['current_stage']) if detail['current_stage'] in stages_map else 0
+        esg = c2.selectbox("Этап", list(stages_map.keys()), index=idx_sg, format_func=lambda x: stages_map.get(x), key="ed_sg")
 
-            # Правая колонка - Статусы
-            idx_st = list(statuses_map.keys()).index(detail['status_code']) if detail['status_code'] in statuses_map else 0
-            est = c2.selectbox("Статус", list(statuses_map.keys()), index=idx_st, format_func=lambda x: statuses_map.get(x))
+        cur_ag_id = detail['agent_id']
+        ag_name = next((k for k, v in agents_map.items() if v == cur_ag_id), list(agents_map.keys())[0])
+        idx_ag = list(agents_map.keys()).index(ag_name) if ag_name in agents_map else 0
+        eag = c2.selectbox("Агент", list(agents_map.keys()), index=idx_ag, key="ed_ag")
 
-            idx_sg = list(stages_map.keys()).index(detail['current_stage']) if detail['current_stage'] in stages_map else 0
-            esg = c2.selectbox("Этап", list(stages_map.keys()), index=idx_sg, format_func=lambda x: stages_map.get(x))
+        st.divider()
+        st.caption("Данные протезирования")
+        
+        col_1, col_2 = st.columns(2)
+        
+        with col_1:
+            # УМНЫЕ ПОЛЯ РЕДАКТИРОВАНИЯ
+            epr = render_smart_field(
+                "Виды протезов", detail.get('prosthesis_type') or "", 
+                utils.get_ref_prosthesis, utils.add_ref_prosthesis, utils.delete_ref_prosthesis, 
+                "ed_pros"
+            )
+        with col_1:
+            etsr = render_smart_field(
+                "Код ТСР и название протеза", detail.get('tsr_code') or "", 
+                utils.get_ref_tsr, utils.add_ref_tsr, utils.delete_ref_tsr, 
+                "ed_tsr"
+            )
 
-            # Агент
-            cur_ag_id = detail['agent_id']
-            ag_name = next((k for k, v in agents_map.items() if v == cur_ag_id), None)
-            if not ag_name: ag_name = list(agents_map.keys())[0] if agents_map else None
-            idx_ag = list(agents_map.keys()).index(ag_name) if ag_name else 0
-            eag = c2.selectbox("Агент", list(agents_map.keys()), index=idx_ag)
+        ecd = col_2.date_input("Дата пробития", value=to_date(detail.get('check_date')), key="ed_cd", format="DD.MM.YYYY")
+        ecp = col_2.text_input("Стоимость сертификата", value=str(detail.get('certificate_price') or ""), key="ed_cp")
 
-            st.divider()
-            
-            # БЛОК 2: ИПРА и ТСР
-            st.subheader("Сведения о протезировании")
-            d1, d2 = st.columns(2)
+        st.divider()
+        c3, c4 = st.columns(2)
 
-            with d1:
-                # Берем данные из базы (tsr_code)
-                e_tsr = st.text_area("Коды ТСР (список)", value=detail.get('tsr_code') or "", height=100, help="Каждый код с новой строки. Пример: - 8-07-12 Протез бедра модульный с микропроцессорным управлением")
-                e_prosthesis = st.text_area("Виды протезов", value=detail.get('prosthesis_type') or "", height=100, help="Для автозаполнения типа конечности в договоре.")
+        edd = c3.date_input("Повторное обращение", value=to_date(detail.get('deadline')), key="ed_dd", format="DD.MM.YYYY")
+        ent = st.text_area("Заметки", detail.get('notes', ''), key="ed_nt")
 
-            with d2:
-                e_check_date = st.date_input("Дата пробития", value=to_date(detail.get('check_date')), format="DD.MM.YYYY")
-                curr_price = detail.get('certificate_price') or ""
-                e_price = st.text_input("Стоимость сертификата", value = curr_price)
-                edead = st.date_input("Повторное обращение", value=to_date(detail.get('deadline')),format="DD.MM.YYYY" , help="Дата следующего контакта")
-
-            # БЛОК 3: Заметки
-            enotes = st.text_area("Заметки", detail['notes'])
-
-            if st.form_submit_button("Сохранить изменения"):
-                pl = {
-                    "last_name": el, "first_name": ef, "middle_name": em,
-                    "prosthesis_type": e_prosthesis,
-                    "check_date": e_check_date.isoformat() if e_check_date else None,
-                    "certificate_price": e_price,
-                    "status_code": est, "current_stage": esg,
-                    "agent_id": agents_map[eag],
-                    "deadline": datetime.combine(edead, dt_time.min).isoformat() if edead else None,
-                    "notes": enotes,
-                    "tsr_code": e_tsr, # Сохраняем ТСР
-                }
-                utils.patch_client(cid, pl)
-                st.success("Сохранено")
-                utils.clear_caches()
-                st.rerun()
+        if st.button("Сохранить изменения", type="primary", key="btn_save_client"):
+            pl = {
+                "last_name": el, "first_name": ef, "middle_name": em,
+                "prosthesis_type": epr, "tsr_code": etsr,
+                "check_date": ecd.isoformat() if ecd else None,
+                "certificate_price": ecp,
+                "status_code": est, "current_stage": esg,
+                "agent_id": agents_map[eag],
+                "deadline": datetime.combine(edd, dt_time.min).isoformat() + "Z" if edd else None,
+                "notes": ent
+            }
+            utils.patch_client(cid, pl)
+            st.success("Сохранено")
+            utils.clear_caches()
+            st.rerun()
 
         if st.button("Удалить клиента", type="primary"):
             utils.delete_client(cid)
@@ -839,7 +960,7 @@ else:
             
             with st.form("contract_gen_form"):
                 TEMPLATES = {
-                    "ООО Соц. фонд Движение (договор)": "llc_contract",
+                    'ООО "Смарт Движение"': "llc_contract",
                     "ИП ДМК (договор)": "DMK_contract",
                     "ИП СДВ (договор)": "SDV_contract",
                     "ИП ДМК (акт)": "DMK_instrument",

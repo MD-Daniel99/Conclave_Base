@@ -1,4 +1,5 @@
 # app/main.py
+import traceback
 import warnings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,6 +66,7 @@ phones_router = None
 modules_router = None
 auth_router = None
 documents_router = None
+references_router = None
 
 try:
     from app.api import auth
@@ -118,13 +120,8 @@ try:
     from app.api import modules
     modules_router = modules.router
 except Exception as e:
-  warnings.warn(f"Modules router fail: {e!r}")
-
-try:
-    from app.api import documents
-    documents_router = documents.router
-except Exception as e:
-    warnings.warn(f"Docs router fail: {e!r}")
+    warnings.warn(f"Modules router fail: {e!r}")
+    traceback.print_exc() 
 
 # Documents api imports
 try:
@@ -132,6 +129,15 @@ try:
     documents_router = documents.router
 except Exception as e:
     warnings.warn(f"Docs router fail: {e!r}")
+    traceback.print_exc() 
+
+try:
+    from app.api import references
+    references_router = references.router
+except Exception as e:
+    warnings.warn(f"References router fail: {e!r}")
+    traceback.print_exc() 
+
 
 
 app = FastAPI(
@@ -160,8 +166,8 @@ if snils_router: app.include_router(snils_router, prefix="/snils", tags=["docume
 if phones_router: app.include_router(phones_router, prefix="/phones", tags=["clients"])
 if modules_router: app.include_router(modules_router, prefix="/modules", tags=["modules"])
 if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
-# Documents connection
 if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
+if references_router: app.include_router(references_router, prefix = "/references", tags = ["references"])
 
 @app.get("/health")
 def health():

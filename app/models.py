@@ -115,13 +115,16 @@ class Client(Base):
     notes = Column(Text, nullable=True)
 
     check_date = Column(Date, nullable=True)          
-    prosthesis_type = Column(String(255), nullable=True) 
     certificate_price = Column(String(255), nullable=True)
     ipra_code = Column(String(64), nullable = True)
     place_of_residence = Column(String(255), nullable = True)
-    tsr_code =  Column(Text, nullable = True)
+
+    prosthesis_type = Column(String(255), ForeignKey("REF_PROSTHESIS.name"), nullable=True) 
+    tsr_code =  Column(Text, ForeignKey("REF_TSR.full_tsr_code"), nullable = True)
 
     # отношения
+    # prosthesis_type = relationship("ProsthesisRef", back_populates = "client")
+    # tsr_code = relationship("TstCodeRef", back_populates = "client")
     agent = relationship("Agent", back_populates="clients")
     phones = relationship("Phone", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
     passports = relationship("Passport", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
@@ -253,3 +256,15 @@ class User(Base):
 
     def __repr__(self):
         return f"<User {self.username} ({self.role})>"
+
+class ProsthesisRef(Base):
+    __tablename__ = "REF_PROSTHESIS"
+    prosthesis_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
+    name = Column(Text, nullable = True, unique = True)
+
+class TstCodeRef(Base):
+    __tablename__ = "REF_TSR"
+    tsr_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
+    #number_code = Column(Text, nulllable = True, unique = True)
+    #letter_code = Column(Text, nulllable = True, unique = True)
+    full_tsr_code = Column(Text, nullable = True)

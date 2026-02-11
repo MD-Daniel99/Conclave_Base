@@ -138,28 +138,17 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
 
     # --- 3. Подготовка данных для шаблона ---
 
-    # Исправление даты рождения (Задача 5)
+    # Исправление даты рождения 
     birth_date_raw = passport.get('birth_date')
     birth_date_ru = format_date_ru(birth_date_raw)
 
     passport_date_raw = passport.get("issue_date")
     passport_date_ru = format_date_ru(passport_date_raw)
 
-    # Исправление названия протеза (Задача 4)
+    # Исправление названия протеза 
     # Убираем слово "Протез" или "протез" из начала строки, чтобы не было дублей
-    raw_p_type = client.get('prosthesis_type') or ''
+    raw_p_type = client.get("prosthesis_type") or ''
     clean_p_type = re.sub(r'(?i)^протез\s+', '', raw_p_type.strip())
-
-    # --- ИСПРАВЛЕНИЯ ---
-    
-    # Задача 5: Даты в русском формате
-    birth_date_ru = format_date_ru(passport.get('birth_date'))
-    passport_date_ru = format_date_ru(passport.get("issue_date"))
-
-    # Задача 4: Убираем дублирование слова "Протез"
-    # Ищем слово "протез" (в любом регистре) в начале строки и удаляем его
-    raw_p_type = client.get('prosthesis_type') or ''
-    clean_p_type = re.sub(r'(?i)^протез\s*', '', raw_p_type.strip())
 
     context = {
         "НомерДоговора": payload.document_number,
@@ -190,7 +179,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
 
     # --- ЛОГИКА ТОВАРОВ И МОДУЛЕЙ ---
     
-    raw_tsr_source = client.get('tsr_code') or ""
+    raw_tsr_source = client.get("tsr_code") or ""
     tsr_names_list = [line.strip() for line in raw_tsr_source.split('\n') if line.strip()]
 
     act_full_descriptions = [] # Для сборки строки в Акте
@@ -220,8 +209,6 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
         else:
             qty_val = "" # Если модуля нет, кол-во пустое
 
-        # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ (Задача 1 и 2) ---
-        # Заполняем переменные ТОЧНО как в вашем шаблоне
         context[f"Наименованиетовара{i}"] = tsr_name
         context[f"КодТовара{i}"] = tsr_code
         context[f"КолТовара{i}"] = str(qty_val) if qty_val else ""
