@@ -158,6 +158,7 @@ if st.session_state.wh_active_id is None:
             rows.append({
                 "ID": m["module_id"],
                 "Название": m["module_name"],
+                "К-во": m["quantity"],
                 "Индекс": m["catalogue_index"],
                 "Цена": m["price"],
                 "Стоимость": m["cost"],
