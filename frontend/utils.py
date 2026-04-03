@@ -258,3 +258,16 @@ def add_ref_tsr(text):
 def delete_ref_tsr(rid):
     get_ref_tsr.clear()
     handle_request("DELETE", f"{API_BASE}/references/tsr/{rid}", headers=get_headers())
+
+# --- MODULE NAME INDEX ---
+@st.cache_data(ttl=60)
+def get_ref_module_name_index():
+    return handle_request("GET", f"{API_BASE}/references/name_index", headers=get_headers())
+
+def add_ref_module_name_index(name_index: str):
+    handle_request("POST", f"{API_BASE}/references/name_index", json={"name_index": name_index}, headers=get_headers())
+    st.cache_data.clear()
+
+def delete_ref_module_name_index(name_index_id: str):
+    get_ref_module_name_index.clear()
+    handle_request("DELETE", f"{API_BASE}/references/name_index/{name_index_id}", headers=get_headers())

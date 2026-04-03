@@ -122,6 +122,10 @@ class Client(Base):
     prosthesis_type = Column(String(255), ForeignKey("REF_PROSTHESIS.name"), nullable=True) 
     tsr_code =  Column(Text, ForeignKey("REF_TSR.full_tsr_code"), nullable = True)
 
+    prosthetist_salary = Column(Float, default=0.0)
+    agent_salary = Column(Float, default=0.0)
+    support_salary = Column(Float, default=0.0)
+
     # отношения
     # prosthesis_type = relationship("ProsthesisRef", back_populates = "client")
     # tsr_code = relationship("TstCodeRef", back_populates = "client")
@@ -222,8 +226,7 @@ class Module(Base):
 
     module_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
     client_id = Column(UUID(as_uuid = True), ForeignKey("CLIENT.client_id", ondelete = "CASCADE"), nullable = True)
-    module_name = Column(String(512), nullable = False)
-    catalogue_index = Column(String(64), nullable = False)
+    module_name_index = Column(String(128), ForeignKey("REF_NameIndex.name_index"), nullable = False) 
     supplier = Column(String(64), nullable = False)
     ordered = Column(String(64), nullable = False)
     order_date_acc_num = Column(String(64), nullable = False)
@@ -268,3 +271,8 @@ class TstCodeRef(Base):
     #number_code = Column(Text, nulllable = True, unique = True)
     #letter_code = Column(Text, nulllable = True, unique = True)
     full_tsr_code = Column(Text, nullable = True)
+
+class ModuleNameIndex(Base):
+    __tablename__ = "REF_NameIndex"
+    name_index_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
+    name_index = Column(Text, nullable = True, unique = True)

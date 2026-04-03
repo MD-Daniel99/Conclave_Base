@@ -260,6 +260,7 @@ if not st.session_state["token"]:
     ])
 else:
     pages_list = [
+        st.Page("views/Accounting.py", title="Бухгалтерия", icon="💰"),
         st.Page("views/Clients.py", title="Клиенты", icon="👥"),
         st.Page("views/Agents.py", title="Агенты", icon="🕵️"),
         st.Page("views/Warehouse.py", title="Склад", icon="📦"),

@@ -16,6 +16,10 @@ if "wh_active_id" not in st.session_state:
     st.session_state.wh_active_id = None
 
 def reset_wh():
+    keys_to_del =[k for k in st.session_state.keys() if k.startswith("edit_wh_") or k.startswith("edit_q_") or k.startswith("edit_uc_") or k.startswith("edit_up_")]
+    for k in keys_to_del:
+        del st.session_state[k]
+        
     st.session_state.wh_active_id = None
     st.rerun()
 
@@ -31,6 +35,125 @@ except:
     clients_map = {}
     clients_filter = {}
 
+def render_smart_field(label, current_value_str, ref_getter, ref_adder, ref_deleter, key_prefix, multiple=True):
+    """
+    Умное поле со справочником.
+    Если multiple=True — позволяет выбрать несколько значений (хранит список).
+    Если multiple=False — только одно значение.
+    """
+    try:
+        refs = ref_getter()
+    except:
+        refs =[]
+    
+    options_map = {}
+    for r in refs:
+        val = r.get('name_index') or r.get('full_tsr_code') or r.get('name') or r.get('full_text') or r.get('module_name')
+        if val:
+            opt_id = r.get('name_index_id') or r.get('id') or r.get('prosthetist_id') or r.get('tsr_id') or r.get('prosthesis_id') or r.get('module_id')
+            options_map[val] = opt_id
+    
+    options_list = sorted(list(options_map.keys()))
+    
+    # === РЕЖИМ: НЕСКОЛЬКО ЗНАЧЕНИЙ ===
+    if multiple:
+        session_key = f"{key_prefix}_values"
+        if session_key not in st.session_state:
+            if current_value_str:
+                st.session_state[session_key] =[x.strip() for x in str(current_value_str).split('\n') if x.strip()]
+            else:
+                st.session_state[session_key] =[]
+        
+        col_select, col_btn_add, col_settings = st.columns([3, 1, 1])
+        with col_select:
+            selected_option = st.selectbox(
+                f"Выберите {label}",
+                options=[""] + options_list,
+                key=f"{key_prefix}_select",
+                label_visibility="collapsed"
+            )
+        
+        with col_btn_add:
+            if st.button("➕", key=f"{key_prefix}_add", help="Выбрать"):
+                if selected_option and selected_option not in st.session_state[session_key]:
+                    st.session_state[session_key].append(selected_option)
+                    st.rerun()
+
+        with col_settings:
+            with st.popover("⚙️"):
+                new_val = st.text_input("Новое значение", key=f"{key_prefix}_new_ref")
+                if st.button("В справочник", key=f"{key_prefix}_add_ref"):
+                    if new_val:
+                        ref_adder(new_val)
+                        st.rerun()
+                if options_list:
+                    st.divider()
+                    val_to_delete = st.selectbox("Удалить из справочника", [""] + options_list, key=f"{key_prefix}_del_ref")
+                    if val_to_delete and st.button("Удалить", type="secondary", key=f"{key_prefix}_btn_del_ref"):
+                        rid = options_map.get(val_to_delete)
+                        if rid:
+                            ref_deleter(rid)
+                            st.session_state[session_key] =[v for v in st.session_state[session_key] if v != val_to_delete]
+                            st.rerun()
+        
+        if st.session_state[session_key]:
+            with st.expander(f"📋 Выбрано {len(st.session_state[session_key])} значений", expanded=False):
+                from collections import Counter
+                for value, qty in Counter(st.session_state[session_key]).items():
+                    cols = st.columns([5, 2, 1])
+                    cols[0].write(f"• {value}")
+                    if qty > 1:
+                        cols[1].write(f"(×{qty})")
+                    if cols[2].button("❌", key=f"{key_prefix}_del_{value}"):
+                        st.session_state[session_key] =[v for v in st.session_state[session_key] if v != value]
+                        st.rerun()
+        else:
+            st.caption("Список пуст")
+        
+        return "\n".join(st.session_state[session_key])
+    
+    # === РЕЖИМ: ОДНО ЗНАЧЕНИЕ ===
+    else:
+        val = current_value_str if current_value_str else ""
+        if val and val not in options_list:
+            options_list.append(val)
+        
+        if key_prefix not in st.session_state:
+            st.session_state[key_prefix] = val
+        
+        if st.session_state[key_prefix] not in [""] + options_list:
+            st.session_state[key_prefix] = ""
+        
+        col_select, col_settings = st.columns([5, 1])
+        with col_select:
+            selected = st.selectbox(
+                label,
+                options=[""] + options_list,
+                key=key_prefix 
+            )
+        
+        with col_settings:
+            # Сдвиг кнопки, чтобы она была на одном уровне с полем ввода
+            st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+            with st.popover("⚙️"):
+                new_val = st.text_input("Новое значение", key=f"{key_prefix}_new_ref")
+                if st.button("Добавить", key=f"{key_prefix}_add_ref"):
+                    if new_val:
+                        ref_adder(new_val)
+                        st.rerun()
+                if options_list:
+                    st.divider()
+                    val_to_delete = st.selectbox("Удалить из справочника", [""] + options_list, key=f"{key_prefix}_del_ref")
+                    if val_to_delete and st.button("Удалить", type="secondary", key=f"{key_prefix}_btn_del_ref"):
+                        rid = options_map.get(val_to_delete)
+                        if rid:
+                            ref_deleter(rid)
+                            if st.session_state[key_prefix] == val_to_delete:
+                                st.session_state[key_prefix] = ""
+                            st.rerun()
+        
+        return st.session_state[key_prefix] if st.session_state[key_prefix] else None
+
 # --- EXPORT FUNCTION (CACHED) ---
 @st.cache_data(ttl=60)
 def get_warehouse_csv():
@@ -44,8 +167,7 @@ def get_warehouse_csv():
         if m.get("client"): own = f"{m['client']['last_name']} {m['client']['first_name']}"
         
         ex_rows.append({
-            "Название": m['module_name'],
-            "Индекс": m['catalogue_index'],
+            "Название и Индекс": m.get('module_name_index', ''),
             "Поставщик": m['supplier'],
             "Владелец": own,
             "Количество": m['quantity'],
@@ -157,9 +279,8 @@ if st.session_state.wh_active_id is None:
             # добавление данных в датафрейм
             rows.append({
                 "ID": m["module_id"],
-                "Название": m["module_name"],
+                "Название и Индекс": m.get("module_name_index", ""),
                 "К-во": m["quantity"],
-                "Индекс": m["catalogue_index"],
                 "Цена": m["price"],
                 "Стоимость": m["cost"],
                 "Заказано": m.get("ordered", "0"),
@@ -184,7 +305,9 @@ if st.session_state.wh_active_id is None:
             on_select="rerun",
             column_config={
                 "ID": None, 
-                "№": st.column_config.NumberColumn("№", width="small")
+                "№": st.column_config.NumberColumn("№", width="small"),
+                "Цена": st.column_config.NumberColumn("Цена", format = "%,.2f ₽"),
+                "Стоимость": st.column_config.NumberColumn("Стоимость", format = "%,.2f ₽"),
             }
         )
         
@@ -202,9 +325,13 @@ if st.session_state.wh_active_id is None:
         # УБРАЛИ st.form! Теперь работает пересчет.
         st.subheader("Основные данные")
         c1, c2, c3 = st.columns(3)
-        # Добавляем key, чтобы не терять фокус
-        nn = c1.text_input("Название *", key="new_n")
-        ni = c2.text_input("Индекс в каталоге *", key="new_i")
+        with c1:
+            n_mni = render_smart_field(
+                "Название и Индекс *", "", 
+                utils.get_ref_module_name_index, utils.add_ref_module_name_index, utils.delete_ref_module_name_index, 
+                "new_wh_mni",
+                multiple=False
+            )
         
         c4, c5 = st.columns(2)
         ns = c4.text_input("Поставщик *", key="new_s")
@@ -249,10 +376,11 @@ if st.session_state.wh_active_id is None:
         
         # Кнопка теперь просто button
         if st.button("Создать модуль", type="primary"):
-            if nn and ni and ns:
+            if n_mni and ns:
                 cid_target = clients_map.get(no)
                 pl = {
-                    "module_name": nn, "catalogue_index": ni, "supplier": ns, "client_id": cid_target,
+                    "module_name_index": n_mni, 
+                    "supplier": ns, "client_id": cid_target,
                     "quantity": n_qty, "cost": n_total_cost, "price": n_total_price,
                     "ordered": n_ord, "recd": n_recd, "pending": n_pend,
                     "order_date_acc_num": n_acc, "properties": n_props, "notes": n_notes,
@@ -284,15 +412,19 @@ else:
         if st.button("Сбросить выбор"): reset_wh()
         st.stop()
 
-    st.subheader(f"Редактирование: {mod_detail['module_name']}")
+    st.subheader(f"Редактирование: {mod_detail.get('module_name_index', 'Модуль')}")
 
-    # УБИРАЕМ with st.form!
     
     # --- РАЗДЕЛ 1: ОСНОВНОЕ ---
     st.caption("Основные данные")
     c1, c2, c3 = st.columns(3)
-    en = c1.text_input("Название", value=mod_detail['module_name'], key="edit_n")
-    ei = c2.text_input("Индекс в каталоге", value=mod_detail['catalogue_index'], key="edit_i")
+    with c1:
+        e_mni = render_smart_field(
+            "Название и Индекс *", mod_detail.get('module_name_index', ''), 
+            utils.get_ref_module_name_index, utils.add_ref_module_name_index, utils.delete_ref_module_name_index, 
+            "edit_wh_mni",
+            multiple=False
+        )
     
     c4, c5 = st.columns(2)
     es = c4.text_input("Поставщик", value=mod_detail['supplier'], key="edit_s")
@@ -322,10 +454,9 @@ else:
     init_up = db_tot_price / db_qty if db_qty > 0 else 0.0
 
     f1, f2, f3, f4, f5 = st.columns(5)
-    # ВАЖНО: key обязателен
-    eq = f1.number_input("Кол-во", min_value=1, value=db_qty, key="edit_q")
-    e_unit_cost = f2.number_input("Себест. (ед)", 0.0, value=init_uc, step=10.0, key="edit_uc")
-    e_unit_price = f3.number_input("Цена (ед)", 0.0, value=init_up, step=10.0, key="edit_up")
+    eq = f1.number_input("Кол-во", min_value=1, value=db_qty, key=f"edit_q_{mid}")
+    e_unit_cost = f2.number_input("Себест. (ед)", 0.0, value=init_uc, step=10.0, key=f"edit_uc_{mid}")
+    e_unit_price = f3.number_input("Цена (ед)", 0.0, value=init_up, step=10.0, key=f"edit_up_{mid}")
     
     # ПЕРЕСЧЕТ
     e_total_cost = e_unit_cost * eq
@@ -337,30 +468,31 @@ else:
     st.divider()
     st.caption("Характеристики")
     ch1, ch2, ch3 = st.columns(3)
-    e_size = ch1.text_input("Размер", value=mod_detail.get('size') or "", key="e_size")
-    e_stiff = ch2.text_input("Жесткость", value=mod_detail.get('stiffness') or "", key="e_stiff")
-    e_side = ch3.text_input("Сторона", value=mod_detail.get('side') or "", key="e_side")
+    e_size = ch1.text_input("Размер", value=mod_detail.get('size') or "", key=f"e_size{mid}")
+    e_stiff = ch2.text_input("Жесткость", value=mod_detail.get('stiffness') or "", key=f"e_stiff{mid}")
+    e_side = ch3.text_input("Сторона", value=mod_detail.get('side') or "", key=f"e_side{mid}")
 
     st.divider()
     # --- РАЗДЕЛ 3: СТАТУСЫ ---
     s1, s2, s3, s4 = st.columns(4)
-    e_ord = s1.text_input("Заказано", value=mod_detail.get('ordered', '0'), key="edit_ord")
-    e_recd = s2.text_input("Получено", value=mod_detail.get('recd', '0'), key="edit_recd")
-    e_pend = s3.text_input("В ожидании", value=mod_detail.get('pending', '0'), key="edit_pend")
-    e_pr_keep = s4.text_input("У протезиста", value=mod_detail.get('prosthetist_keep', '0') or "", key="e_pr_keep")
+    e_ord = s1.text_input("Заказано", value=mod_detail.get('ordered', '0'), key=f"edit_ord{mid}")
+    e_recd = s2.text_input("Получено", value=mod_detail.get('recd', '0'), key=f"edit_recd{mid}")
+    e_pend = s3.text_input("В ожидании", value=mod_detail.get('pending', '0'), key=f"edit_pend{mid}")
+    e_pr_keep = s4.text_input("У протезиста", value=mod_detail.get('prosthetist_keep', '0') or "", key=f"e_pr_keep{mid}")
 
     d1, d2 = st.columns(2)
-    e_acc = d1.text_input("Номер счета и дата заказа", value=mod_detail.get('order_date_acc_num', '-'), key="edit_acc")
-    e_props = d2.text_input("Хар-ки", value=mod_detail.get('properties', '-'), key="edit_prop")
+    e_acc = d1.text_input("Номер счета и дата заказа", value=mod_detail.get('order_date_acc_num', '-'), key=f"edit_acc{mid}")
+    e_props = d2.text_input("Хар-ки", value=mod_detail.get('properties', '-'), key=f"edit_prop{mid}")
     
-    e_notes = st.text_area("Заметки", value=mod_detail.get('notes') or "", key="edit_notes")
+    e_notes = st.text_area("Заметки", value=mod_detail.get('notes') or "", key=f"edit_notes{mid}")
     
     # --- СОХРАНЕНИЕ (Обычная кнопка) ---
     if st.button("Сохранить изменения", type="primary"):
         cid_target = clients_map.get(eo)
         
         pl = {
-            "module_name": en, "catalogue_index": ei, "supplier": es, "client_id": cid_target,
+            "module_name_index": e_mni, 
+            "supplier": es, "client_id": cid_target,
             "quantity": eq, 
             "cost": e_total_cost, # Сохраняем ИТОГ
             "price": e_total_price,

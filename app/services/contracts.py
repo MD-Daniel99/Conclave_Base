@@ -55,19 +55,19 @@ def rub_to_words(amount: float) -> str:
         return str(amount)
     
 def get_initials(last_name, first_name, middle_name):
-    f = first_name[0].upper() + "." if first_name else ""
-    m = middle_name[0].upper() + "." if middle_name else ""
+    f = first_name.strip()[0].upper() + "." if first_name and len(first_name.strip()) > 0 else ""
+    m = middle_name.strip()[0].upper() + "." if middle_name and len(middle_name.strip()) > 0 else ""
     return f"{last_name} {f} {m}".strip()
 
 def extract_tsr_numeric(tsr_code):
     if not tsr_code: return ""
-    match = re.search(r'\d{1,2}-\d{2}-\d{2}', tsr_code)
+    match = re.search(r'\d{1,2}-\d{2}[-\.\d]*', tsr_code)
     return match.group(0) if match else ""
 
 def extract_tsr_literals(tsr_code):
     if not tsr_code: return ""
-    text_part = re.sub(r'\d{1,2}-\d{2}-\d{2}', '', tsr_code)
-    return text_part.strip(' .,- ')
+    text_part = re.sub(r'\d{1,2}-\d{2}[-\.\d]*', '', tsr_code)
+    return text_part.strip(' .,-')
 
 
 def get_template_path(filename):
@@ -97,7 +97,11 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
     # 2. Паспорт, телефон, снилс
     passport = {}
     if client.get("passports") and len(client["passports"]) > 0:
-        last_passport = sorted(client["passports"], key=lambda x: x.get("created_at") or "", reverse=True)[0]
+        last_passport = sorted(
+            client["passports"], 
+            key=lambda x: x.get("created_at") or datetime.min.replace(tzinfo=timezone.utc), 
+            reverse=True
+        )[0]
         passport = last_passport
 
     phone = ""
@@ -124,12 +128,11 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
     # Цена с чехлом
     cover_price_standalone = 0.0
     for m in modules:
-        m_name = m.get("module_name", "").lower()
+        m_name = m.get("module_name_index", "").lower()
         if "чехол" in m_name:
-            added_price = float(m.get("price") or 0)
-            cover_price_standalone += added_price
+            cover_price_standalone += float(m.get("price") or 0)
         
-        total_sum_with_cover = total_sum + cover_price_standalone
+    total_sum_with_cover = total_sum + cover_price_standalone
 
     
     # Форматирование: 1 250.00 
@@ -176,8 +179,6 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
         
         "ВерхнихилиНижнихконечностей": clean_p_type 
     }
-
-    # --- ЛОГИКА ТОВАРОВ И МОДУЛЕЙ ---
     
     raw_tsr_source = client.get("tsr_code") or ""
     tsr_names_list = [line.strip() for line in raw_tsr_source.split('\n') if line.strip()]
@@ -185,11 +186,11 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload):
     act_full_descriptions = [] # Для сборки строки в Акте
     total_qty_counter = 0 # Для подсчета общего количества
 
-    # Проходим циклом по строкам таблицы (в шаблоне их 4, сделаем с запасом до 5)
+    # Проход циклом по строкам таблицы (в шаблоне их 4, сделаем с запасом до 5)
     for i in range(1, 5):
         idx = i - 1
         
-        # 1. Получаем данные по ТСР (из текстового поля клиента)
+        # 1. Получение данных по ТСР (из текстового поля клиента)
         if idx < len(tsr_names_list):
             tsr_full = tsr_names_list[idx]
             tsr_code = extract_tsr_numeric(tsr_full)

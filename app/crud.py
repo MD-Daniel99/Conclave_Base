@@ -231,7 +231,12 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "snils": snils_list,
         "modules": modules_list,
         "tsr_code": client.tsr_code,
+        "prosthetist_salary": getattr(client, "prosthetist_salary", 0.0),
+        "agent_salary": getattr(client, "agent_salary", 0.0),
+        "support_salary": getattr(client, "support_salary", 0.0),
     }
+
+    
     return result
 
 
@@ -919,6 +924,34 @@ def delete_tsr(db: Session, tsr_id: UUID):
     tsr_to_delete = db.get(models.TstCodeRef, tsr_id)
     if tsr_to_delete:
         db.delete(tsr_to_delete)
+        db.commit()
+        return True
+    else:
+        return False
+
+
+# -------------------------
+# ModuleNameIndex
+# -------------------------
+
+def get_module_name_index(db: Session):
+    return db.execute(select(models.ModuleNameIndex).order_by(models.ModuleNameIndex.name_index)).scalars().all()
+
+def create_module_name_index(db: Session, name_index: str):
+    exists = db.execute(select(models.ModuleNameIndex).where(models.ModuleNameIndex.name_index == name_index)).scalars().first()
+    if exists:
+        return exists
+    
+    new_module_name_index = models.ModuleNameIndex(name_index=name_index)
+    db.add(new_module_name_index)
+    db.commit()
+    db.refresh(new_module_name_index)
+    return new_module_name_index
+
+def delete_module_name_index(db: Session, name_index_id: UUID):
+    module_name_to_delete = db.get(models.ModuleNameIndex, name_index_id)
+    if module_name_to_delete:
+        db.delete(module_name_to_delete)
         db.commit()
         return True
     else:

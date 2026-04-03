@@ -38,8 +38,7 @@ class ClientSummary(BaseModel):
 # Module
 # -------------------------
 class ModuleBase(BaseModel):
-    module_name: str
-    catalogue_index: str
+    module_name_index: Optional[str] = None
     supplier: str
     ordered: str
     order_date_acc_num: str
@@ -63,14 +62,14 @@ class ModuleCreate(ModuleBase):
 class ModuleUpdate(BaseModel):
     # Все поля опциональны для PATCH-запросов
     client_id: Optional[UUID] = None # Разрешаем перепривязку модуля
-    module_name: Optional[str] = None
-    catalogue_index: Optional[str] = None
+    module_name_index: Optional[str] = None
     supplier: Optional[str] = None
     ordered: Optional[str] = None
     order_date_acc_num: Optional[str] = None
     size: Optional[str] = None
     stiffness: Optional[str] = None
     side: Optional[str] = None
+    quantity: Optional[int] = None
     cost: Optional[float] = None
     price: Optional[float] = None
     recd: Optional[str] = None
@@ -215,6 +214,10 @@ class ClientBase(BaseModel):
     place_of_residence: Optional[str] = None
     tsr_code: Optional[str] = None
 
+    prosthetist_salary: Optional[float] = 0.0
+    agent_salary: Optional[float] = 0.0
+    support_salary: Optional[float] = 0.0
+
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
         for k, v in list(values.items()):
@@ -250,6 +253,10 @@ class ClientUpdate(BaseModel):
     certificate_price: Optional[str] = None
     place_of_residence: Optional[str] = None
     tsr_code: Optional[str] = None
+
+    prosthetist_salary: Optional[float] = None
+    agent_salary: Optional[float] = None
+    support_salary: Optional[float] = None
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -404,28 +411,6 @@ class SnilsRead(SnilsBase):
 
 
 # -------------------------
-# Document (метаданные для S3/MinIO)
-# -------------------------
-class DocumentBase(BaseModel):
-    type_code: str
-    filename: str
-    object_key: str
-    version: Optional[int] = Field(1)
-
-
-class DocumentCreate(DocumentBase):
-    client_id: UUID
-
-
-class DocumentRead(DocumentBase):
-    document_id: UUID
-    client_id: UUID
-    uploaded_at: Optional[datetime]
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-# -------------------------
 # Reminder
 # -------------------------
 class ReminderBase(BaseModel):
@@ -542,6 +527,18 @@ class TstCodeRefRead(BaseModel):
     id: UUID = Field(validation_alias="tsr_id")
     full_tsr_code: Optional[str]
     model_config = ConfigDict(from_attributes = True)
+
+
+# -------------------------
+# ModuleNameIndex
+# -------------------------
+class ModuleNameIndexCreate(BaseModel):
+    name_index: str
+
+class ModuleNameIndexRead(BaseModel):
+    id: UUID = Field(validation_alias="name_index_id")
+    name_index: Optional[str]
+    model_config = ConfigDict(from_attributes=True)
 
 
 DocumentRead.model_rebuild()
