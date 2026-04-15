@@ -67,6 +67,7 @@ modules_router = None
 auth_router = None
 documents_router = None
 references_router = None
+accounting_router = None
 
 try:
     from app.api import auth
@@ -138,6 +139,13 @@ except Exception as e:
     warnings.warn(f"References router fail: {e!r}")
     traceback.print_exc() 
 
+try:
+    from app.api import accounting
+    accounting_router = accounting.router
+except Exception as e:
+    warnings.warn(f"Accounting router fail: {e!r}")
+    traceback.print_exc() 
+
 
 
 app = FastAPI(
@@ -168,6 +176,7 @@ if modules_router: app.include_router(modules_router, prefix="/modules", tags=["
 if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
 if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
 if references_router: app.include_router(references_router, prefix = "/references", tags = ["references"])
+if accounting_router: app.include_router(accounting_router, prefix = "/accounting", tags = ["accounting"])
 
 @app.get("/health")
 def health():

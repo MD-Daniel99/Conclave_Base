@@ -137,6 +137,9 @@ class Client(Base):
     reminders = relationship("Reminder", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
     modules = relationship("Module", back_populates = "client", cascade = "all, delete-orphan", passive_deletes = True)
 
+    # В класс Client добавьте relationship (после существующих)
+    accounting_values = relationship("AccountingFieldValue", back_populates="client", cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<Client {self.client_id} {self.last_name}>"
 
@@ -256,6 +259,7 @@ class User(Base):
     role = Column(String(32), nullable=False, default="user") # 'admin' или 'user'
     is_active = Column(Boolean, default=True) # Требуется import Boolean
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    settings = Column(JSON, nullable=True)
 
     def __repr__(self):
         return f"<User {self.username} ({self.role})>"
@@ -276,3 +280,30 @@ class ModuleNameIndex(Base):
     __tablename__ = "REF_NameIndex"
     name_index_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
     name_index = Column(Text, nullable = True, unique = True)
+
+# --- ACCOUNTING CUSTOM FIELDS ---
+class AccountingCustomField(Base):
+    __tablename__ = "ACCOUNTING_CUSTOM_FIELD"
+    
+    field_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    field_name = Column(String(128), unique=True, nullable=False)
+    field_type = Column(String(16), nullable=False)  # 'number' или 'text'
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    values = relationship("AccountingFieldValue", back_populates="field", cascade="all, delete-orphan")
+
+
+class AccountingFieldValue(Base):
+    __tablename__ = "ACCOUNTING_FIELD_VALUE"
+    
+    value_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    client_id = Column(UUID(as_uuid=True), ForeignKey("CLIENT.client_id", ondelete="CASCADE"), nullable=False)
+    field_id = Column(UUID(as_uuid=True), ForeignKey("ACCOUNTING_CUSTOM_FIELD.field_id", ondelete="CASCADE"), nullable=False)
+    value_text = Column(Text, nullable=True)
+    value_number = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    client = relationship("Client", back_populates="accounting_values")
+    field = relationship("AccountingCustomField", back_populates="values")

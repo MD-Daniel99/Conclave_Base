@@ -260,7 +260,6 @@ if not st.session_state["token"]:
     ])
 else:
     pages_list = [
-        st.Page("views/Accounting.py", title="Бухгалтерия", icon="💰"),
         st.Page("views/Clients.py", title="Клиенты", icon="👥"),
         st.Page("views/Agents.py", title="Агенты", icon="🕵️"),
         st.Page("views/Warehouse.py", title="Склад", icon="📦"),
@@ -268,6 +267,7 @@ else:
     ]
 
     if str(st.session_state.get("role")).lower() == "admin":
+        pages_list.insert(0, st.Page("views/Accounting.py", title="Бухгалтерия", icon="💰"))
         pages_list.append(st.Page("views/Admin.py", title="Управление пользователями", icon="🛡️"))
 
     pg = st.navigation({

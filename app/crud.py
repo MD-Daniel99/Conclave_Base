@@ -203,6 +203,7 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         for m in m_q:
             modules_list.append(schemas.ModuleRead.from_orm(m).model_dump())
 
+    custom_fields = get_client_custom_field_values(db, client.client_id)
 
     result = {
         "client_id": client.client_id,
@@ -234,9 +235,9 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "prosthetist_salary": getattr(client, "prosthetist_salary", 0.0),
         "agent_salary": getattr(client, "agent_salary", 0.0),
         "support_salary": getattr(client, "support_salary", 0.0),
+        "custom_fields": custom_fields,
     }
 
-    
     return result
 
 
@@ -298,6 +299,7 @@ def get_client(db: Session, client_id: UUID) -> Optional[Dict[str, Any]]:
             selectinload(models.Client.passports),
             selectinload(models.Client.snils),
             selectinload(models.Client.modules),
+            selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
         )
     )
     client = db.execute(stmt).scalars().first()
@@ -325,6 +327,7 @@ def list_clients(
         selectinload(models.Client.passports),
         selectinload(models.Client.snils),
         selectinload(models.Client.modules),
+        selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
     )
 
     conditions = []
@@ -374,7 +377,8 @@ def update_client(db: Session, client_id: UUID, payload: Dict[str, Any]) -> Opti
     db.add(client)
     try:
         db.commit()
-        db.refresh(client)
+        db.expire(client)  # Сбрасываем кэш
+        db.refresh(client)  # Перезагружаем из БД
         return _client_to_dict(db, client)
     except Exception:
         db.rollback()
@@ -956,3 +960,95 @@ def delete_module_name_index(db: Session, name_index_id: UUID):
         return True
     else:
         return False
+
+# -------------------------
+# Accounting Custom Fields
+# -------------------------
+
+def get_accounting_custom_fields(db: Session, active_only: bool = True):
+    stmt = select(models.AccountingCustomField)
+    if active_only:
+        stmt = stmt.where(models.AccountingCustomField.is_active == True)
+    return db.execute(stmt.order_by(models.AccountingCustomField.field_name)).scalars().all()
+
+def create_accounting_custom_field(db: Session, field_name: str, field_type: str):
+    # проверка уникальности
+    existing = db.execute(
+        select(models.AccountingCustomField).where(models.AccountingCustomField.field_name == field_name)
+    ).scalars().first()
+    if existing:
+        raise ValueError(f"Field '{field_name}' already exists")
+    field = models.AccountingCustomField(field_name=field_name, field_type=field_type)
+    db.add(field)
+    db.commit()
+    db.refresh(field)
+    return field
+
+def delete_accounting_custom_field(db: Session, field_id: UUID):
+    field = db.get(models.AccountingCustomField, field_id)
+    if not field:
+        return False
+    db.delete(field)
+    db.commit()
+    return True
+
+def get_client_custom_field_values(db: Session, client_id: UUID) -> Dict[str, Any]:
+    """Возвращает словарь {field_name: value} для клиента"""
+    stmt = (
+        select(models.AccountingFieldValue, models.AccountingCustomField)
+        .join(models.AccountingCustomField)
+        .where(models.AccountingFieldValue.client_id == client_id)
+    )
+    result = db.execute(stmt).all()
+    values = {}
+    for val, field in result:
+        if field.field_type == 'number':
+            values[field.field_name] = val.value_number
+        else:
+            values[field.field_name] = val.value_text
+    return values
+
+def set_client_custom_field_values(db: Session, client_id: UUID, updates: List[Dict]):
+    """Обновляет значения кастомных полей для клиента.
+    updates - список вида [{"field_id": UUID, "value": ...}, ...]
+    """
+    for upd in updates:
+        field_id = upd["field_id"]
+        value = upd.get("value")
+        # Получаем поле, чтобы узнать тип
+        field = db.get(models.AccountingCustomField, field_id)
+        if not field:
+            continue
+        # Ищем существующую запись значения
+        stmt = select(models.AccountingFieldValue).where(
+            models.AccountingFieldValue.client_id == client_id,
+            models.AccountingFieldValue.field_id == field_id
+        )
+        existing = db.execute(stmt).scalars().first()
+        if existing:
+            if field.field_type == 'number':
+                existing.value_number = float(value) if value is not None and value != "" else None
+            else:
+                existing.value_text = str(value) if value is not None else None
+        else:
+            # создаём новую запись
+            new_val = models.AccountingFieldValue(
+                client_id=client_id,
+                field_id=field_id,
+                value_number=float(value) if field.field_type == 'number' and value not in (None, "") else None,
+                value_text=str(value) if field.field_type == 'text' and value is not None else None
+            )
+            db.add(new_val)
+    db.commit()
+
+def update_user_settings(db: Session, user_id: UUID, settings: dict):
+    user = db.get(models.User, user_id)
+    if not user:
+        return None
+    # Объединяем существующие настройки с новыми
+    current = user.settings or {}
+    current.update(settings)
+    user.settings = current
+    db.commit()
+    db.refresh(user)
+    return user

@@ -302,8 +302,9 @@ class ClientRead(ClientBase):
 
     modules: Optional[List["ModuleRead"]] = Field(default_factory = list)
 
-    model_config = ConfigDict(from_attributes=True)
+    custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
+    model_config = ConfigDict(from_attributes=True)
     
 
 # -------------------------
@@ -473,6 +474,7 @@ class UserRead(UserBase):
     is_active: bool
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+    settings: Optional[Dict[str, Any]] = None
 
 class UserLogin(BaseModel):
     username: str
@@ -484,6 +486,10 @@ class Token(BaseModel):
     role: str
     username: str
     user_id: UUID 
+
+class UserSettingsUpdate(BaseModel):
+    tax_percent: Optional[float] = None
+    acq_percent: Optional[float] = None
 
 # Documents storage
 class DocumentRead(BaseModel):
@@ -539,6 +545,31 @@ class ModuleNameIndexRead(BaseModel):
     id: UUID = Field(validation_alias="name_index_id")
     name_index: Optional[str]
     model_config = ConfigDict(from_attributes=True)
+
+# -------------------------
+# Accounting Custom Fields
+# -------------------------
+class AccountingCustomFieldBase(BaseModel):
+    field_name: str
+    field_type: str  # 'number' или 'text'
+
+class AccountingCustomFieldCreate(AccountingCustomFieldBase):
+    pass
+
+class AccountingCustomFieldRead(AccountingCustomFieldBase):
+    field_id: UUID
+    is_active: bool
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class AccountingFieldValueUpdate(BaseModel):
+    """Для обновления значений кастомных полей клиента"""
+    field_id: UUID
+    value: Optional[str | float] = None  # строка для text, число для number
+
+class AccountingValuesUpdate(BaseModel):
+    """Тело запроса на обновление нескольких значений"""
+    values: List[AccountingFieldValueUpdate]
 
 
 DocumentRead.model_rebuild()

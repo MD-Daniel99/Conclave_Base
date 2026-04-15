@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app import schemas, crud
 from app.db import get_db
 from uuid import UUID
+from app.schemas import UserSettingsUpdate
 
 router = APIRouter()
 
@@ -49,3 +50,16 @@ def update_user(user_id: UUID, payload: schemas.UserUpdate, db: Session = Depend
 @router.delete("/users/{user_id}", status_code=204)
 def delete_user(user_id: UUID, db: Session = Depends(get_db)):
     if not crud.delete_user(db, user_id): raise HTTPException(404, detail="User not found")
+
+# --- USER SETTINGS ---
+@router.get("/users/{user_id}/settings")
+def get_user_settings(user_id: UUID, db: Session = Depends(get_db)):
+    user = crud.get_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user.settings or {}
+
+@router.patch("/users/{user_id}/settings")
+def patch_user_settings(user_id: UUID, payload: UserSettingsUpdate, db: Session = Depends(get_db)):
+    crud.update_user_settings(db, user_id, payload.model_dump(exclude_unset=True))
+    return {"status": "ok"}

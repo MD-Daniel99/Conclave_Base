@@ -271,3 +271,31 @@ def add_ref_module_name_index(name_index: str):
 def delete_ref_module_name_index(name_index_id: str):
     get_ref_module_name_index.clear()
     handle_request("DELETE", f"{API_BASE}/references/name_index/{name_index_id}", headers=get_headers())
+
+
+# --- ACCOUNTING CUSTOM FIELDS ---
+@st.cache_data(ttl=60)
+def fetch_custom_fields():
+    return handle_request("GET", f"{API_BASE}/accounting/custom-fields", headers=get_headers())
+
+def create_custom_field(field_name: str, field_type: str):
+    handle_request("POST", f"{API_BASE}/accounting/custom-fields", json={"field_name": field_name, "field_type": field_type}, headers=get_headers())
+    fetch_custom_fields.clear()
+    st.cache_data.clear()
+
+def delete_custom_field(field_id: str):
+    handle_request("DELETE", f"{API_BASE}/accounting/custom-fields/{field_id}", headers=get_headers())
+    fetch_custom_fields.clear()
+    st.cache_data.clear()
+
+def patch_client_custom_values(client_id: str, values: list):
+    handle_request("PATCH", f"{API_BASE}/accounting/clients/{client_id}/custom-values", json={"values": values}, headers=get_headers())
+    st.cache_data.clear()
+
+#______________
+def fetch_user_settings(user_id: str):
+    return handle_request("GET", f"{API_BASE}/auth/users/{user_id}/settings", headers=get_headers())
+
+def patch_user_settings(user_id: str, payload: dict):
+    handle_request("PATCH", f"{API_BASE}/auth/users/{user_id}/settings", json=payload, headers=get_headers())
+    st.cache_data.clear()
