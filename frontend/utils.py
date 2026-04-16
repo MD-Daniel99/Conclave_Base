@@ -293,6 +293,7 @@ def patch_client_custom_values(client_id: str, values: list):
     st.cache_data.clear()
 
 #______________
+
 def fetch_user_settings(user_id: str):
     return handle_request("GET", f"{API_BASE}/auth/users/{user_id}/settings", headers=get_headers())
 

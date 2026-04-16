@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import sys
 import os
+from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import utils
@@ -11,7 +12,7 @@ if not st.session_state.get("token"):
     st.stop()
 
 user_id = st.session_state.get("user_id")
-utils.clear_caches()
+
 saved_settings = {}
 if user_id:
     try:
@@ -43,8 +44,14 @@ def parse_price(val):
     except:
         return 0.0
 
+if "saving_in_progress" not in st.session_state:
+    st.session_state.saving_in_progress = False
+
 # Функция автосохранения изменений из таблицы
 def save_accounting_edits():
+    if st.session_state.saving_in_progress:
+        return
+        
     changes = st.session_state.accounting_editor.get("edited_rows", {})
     if not changes: return
     
@@ -84,6 +91,7 @@ def save_accounting_edits():
             
     utils.clear_caches()
     st.toast("✅ Изменения сохранены!", icon="💰")
+   
 
 # --- ЗАГРУЗКА КАСТОМНЫХ ПОЛЕЙ (NEW) ---
 try:
@@ -93,6 +101,9 @@ except Exception as e:
     custom_fields = []
 st.session_state.custom_fields_list = custom_fields  # сохраняем для использования в save_accounting_edits
 
+if st.session_state.get("saving_in_progress"):
+    st.session_state.saving_in_progress = False
+    
 # --- ПАНЕЛЬ НАСТРОЕК ---
 with st.expander("⚙️ Настройки, проценты и фильтры", expanded=True):
     st.caption("Изменение процентов мгновенно пересчитает всю таблицу")
@@ -127,7 +138,7 @@ with st.expander("⚙️ Настройки, проценты и фильтры"
         with col_new_name:
             new_field_name = st.text_input("Имя поля", key="new_cf_name")
         with col_new_type:
-            new_field_type = st.selectbox("Тип", ["Число", "Текст"], key="new_cf_type")
+            new_field_type = st.selectbox("Тип", ["number", "text"], key="new_cf_type")
         with col_new_btn:
             st.write("")  # для выравнивания
             if st.button("➕ Создать", key="create_cf_btn"):
@@ -197,12 +208,12 @@ for c in clients:
     check_date_str = c.get("check_date")
     if check_date_str:
         try:
-            # дата в ответе приходит в формате "YYYY-MM-DD"
+            check_date_str = str(check_date_str).split("T")[0].split()[0]
             check_date_obj = datetime.strptime(check_date_str, "%Y-%m-%d").date()
-        except:
+        except Exception as e:
+            # Для отладки: раскомментируйте, чтобы увидеть проблемные даты
+            #бка парсинга даты для {c.get('last_name')}: {check_date_str} - {e}")
             check_date_obj = None
-    else:
-        check_date_obj = None
 
     if start_date and (not check_date_obj or check_date_obj < start_date):
         continue
@@ -258,8 +269,12 @@ for c in clients:
     }
     # NEW: Добавляем значения кастомных полей
     for fname in custom_field_names:
-        val = custom_fields_values.get(fname, "")
-        row[fname] = val
+        val = custom_fields_values.get(fname)
+        if field_type_map.get(fname) == "number":
+            # Для числовых полей используем 0.0 вместо None, иначе data_editor не позволит редактировать
+            row[fname] = float(val) if val is not None and val != "" else 0.0
+        else:
+            row[fname] = str(val) if val is not None else ""
     
     data_rows.append(row)
 
@@ -293,6 +308,7 @@ if data_rows:
         "ЗП Протезиста": st.column_config.NumberColumn("ЗП Протезиста ✏️", format="%,.2f ₽", min_value=0.0),
         "ЗП Агента": st.column_config.NumberColumn("ЗП Агента ✏️", format="%,.2f ₽", min_value=0.0),
         "ЗП Поддержки": st.column_config.NumberColumn("ЗП Поддержки ✏️", format="%,.2f ₽", min_value=0.0),
+        "Дата пробития": st.column_config.DateColumn("Дата пробития", format="DD.MM.YYYY"),
     }
     # NEW: Добавляем конфигурацию для кастомных полей
     for cf in custom_fields:
@@ -303,14 +319,23 @@ if data_rows:
         else:
             column_config[cf["field_name"]] = st.column_config.TextColumn(f"{cf['field_name']} ✏️")
 
-    st.data_editor(
+    # Флаг для принудительного обновления после сохранения
+    if "force_refresh" not in st.session_state:
+        st.session_state.force_refresh = False
+
+    editor_result = st.data_editor(
         df_display,
         key="accounting_editor",
-        on_change=save_accounting_edits,
         disabled=disabled_cols,
         hide_index=True,
         use_container_width=True,
         column_config=column_config
     )
-else:
-    st.info("Нет данных для отображения. Возможно, у всех клиентов стоит статус 'Отказ'.")
+
+    # Проверяем изменения и сохраняем
+    if st.session_state.accounting_editor.get("edited_rows") and not st.session_state.force_refresh:
+        save_accounting_edits()
+        st.session_state.force_refresh = True
+        st.rerun()
+    elif st.session_state.force_refresh:
+        st.session_state.force_refresh = False

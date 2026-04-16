@@ -1045,8 +1045,7 @@ def update_user_settings(db: Session, user_id: UUID, settings: dict):
     user = db.get(models.User, user_id)
     if not user:
         return None
-    # Объединяем существующие настройки с новыми
-    current = user.settings or {}
+    current = dict(user.settings) if user.settings else {}
     current.update(settings)
     user.settings = current
     db.commit()
