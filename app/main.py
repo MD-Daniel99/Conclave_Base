@@ -1,39 +1,56 @@
 # app/main.py
-import traceback
-import warnings
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from sqlalchemy.orm import Session
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
-# Импорты БД
 from app.db import engine, SessionLocal
 from app import models
 
-# 1. Создаем таблицы, если их нет
+try:
+    from app.config import settings
+except ImportError:
+    from config import settings
+
+from app.api import (
+    accounting,
+    agents,
+    audit,
+    auth,
+    clients,
+    documents,
+    modules,
+    passports,
+    phones,
+    references,
+    snils,
+    stages,
+    status as status_module,
+    accounting_report,
+    components,
+)
+
+# Для разработки оставляем create_all, но для production/миграции на Vue лучше перейти на Alembic.
 models.Base.metadata.create_all(bind=engine)
 
-# 2. Функция наполнения справочников (Скрипт инициализации)
-def init_db_data():
+
+def init_db_data() -> None:
     db = SessionLocal()
     try:
-        # --- СТАТУСЫ ---
         if db.query(models.Status).count() == 0:
-            print("Initializing Statuses...")
-            statuses = [
+            db.add_all([
                 models.Status(status_code="new", description="Новый"),
                 models.Status(status_code="work", description="В работе"),
                 models.Status(status_code="success", description="Успешно завершен"),
                 models.Status(status_code="fail", description="Отказ"),
                 models.Status(status_code="hold", description="Отложен"),
-            ]
-            db.add_all(statuses)
+            ])
             db.commit()
 
-        # --- ЭТАПЫ ---
         if db.query(models.Stage).count() == 0:
-            print("Initializing Stages...")
-            stages = [
+            db.add_all([
                 models.Stage(stage_code="contact", description="Первичный контакт"),
                 models.Stage(stage_code="meeting", description="Встреча/Переговоры"),
                 models.Stage(stage_code="kp", description="Отправлено КП"),
@@ -42,147 +59,77 @@ def init_db_data():
                 models.Stage(stage_code="production", description="В производстве"),
                 models.Stage(stage_code="shipping", description="Отгрузка"),
                 models.Stage(stage_code="done", description="Закрытие актов"),
-            ]
-            db.add_all(stages)
+            ])
             db.commit()
-            
-    except Exception as e:
-        print(f"Error initializing data: {e}")
+    except Exception:
         db.rollback()
+        raise
     finally:
         db.close()
 
-# 3. Запускаем инициализацию
+
 init_db_data()
-
-# Попытка импортировать роутеры
-clients_router = None
-agents_router = None
-stages_router = None
-status_router = None
-passports_router = None
-snils_router = None
-phones_router = None
-modules_router = None
-auth_router = None
-documents_router = None
-references_router = None
-accounting_router = None
-
-try:
-    from app.api import auth
-    auth_router = auth.router
-except Exception as e:
-    warnings.warn(f"Auth router fail: {e!r}")
-
-try:
-    from app.api import clients
-    clients_router = clients.router
-except Exception as e:
-    warnings.warn(f"Clients router fail: {e!r}")
-
-try:
-    from app.api import agents
-    agents_router = agents.router
-except Exception as e:
-    warnings.warn(f"Agents router fail: {e!r}")
-
-try:
-    from app.api import stages
-    stages_router = stages.router
-except Exception as e:
-    warnings.warn(f"Stages router fail: {e!r}")
-
-try:
-    from app.api import status as status_module
-    status_router = status_module.router
-except Exception as e:
-    warnings.warn(f"Status router fail: {e!r}")
-
-try:
-    from app.api import passports
-    passports_router = passports.router
-except Exception as e:
-    warnings.warn(f"Passports router fail: {e!r}")
-
-try:
-    from app.api import snils
-    snils_router = snils.router
-except Exception as e:
-    warnings.warn(f"Snils router fail: {e!r}")
-
-try:
-    from app.api import phones
-    phones_router = phones.router
-except Exception as e:
-    warnings.warn(f"Phones router fail: {e!r}")
-
-try:
-    from app.api import modules
-    modules_router = modules.router
-except Exception as e:
-    warnings.warn(f"Modules router fail: {e!r}")
-    traceback.print_exc() 
-
-# Documents api imports
-try:
-    from app.api import documents
-    documents_router = documents.router
-except Exception as e:
-    warnings.warn(f"Docs router fail: {e!r}")
-    traceback.print_exc() 
-
-try:
-    from app.api import references
-    references_router = references.router
-except Exception as e:
-    warnings.warn(f"References router fail: {e!r}")
-    traceback.print_exc() 
-
-try:
-    from app.api import accounting
-    accounting_router = accounting.router
-except Exception as e:
-    warnings.warn(f"Accounting router fail: {e!r}")
-    traceback.print_exc() 
-
-
 
 app = FastAPI(
     title="Documents API",
-    version="0.1.0",
-    description="API для хранения метаданных клиентов и ссылок на документы."
+    version="0.2.0",
+    description="API для хранения метаданных клиентов, документов, склада, бухгалтерии и аудита.",
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Подключение роутов
-if auth_router: app.include_router(auth_router, prefix="/auth", tags=["auth"])
-if clients_router: app.include_router(clients_router, prefix="/clients", tags=["clients"])
-if agents_router: app.include_router(agents_router, prefix="/agents", tags=["agents"])
-if stages_router: app.include_router(stages_router, prefix="/stages", tags=["stages"])
-if status_router: app.include_router(status_router, prefix="/status", tags=["status"])
-if passports_router: app.include_router(passports_router, prefix="/passports", tags=["documents"])
-if snils_router: app.include_router(snils_router, prefix="/snils", tags=["documents"])
-if phones_router: app.include_router(phones_router, prefix="/phones", tags=["clients"])
-if modules_router: app.include_router(modules_router, prefix="/modules", tags=["modules"])
-if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
-if documents_router: app.include_router(documents_router, prefix="/documents", tags=["documents"])
-if references_router: app.include_router(references_router, prefix = "/references", tags = ["references"])
-if accounting_router: app.include_router(accounting_router, prefix = "/accounting", tags = ["accounting"])
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(clients.router, prefix="/clients", tags=["clients"])
+app.include_router(agents.router, prefix="/agents", tags=["agents"])
+app.include_router(stages.router, prefix="/stages", tags=["stages"])
+app.include_router(status_module.router, prefix="/status", tags=["status"])
+app.include_router(passports.router, prefix="/passports", tags=["documents"])
+app.include_router(snils.router, prefix="/snils", tags=["documents"])
+app.include_router(phones.router, prefix="/phones", tags=["clients"])
+app.include_router(modules.router, prefix="/modules", tags=["modules"])
+app.include_router(components.router, prefix="/components", tags=["components"])
+app.include_router(documents.router, prefix="/documents", tags=["documents"])
+app.include_router(references.router, prefix="/references", tags=["references"])
+app.include_router(accounting.router, prefix="/accounting", tags=["accounting"])
+app.include_router(audit.router, prefix="/audit", tags=["audit"])
+app.include_router(accounting_report.router)
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend-vue" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+FRONTEND_ASSETS = FRONTEND_DIST / "assets"
+
+if FRONTEND_ASSETS.exists():
+    app.mount("/app/assets", StaticFiles(directory=str(FRONTEND_ASSETS)), name="frontend-assets")
+    # Совместимость со старыми сборками Vite, где assets могли быть прописаны от корня /assets/.
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_ASSETS)), name="frontend-assets-root")
+
+
 @app.get("/", response_class=HTMLResponse)
 def root():
+    if FRONTEND_INDEX.exists():
+        return RedirectResponse(url="/app/")
+
     return HTMLResponse(content="<h1>Server is running</h1>", status_code=200)
 
+
+@app.get("/app", include_in_schema=False)
+@app.get("/app/", include_in_schema=False)
+@app.get("/app/{full_path:path}", include_in_schema=False)
+def frontend_app(full_path: str = ""):
+    if FRONTEND_INDEX.exists():
+        return FileResponse(FRONTEND_INDEX)
+
+    return HTMLResponse(content="<h1>Frontend build not found</h1>", status_code=404)

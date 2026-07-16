@@ -1,62 +1,48 @@
 # syntax=docker/dockerfile:1
 
-# Comments are provided throughout this file to help you get started.
-# If you need more help, visit the Dockerfile reference guide at
-# https://docs.docker.com/go/dockerfile-reference/
-
-# Want to help us make this template better? Share your feedback here: https://forms.gle/ybq9Krt8jtBL3iCk7
-
 ARG PYTHON_VERSION=3.11.5
-FROM python:${PYTHON_VERSION}-slim as base
+ARG NODE_VERSION=22
 
-# Prevents Python from writing pyc files.
-ENV PYTHONDONTWRITEBYTECODE=1
-# Prevents Python from creating buffers
-ENV PYTHONUNBUFFERED=1
+FROM node:${NODE_VERSION}-alpine AS frontend-builder
+WORKDIR /frontend
 
-# Keeps Python from buffering stdout and stderr to avoid situations where
-# the application crashes without emitting any logs due to buffering.
-ENV PYTHONUNBUFFERED=1
+COPY frontend-vue/package*.json ./
+RUN npm ci
+
+COPY frontend-vue ./
+RUN npm run build
+
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/home/appuser
 
 WORKDIR /app
 
-# Create a non-privileged user that the app will run under.
-# See https://docs.docker.com/go/dockerfile-user-best-practices/
-#  --home "/home/appuser" \ -  тут Streamlit хранит свои настройки
 ARG UID=10001
 RUN adduser \
     --disabled-password \
     --gecos "" \
-    --home "/home/appuser" \ 
+    --home "/home/appuser" \
     --shell "/bin/bash" \
     --uid "${UID}" \
     appuser
 
-# Download dependencies as a separate step to take advantage of Docker's caching.
-# Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
-# Leverage a bind mount to requirements.txt to avoid having to copy them into
-# into this layer.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=bind,source=requirements.txt,target=requirements.txt \
-    python -m pip install -r requirements.txt
+COPY requirements.txt ./
+RUN python -m pip install --upgrade pip && \
+    python -m pip install --no-cache-dir -r requirements.txt
 
-# Switch to the non-privileged user to run the application.
-COPY --chown=appuser:appuser . .
+COPY --chown=appuser:appuser app ./app
+COPY --chown=appuser:appuser alembic ./alembic
+COPY --chown=appuser:appuser alembic.ini ./alembic.ini
+COPY --chown=appuser:appuser config.py ./config.py
+COPY --from=frontend-builder --chown=appuser:appuser /frontend/dist ./frontend-vue/dist
 
-# Создается папка для загрузки документов с обеспечением на неё прав, 
-# чтобы бэкенд не упал при попытке сохранить файл.
 RUN mkdir -p /app/storage && chown -R appuser:appuser /app/storage
 
 USER appuser
 
-# Указываем, где хранятся настройки (см. --home "/home/appuser" \)
-ENV HOME=/home/appuser
-
-# Copy the source code into the container.
-#COPY . .
-
-# Expose the port that the application listens on.
 EXPOSE 8000
 
-# Run the application.
-CMD uvicorn 'app.main:app' --host=0.0.0.0 --port=8000
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]

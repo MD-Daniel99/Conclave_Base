@@ -18,7 +18,7 @@ from typing import Optional, List, Any, Dict
 from uuid import UUID
 from datetime import datetime, date
 
-from pydantic import BaseModel, Field, constr, model_validator, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, constr, model_validator, ConfigDict
 
 # --- типы с базовой валидацией ---
 InnType = constr(pattern=r'^\d{10}(\d{2})?$', strip_whitespace=True)  # 10 или 12 цифр
@@ -34,13 +34,68 @@ class ClientSummary(BaseModel):
     last_name: str
     model_config = ConfigDict(from_attributes=True)
 
+
+class TsrSummary(BaseModel):
+    # ORM objects expose ``tsr_id``; the client serializer may pass the already
+    # normalized ``id`` key through a second validation step.
+    id: UUID = Field(validation_alias=AliasChoices("tsr_id", "id"))
+    full_tsr_code: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ModuleComponentBase(BaseModel):
+    component_index: str
+    supplier: str
+    quantity: int = 1
+    cost: float = 0.0
+    price: float = 0.0
+    ordered: str = "0"
+    received: str = "0"
+    pending: str = "0"
+    notes: Optional[str] = None
+
+
+class ModuleComponentCreate(ModuleComponentBase):
+    module_id: Optional[UUID] = None
+
+
+class ModuleComponentUpdate(BaseModel):
+    module_id: Optional[UUID] = None
+    component_index: Optional[str] = None
+    supplier: Optional[str] = None
+    quantity: Optional[int] = None
+    cost: Optional[float] = None
+    price: Optional[float] = None
+    ordered: Optional[str] = None
+    received: Optional[str] = None
+    pending: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ComponentModuleSummary(BaseModel):
+    module_id: UUID
+    module_name_index: Optional[str] = None
+    client_id: Optional[UUID] = None
+    client: Optional[ClientSummary] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ModuleComponentRead(ModuleComponentBase):
+    component_id: UUID
+    module_id: Optional[UUID] = None
+    module: Optional[ComponentModuleSummary] = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
 # -------------------------
 # Module
 # -------------------------
 class ModuleBase(BaseModel):
+    tsr_id: Optional[UUID] = None
     module_name_index: Optional[str] = None
     supplier: str
-    ordered: str
+    ordered: int = Field(default=0, ge=0)
     order_date_acc_num: str
     size: Optional[str] = None
     stiffness: Optional[str] = None
@@ -48,23 +103,30 @@ class ModuleBase(BaseModel):
     quantity: int = 0
     cost: float = 0.0
     price: float = 0.0
-    recd: str
-    pending: str
-    prosthetist_keep: Optional[str] = None
+    recd: int = Field(default=0, ge=0)
+    pending: int = Field(default=0, ge=0)
+    prosthetist_keep: int = Field(default=0, ge=0)
     properties: str
     notes: Optional[str] = None
 
 class ModuleCreate(ModuleBase):
     # Разрешаем None, чтобы модуль мог быть "ничьим"
     client_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _require_tsr(self):
+        if self.tsr_id is None:
+            raise ValueError("Для модуля необходимо выбрать ТСР.")
+        return self
     
 
 class ModuleUpdate(BaseModel):
     # Все поля опциональны для PATCH-запросов
     client_id: Optional[UUID] = None # Разрешаем перепривязку модуля
+    tsr_id: Optional[UUID] = None
     module_name_index: Optional[str] = None
     supplier: Optional[str] = None
-    ordered: Optional[str] = None
+    ordered: Optional[int] = Field(default=None, ge=0)
     order_date_acc_num: Optional[str] = None
     size: Optional[str] = None
     stiffness: Optional[str] = None
@@ -72,9 +134,9 @@ class ModuleUpdate(BaseModel):
     quantity: Optional[int] = None
     cost: Optional[float] = None
     price: Optional[float] = None
-    recd: Optional[str] = None
-    pending: Optional[str] = None
-    prosthetist_keep: Optional[str] = None
+    recd: Optional[int] = Field(default=None, ge=0)
+    pending: Optional[int] = Field(default=None, ge=0)
+    prosthetist_keep: Optional[int] = Field(default=None, ge=0)
     properties: Optional[str] = None
     notes: Optional[str] = None
 
@@ -82,6 +144,8 @@ class ModuleRead(ModuleBase):
     module_id: UUID
     client_id: Optional[UUID] = None 
     client: Optional[ClientSummary] = None # информация о клиенте-владельце 
+    tsr: Optional[TsrSummary] = None
+    components: List[ModuleComponentRead] = Field(default_factory=list)
     #module_name: str
     created_at: datetime
     updated_at: datetime
@@ -217,6 +281,12 @@ class ClientBase(BaseModel):
     prosthetist_salary: Optional[float] = 0.0
     agent_salary: Optional[float] = 0.0
     support_salary: Optional[float] = 0.0
+    prosthetist_work: Optional[float] = 0.0
+    patient_travel: Optional[float] = 0.0
+    patient_accommodation: Optional[float] = 0.0
+    patient_payment: Optional[float] = 0.0
+    other_expenses: Optional[float] = 0.0
+    agency_expenses: Optional[float] = 0.0
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -257,6 +327,12 @@ class ClientUpdate(BaseModel):
     prosthetist_salary: Optional[float] = None
     agent_salary: Optional[float] = None
     support_salary: Optional[float] = None
+    prosthetist_work: Optional[float] = None
+    patient_travel: Optional[float] = None
+    patient_accommodation: Optional[float] = None
+    patient_payment: Optional[float] = None
+    other_expenses: Optional[float] = None
+    agency_expenses: Optional[float] = None
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -496,29 +572,50 @@ class DocumentRead(BaseModel):
     document_id: UUID
     client_id: UUID
     filename: str
-    content_type: str
-    size: int
+    content_type: Optional[str] = None
+    size: Optional[int] = None
     created_at: datetime
+    document_type: Optional[str] = None
+    document_number: Optional[str] = None
+    contract_total: Optional[float] = None
+    certificate_amount: Optional[float] = None
+    contract_metadata: Optional[Dict[str, Any]] = None
     
     model_config = ConfigDict(from_attributes=True)
 
 class DocumentType:
-    DMK_CONTRACT = "dmk_contract"      
-    SDV_CONTRACT = "sdv_contract"       
-    DMK_INSTRUMENT = "dmk_instrument"   
-    SDV_INSTRUMENT = "sdv_instrument"   
-    LLC_CONTRACT = "llc_contract" 
+    LLC_CONTRACT = "llc_contract"
+    DMK_CONTRACT = "dmk_contract"
+    DMK_INSTRUMENT = "dmk_instrument"
 
-# Contract generation
+
 class ContractGeneration(BaseModel):
     template_type: str = DocumentType.LLC_CONTRACT
     document_number: str
     document_date: str
     plan_date: Optional[str] = None
+    document_number_prefix: Optional[str] = None
+    document_number_suffix: Optional[str] = None
+    appendix_number: Optional[str] = None
+    appendix_date: Optional[str] = None
+    selected_module_ids: List[UUID] = Field(default_factory=list)
+
+
+class ContractAccountingUpdate(BaseModel):
+    prosthetist_work: Optional[float] = None
+    patient_travel: Optional[float] = None
+    patient_accommodation: Optional[float] = None
+    patient_payment: Optional[float] = None
+    other_expenses: Optional[float] = None
+    agency_expenses: Optional[float] = None
+    custom_values: Optional[Dict[str, Any]] = None
 
 # References
 
 class ProsthesisRefCreate(BaseModel):
+    name: str
+
+class ProsthesisRefUpdate(BaseModel):
     name: str
 
 class ProsthesisRefRead(BaseModel):
@@ -529,8 +626,11 @@ class ProsthesisRefRead(BaseModel):
 class TstCodeRefCreate(BaseModel):
     full_tsr_code: str
 
+class TstCodeRefUpdate(BaseModel):
+    full_tsr_code: str
+
 class TstCodeRefRead(BaseModel):
-    id: UUID = Field(validation_alias="tsr_id")
+    id: UUID = Field(validation_alias=AliasChoices("tsr_id", "id"))
     full_tsr_code: Optional[str]
     model_config = ConfigDict(from_attributes = True)
 
@@ -576,5 +676,3 @@ DocumentRead.model_rebuild()
 
 ClientRead.model_rebuild() 
 UserRead.model_rebuild()
-
-

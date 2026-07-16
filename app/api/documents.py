@@ -1,65 +1,122 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+# app/api/documents.py
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
 from typing import List
 from uuid import UUID
-from sqlalchemy.orm import Session
 import os
 
-from app import schemas, crud
+from app import crud, models, schemas
+from app.api.deps import get_current_user
 from app.db import get_db
 from app.services import contracts
+from app.services.audit import log_action, snapshot
 
 router = APIRouter()
 
+ALLOWED_CONTENT_TYPES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
 @router.post("/clients/{client_id}/upload", response_model=schemas.DocumentRead)
-def upload_file(client_id: UUID, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_file(
+    client_id: UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Unsupported file type")
+    if getattr(file, "size", None) is not None and file.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File is too large")
     try:
-        return crud.upload_document(
-            db, 
-            client_id, 
-            file, 
-            file.filename, 
-            file.content_type
-        )
+        document = crud.upload_document(db, client_id, file, file.filename, file.content_type)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Upload failed: {e}")
+    log_action(db, entity="client", entity_id=client_id, action="document.upload", user=current_user, after=document)
+    return document
+
 
 @router.get("/clients/{client_id}/list", response_model=List[schemas.DocumentRead])
-def list_client_files(client_id: UUID, db: Session = Depends(get_db)):
-    # Здесь используем рукописную конвертацию, т.к. Pydantic V2 строгий
-    docs = crud.list_documents(db, client_id)
-    return docs
+def list_client_files(
+    client_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not crud.get_client(db, client_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+    return crud.list_documents(db, client_id)
+
+
+@router.get("/contract_templates")
+def list_contract_templates(
+    current_user: models.User = Depends(get_current_user),
+):
+    return contracts.list_contract_templates()
+
 
 @router.get("/download/{document_id}")
-def download_file(document_id: UUID, db: Session = Depends(get_db)):
+def download_file(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     doc = crud.get_document(db, document_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
     if not os.path.exists(doc.storage_path):
-        raise HTTPException(status_code=404, detail="File missing on disk")
-        
-    return FileResponse(
-        path=doc.storage_path, 
-        filename=doc.filename, 
-        media_type=doc.content_type
-    )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing on disk")
+    return FileResponse(path=doc.storage_path, filename=doc.filename, media_type=doc.content_type)
 
-@router.delete("/{document_id}", status_code=204)
-def delete_file(document_id: UUID, db: Session = Depends(get_db)):
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_file(
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    doc = crud.get_document(db, document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    client_id = doc.client_id
+    before = snapshot(doc)
     if not crud.delete_document(db, document_id):
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    log_action(db, entity="client", entity_id=client_id, action="document.delete", user=current_user, before=before)
+    return None
 
-@router.post("/clients/{client_id}/generate_contract", response_model = schemas.DocumentRead)
-def gen_contract(client_id: UUID, payload: schemas.ContractGeneration, db: Session = Depends(get_db)):
+
+@router.post("/clients/{client_id}/generate_contract", response_model=schemas.DocumentRead)
+def gen_contract(
+    client_id: UUID,
+    payload: schemas.ContractGeneration,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     try:
         contract = contracts.generate_contract(db, client_id, payload)
-        return contract
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="Template file missing on server")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Template file missing on server")
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        message = str(e)
+        code = status.HTTP_404_NOT_FOUND if "Клиент" in message else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=message)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Generation failed: {e}")
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action="document.generate_contract",
+        user=current_user,
+        after=contract,
+        details={"template_type": payload.template_type, "document_number": payload.document_number},
+    )
+    return contract

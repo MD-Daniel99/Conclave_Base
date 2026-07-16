@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from sqlalchemy import select, or_, func, and_
+from sqlalchemy import select, or_, func, and_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from datetime import datetime, timezone
@@ -13,6 +13,7 @@ from passlib.context import CryptContext
 import os
 import shutil
 import uuid
+import re
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto") 
 
@@ -235,6 +236,12 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "prosthetist_salary": getattr(client, "prosthetist_salary", 0.0),
         "agent_salary": getattr(client, "agent_salary", 0.0),
         "support_salary": getattr(client, "support_salary", 0.0),
+        "prosthetist_work": getattr(client, "prosthetist_work", 0.0),
+        "patient_travel": getattr(client, "patient_travel", 0.0),
+        "patient_accommodation": getattr(client, "patient_accommodation", 0.0),
+        "patient_payment": getattr(client, "patient_payment", 0.0),
+        "other_expenses": getattr(client, "other_expenses", 0.0),
+        "agency_expenses": getattr(client, "agency_expenses", 0.0),
         "custom_fields": custom_fields,
     }
 
@@ -298,7 +305,8 @@ def get_client(db: Session, client_id: UUID) -> Optional[Dict[str, Any]]:
             selectinload(models.Client.agent),
             selectinload(models.Client.passports),
             selectinload(models.Client.snils),
-            selectinload(models.Client.modules),
+            selectinload(models.Client.modules).selectinload(models.Module.tsr),
+            selectinload(models.Client.modules).selectinload(models.Module.components),
             selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
         )
     )
@@ -326,7 +334,8 @@ def list_clients(
         selectinload(models.Client.agent),
         selectinload(models.Client.passports),
         selectinload(models.Client.snils),
-        selectinload(models.Client.modules),
+        selectinload(models.Client.modules).selectinload(models.Module.tsr),
+        selectinload(models.Client.modules).selectinload(models.Module.components),
         selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
     )
 
@@ -389,6 +398,16 @@ def delete_client(db: Session, client_id: UUID) -> bool:
     client = db.get(models.Client, client_id)
     if not client:
         return False
+
+    # Важно: модули — это складские позиции. При удалении клиента они не должны
+    # удаляться каскадом; сначала отвязываем их и оставляем "на складе".
+    linked_modules = db.execute(
+        select(models.Module).where(models.Module.client_id == client_id)
+    ).scalars().all()
+    for module in linked_modules:
+        module.client_id = None
+
+    db.flush()
     db.delete(client)
     try:
         db.commit()
@@ -749,6 +768,9 @@ def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module
         client = db.get(models.Client, module_in.client_id)
         if not client:
             raise ValueError(f"Client with id {module_in.client_id} not found")
+
+    if not module_in.tsr_id or not db.get(models.TstCodeRef, module_in.tsr_id):
+        raise ValueError("Выбранный ТСР не найден")
     
     # Создаем объект модели
     db_module = models.Module(**module_in.model_dump())
@@ -759,7 +781,15 @@ def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module
     return db_module
 
 def get_module(db: Session, module_id: UUID) -> Optional[models.Module]:
-    return db.get(models.Module, module_id)
+    return db.execute(
+        select(models.Module)
+        .where(models.Module.module_id == module_id)
+        .options(
+            selectinload(models.Module.client),
+            selectinload(models.Module.tsr),
+            selectinload(models.Module.components),
+        )
+    ).scalars().first()
 
 def list_modules(
     db: Session, 
@@ -767,19 +797,26 @@ def list_modules(
     limit: int = 100, 
     q: Optional[str] = None, 
     supplier: Optional[str] = None, 
-    client_id: Optional[UUID] = None
+    client_id: Optional[UUID] = None,
+    unassigned: bool = False,
 ) -> List[models.Module]:
     
-    stmt = select(models.Module).options(selectinload(models.Module.client))
+    stmt = select(models.Module).options(
+        selectinload(models.Module.client),
+        selectinload(models.Module.tsr),
+        selectinload(models.Module.components),
+    )
 
     # условия фильтрации
     conditions = []
     if q:
-        conditions.append(models.Module.module_name.ilike(f"%{q}%"))
+        conditions.append(models.Module.module_name_index.ilike(f"%{q}%"))
     if supplier:
         conditions.append(models.Module.supplier.ilike(f"%{supplier}%"))
     if client_id:
         conditions.append(models.Module.client_id == client_id)
+    elif unassigned:
+        conditions.append(models.Module.client_id.is_(None))
     
     if conditions:
         stmt = stmt.where(and_(*conditions))
@@ -800,6 +837,12 @@ def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -
         client = db.get(models.Client, data['client_id'])
         if not client: raise ValueError("Target client not found")
 
+    if 'tsr_id' in data:
+        if data['tsr_id'] is None:
+            raise ValueError("Для модуля необходимо выбрать ТСР")
+        if not db.get(models.TstCodeRef, data['tsr_id']):
+            raise ValueError("Выбранный ТСР не найден")
+
     for k, v in data.items():
         setattr(db_module, k, v)
     
@@ -813,6 +856,79 @@ def delete_module(db: Session, module_id: UUID) -> bool:
     if not db_module:
         return False
     db.delete(db_module)
+    db.commit()
+    return True
+
+
+# -------------------------
+# Module components
+# -------------------------
+
+def create_component(db: Session, payload: schemas.ModuleComponentCreate) -> models.ModuleComponent:
+    if payload.module_id and not db.get(models.Module, payload.module_id):
+        raise ValueError("Выбранный модуль не найден")
+    component = models.ModuleComponent(**payload.model_dump())
+    db.add(component)
+    db.commit()
+    db.refresh(component)
+    return component
+
+
+def get_component(db: Session, component_id: UUID) -> Optional[models.ModuleComponent]:
+    return db.get(models.ModuleComponent, component_id)
+
+
+def list_components(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    q: Optional[str] = None,
+    supplier: Optional[str] = None,
+    module_id: Optional[UUID] = None,
+    unassigned: bool = False,
+) -> List[models.ModuleComponent]:
+    stmt = select(models.ModuleComponent).options(
+        selectinload(models.ModuleComponent.module).selectinload(models.Module.client)
+    )
+    conditions = []
+    if q:
+        conditions.append(models.ModuleComponent.component_index.ilike(f"%{q}%"))
+    if supplier:
+        conditions.append(models.ModuleComponent.supplier.ilike(f"%{supplier}%"))
+    if module_id:
+        conditions.append(models.ModuleComponent.module_id == module_id)
+    elif unassigned:
+        conditions.append(models.ModuleComponent.module_id.is_(None))
+    if conditions:
+        stmt = stmt.where(and_(*conditions))
+    return db.execute(
+        stmt.order_by(models.ModuleComponent.updated_at.desc()).offset(skip).limit(limit)
+    ).scalars().all()
+
+
+def update_component(
+    db: Session,
+    component_id: UUID,
+    payload: schemas.ModuleComponentUpdate,
+) -> Optional[models.ModuleComponent]:
+    component = db.get(models.ModuleComponent, component_id)
+    if not component:
+        return None
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("module_id") and not db.get(models.Module, data["module_id"]):
+        raise ValueError("Выбранный модуль не найден")
+    for key, value in data.items():
+        setattr(component, key, value)
+    db.commit()
+    db.refresh(component)
+    return component
+
+
+def delete_component(db: Session, component_id: UUID) -> bool:
+    component = db.get(models.ModuleComponent, component_id)
+    if not component:
+        return False
+    db.delete(component)
     db.commit()
     return True
 
@@ -835,8 +951,6 @@ def upload_document(db: Session, client_id: UUID, file_obj, filename: str, conte
     # 3. Убедимся, что папка существует
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     
-    print(f"Attempting to save file to: {file_path}")
-
     # 4. Сохраняем байты на диск
     # file_obj - это SpooledTemporaryFile от FastAPI
     with open(file_path, "wb") as buffer:
@@ -891,42 +1005,162 @@ def get_prosthesis(db: Session):
     return db.execute(select(models.ProsthesisRef).order_by(models.ProsthesisRef.name)).scalars().all()
 
 def create_prosthesis(db: Session, name: str):
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Название вида протеза не может быть пустым.")
+
     exists = db.execute(select(models.ProsthesisRef).where(models.ProsthesisRef.name == name)).scalars().first()
-    if exists: 
+    if exists:
         return exists
-    
-    new_prosthesis = models.ProsthesisRef(name = name)
+
+    new_prosthesis = models.ProsthesisRef(name=name)
     db.add(new_prosthesis)
     db.commit()
     db.refresh(new_prosthesis)
     return new_prosthesis
 
+def update_prosthesis(db: Session, prosthesis_id: UUID, name: str):
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Название вида протеза не может быть пустым.")
+
+    item = db.get(models.ProsthesisRef, prosthesis_id)
+    if not item:
+        return None
+
+    old_name = (item.name or "").strip()
+    if old_name == name:
+        return item
+
+    existing = db.execute(select(models.ProsthesisRef).where(models.ProsthesisRef.name == name)).scalars().first()
+    if existing and existing.prosthesis_id != prosthesis_id:
+        db.query(models.Client).filter(models.Client.prosthesis_type == old_name).update(
+            {models.Client.prosthesis_type: name},
+            synchronize_session=False,
+        )
+        db.delete(item)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    linked_clients = db.execute(
+        select(func.count()).select_from(models.Client).where(models.Client.prosthesis_type == old_name)
+    ).scalar_one()
+
+    if linked_clients:
+        replacement = models.ProsthesisRef(name=name)
+        db.add(replacement)
+        db.flush()
+        db.query(models.Client).filter(models.Client.prosthesis_type == old_name).update(
+            {models.Client.prosthesis_type: name},
+            synchronize_session=False,
+        )
+        db.delete(item)
+        db.commit()
+        db.refresh(replacement)
+        return replacement
+
+    item.name = name
+    db.commit()
+    db.refresh(item)
+    return item
+
 def delete_prosthesis(db: Session, prosthesis_id: UUID):
     prosthesis_to_delete = db.get(models.ProsthesisRef, prosthesis_id)
-    if prosthesis_to_delete:
-        db.delete(prosthesis_to_delete)
-        db.commit()
-        return True
-    else:
+    if not prosthesis_to_delete:
         return False
+
+    linked_clients = db.execute(
+        select(func.count()).select_from(models.Client).where(models.Client.prosthesis_type == prosthesis_to_delete.name)
+    ).scalar_one()
+    if linked_clients:
+        raise ValueError("Этот вид протеза используется в карточках клиентов. Сначала замените его в клиентах или переименуйте справочник.")
+
+    db.delete(prosthesis_to_delete)
+    db.commit()
+    return True
 
 def get_tsr(db: Session):
     return db.execute(select(models.TstCodeRef).order_by(models.TstCodeRef.full_tsr_code)).scalars().all()
 
 def create_tsr(db: Session, full_tsr_code: str):
+    full_tsr_code = (full_tsr_code or "").strip()
+    if not full_tsr_code:
+        raise ValueError("Код ТСР не может быть пустым.")
+
     exists = db.execute(select(models.TstCodeRef).where(models.TstCodeRef.full_tsr_code == full_tsr_code)).scalars().first()
     if exists:
         return exists
-    
-    new_tsr = models.TstCodeRef(full_tsr_code = full_tsr_code)
+
+    new_tsr = models.TstCodeRef(full_tsr_code=full_tsr_code)
     db.add(new_tsr)
     db.commit()
     db.refresh(new_tsr)
     return new_tsr
 
+def _replace_tsr_code_in_clients(db: Session, old_code: str, new_code: str):
+    if not old_code or old_code == new_code:
+        return
+
+    clients = db.execute(select(models.Client).where(models.Client.tsr_code.isnot(None))).scalars().all()
+    for client in clients:
+        raw_value = client.tsr_code or ""
+        parts = [part.strip() for part in raw_value.replace(";", "\n").splitlines()]
+        changed = False
+        replaced_parts = []
+
+        for part in parts:
+            if not part:
+                continue
+            if part == old_code:
+                replaced_parts.append(new_code)
+                changed = True
+            else:
+                replaced_parts.append(part)
+
+        if changed:
+            client.tsr_code = "\n".join(dict.fromkeys(replaced_parts))
+
+def update_tsr(db: Session, tsr_id: UUID, full_tsr_code: str):
+    full_tsr_code = (full_tsr_code or "").strip()
+    if not full_tsr_code:
+        raise ValueError("Код ТСР не может быть пустым.")
+
+    item = db.get(models.TstCodeRef, tsr_id)
+    if not item:
+        return None
+
+    old_code = (item.full_tsr_code or "").strip()
+    if old_code == full_tsr_code:
+        return item
+
+    existing = db.execute(select(models.TstCodeRef).where(models.TstCodeRef.full_tsr_code == full_tsr_code)).scalars().first()
+    if existing and existing.tsr_id != tsr_id:
+        _replace_tsr_code_in_clients(db, old_code, full_tsr_code)
+        db.execute(
+            update(models.Module)
+            .where(models.Module.tsr_id == tsr_id)
+            .values(tsr_id=existing.tsr_id)
+        )
+        db.delete(item)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    item.full_tsr_code = full_tsr_code
+    _replace_tsr_code_in_clients(db, old_code, full_tsr_code)
+    db.commit()
+    db.refresh(item)
+    return item
+
 def delete_tsr(db: Session, tsr_id: UUID):
     tsr_to_delete = db.get(models.TstCodeRef, tsr_id)
     if tsr_to_delete:
+        linked_modules = db.execute(
+            select(func.count()).select_from(models.Module).where(models.Module.tsr_id == tsr_id)
+        ).scalar_one()
+        if linked_modules:
+            raise ValueError("Этот ТСР используется в модулях. Сначала назначьте им другой ТСР.")
         db.delete(tsr_to_delete)
         db.commit()
         return True
@@ -964,6 +1198,35 @@ def delete_module_name_index(db: Session, name_index_id: UUID):
 # -------------------------
 # Accounting Custom Fields
 # -------------------------
+
+
+
+def _parse_custom_number(value: Any, field_name: str) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    raw = str(value).strip()
+    if raw == "":
+        return None
+
+    normalized = (
+        raw.replace("\u00a0", " ")
+        .replace("\u202f", " ")
+        .replace(" ", "")
+        .replace("−", "-")
+        .replace(",", ".")
+    )
+    cleaned = re.sub(r"[^0-9.\-]", "", normalized)
+    if cleaned.count(".") > 1:
+        parts = cleaned.split(".")
+        cleaned = "".join(parts[:-1]) + "." + parts[-1]
+
+    try:
+        return float(cleaned)
+    except ValueError as exc:
+        raise ValueError(f"Поле '{field_name}' должно быть числом. Получено: {raw}") from exc
 
 def get_accounting_custom_fields(db: Session, active_only: bool = True):
     stmt = select(models.AccountingCustomField)
@@ -1009,37 +1272,48 @@ def get_client_custom_field_values(db: Session, client_id: UUID) -> Dict[str, An
     return values
 
 def set_client_custom_field_values(db: Session, client_id: UUID, updates: List[Dict]):
-    """Обновляет значения кастомных полей для клиента.
-    updates - список вида [{"field_id": UUID, "value": ...}, ...]
-    """
     for upd in updates:
         field_id = upd["field_id"]
         value = upd.get("value")
-        # Получаем поле, чтобы узнать тип
         field = db.get(models.AccountingCustomField, field_id)
         if not field:
             continue
-        # Ищем существующую запись значения
         stmt = select(models.AccountingFieldValue).where(
             models.AccountingFieldValue.client_id == client_id,
             models.AccountingFieldValue.field_id == field_id
         )
         existing = db.execute(stmt).scalars().first()
-        if existing:
-            if field.field_type == 'number':
-                existing.value_number = float(value) if value is not None and value != "" else None
+        if field.field_type == 'number':
+            parsed_number = _parse_custom_number(value, field.field_name)
+            if existing:
+                existing.value_number = parsed_number
+                existing.value_text = None
             else:
-                existing.value_text = str(value) if value is not None else None
+                new_val = models.AccountingFieldValue(
+                    client_id=client_id,
+                    field_id=field_id,
+                    value_number=parsed_number,
+                    value_text=None,
+                )
+                db.add(new_val)
         else:
-            # создаём новую запись
-            new_val = models.AccountingFieldValue(
-                client_id=client_id,
-                field_id=field_id,
-                value_number=float(value) if field.field_type == 'number' and value not in (None, "") else None,
-                value_text=str(value) if field.field_type == 'text' and value is not None else None
-            )
-            db.add(new_val)
-    db.commit()
+            parsed_text = str(value) if value is not None else None
+            if existing:
+                existing.value_text = parsed_text
+                existing.value_number = None
+            else:
+                new_val = models.AccountingFieldValue(
+                    client_id=client_id,
+                    field_id=field_id,
+                    value_number=None,
+                    value_text=parsed_text,
+                )
+                db.add(new_val)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 def update_user_settings(db: Session, user_id: UUID, settings: dict):
     user = db.get(models.User, user_id)

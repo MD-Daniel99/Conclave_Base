@@ -1,0 +1,205 @@
+import type {
+  AccountingCustomFieldRead,
+  AgentRead,
+  AgentCreate,
+  AgentUpdate,
+  AgentSummary,
+  AuditLogRead,
+  ClientRead,
+  ClientCreate,
+  ClientUpdate,
+  ContractGeneration,
+  DocumentRead,
+  ModuleCreate,
+  ModuleNameIndexRead,
+  ModuleRead,
+  ModuleUpdate,
+  PassportCreate,
+  PassportRead,
+  PassportUpdate,
+  PhoneCreate,
+  PhoneRead,
+  PhoneUpdate,
+  ProsthesisRefRead,
+  SnilsCreate,
+  SnilsRead,
+  SnilsUpdate,
+  StageRead,
+  StatusRead,
+  TstCodeRefRead,
+} from '@/shared/api/generated/types.gen'
+
+export type Agent = AgentRead
+export type Client = ClientRead
+export type ClientPhone = PhoneRead
+export type ClientPhoneCreate = PhoneCreate
+export type ClientPhoneUpdate = PhoneUpdate
+export type ClientPassport = PassportRead
+export type ClientPassportCreate = PassportCreate
+export type ClientPassportUpdate = PassportUpdate
+export type ClientSnils = SnilsRead
+export type ClientSnilsCreate = SnilsCreate
+export type ClientSnilsUpdate = SnilsUpdate
+export type ClientCreatePayload = ClientCreate
+export type ClientUpdatePayload = ClientUpdate
+export type ClientDocument = DocumentRead
+export type ContractGenerationPayload = ContractGeneration
+export type ModuleItem = ModuleRead
+export type ModuleCreatePayload = ModuleCreate
+export type ModuleUpdatePayload = ModuleUpdate
+export type ModuleComponentItem = import('@/shared/api/generated/types.gen').ModuleComponentRead
+export type ModuleComponentPayload = Omit<ModuleComponentItem, 'component_id' | 'created_at' | 'updated_at' | 'module'>
+export type AuditLogItem = AuditLogRead
+
+export type {
+  AgentCreate,
+  AgentUpdate,
+  AgentRead,
+  AgentSummary,
+  AccountingCustomFieldRead,
+  ClientCreate,
+  ClientRead,
+  ClientUpdate,
+  ContractGeneration,
+  DocumentRead,
+  ModuleCreate,
+  ModuleRead,
+  ModuleUpdate,
+  PassportCreate,
+  PassportRead,
+  PassportUpdate,
+  PhoneCreate,
+  PhoneRead,
+  PhoneUpdate,
+  SnilsCreate,
+  SnilsRead,
+  SnilsUpdate,
+  StageRead,
+  StatusRead,
+  TstCodeRefRead,
+}
+
+export type ReferenceItem = Partial<
+  StatusRead & StageRead & TstCodeRefRead & ProsthesisRefRead & ModuleNameIndexRead
+> & {
+  id?: string | number
+  prosthesis_id?: string | number
+  tsr_id?: string | number
+  name_index_id?: string | number
+  code?: string
+  name?: string | null
+  status_code?: string
+  stage_code?: string
+  full_tsr_code?: string | null
+  name_index?: string | null
+  description?: string
+  title?: string
+  [key: string]: unknown
+}
+
+export interface AccountingCustomField extends Partial<AccountingCustomFieldRead> {
+  id?: string
+  name?: string
+  label?: string
+  title?: string
+  type?: string
+  [key: string]: unknown
+}
+
+export interface AccountingReportClient {
+  client_id?: string | null
+  external_id?: number
+  full_name: string
+  status?: string | null
+  current_stage?: string | null
+  agent_id?: string | null
+  date?: string | null
+}
+
+export interface AccountingReportAmounts {
+  revenue: number
+  cost: number
+  salary: number
+  custom_expenses: number
+  tax: number
+  acquiring: number
+  profit: number
+}
+
+export interface AccountingReportField {
+  key: string
+  label: string
+  type: string
+}
+
+export interface AccountingReportRow {
+  client: AccountingReportClient
+  amounts: AccountingReportAmounts
+  custom_values: Record<string, number>
+}
+
+export interface AccountingReport {
+  filters: {
+    start_date?: string | null
+    end_date?: string | null
+    hide_failed: boolean
+    tax_percent: number
+    acquiring_percent: number
+  }
+  custom_fields: AccountingReportField[]
+  rows: AccountingReportRow[]
+  totals: AccountingReportAmounts
+}
+
+export interface ContractAccountingAmounts {
+  certificate: number
+  modules_cost: number
+  prosthetist_work: number
+  patient_travel: number
+  patient_accommodation: number
+  patient_payment: number
+  other_expenses: number
+  agency_expenses: number
+  custom_expenses: number
+  tax: number
+  acquiring: number
+  profit: number
+}
+
+export interface ContractAccountingRow {
+  document: {
+    document_id: string
+    filename: string
+    document_number?: string | null
+    document_type?: string | null
+    created_at?: string | null
+    date?: string | null
+  }
+  client: {
+    client_id: string
+    full_name: string
+    short_name: string
+    status?: string | null
+    current_stage?: string | null
+  }
+  amounts: ContractAccountingAmounts
+  custom_values: Record<string, string | number>
+}
+
+export interface ContractAccountingReport {
+  custom_fields: AccountingReportField[]
+  rows: ContractAccountingRow[]
+  totals: ContractAccountingAmounts
+}
+
+export interface ClientContractCoverage {
+  client_id: string
+  is_working: boolean
+  requires_contract: boolean
+  contract_count: number
+  total_modules: number
+  covered_modules: number
+  latest_contract_date?: string | null
+  uncovered_module_ids: string[]
+  uncovered_module_names: string[]
+}

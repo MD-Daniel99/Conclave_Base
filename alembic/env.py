@@ -4,6 +4,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool 
+from sqlalchemy.engine import URL
 
 from alembic import context
 
@@ -15,6 +16,20 @@ sys.path.insert(0, project_root)
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Docker must connect to the Compose service (DB_HOST=postgres), not to
+# localhost inside the application container.  Keep alembic.ini as a fallback
+# for local legacy launches where DB_* variables are not exported.
+if all(os.getenv(name) for name in ("DB_USER", "DB_PASSWORD", "DB_HOST", "DB_NAME")):
+    runtime_url = URL.create(
+        drivername="postgresql+psycopg2",
+        username=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+        host=os.environ["DB_HOST"],
+        port=int(os.getenv("DB_PORT", "5432")),
+        database=os.environ["DB_NAME"],
+    ).render_as_string(hide_password=False)
+    config.set_main_option("sqlalchemy.url", runtime_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
