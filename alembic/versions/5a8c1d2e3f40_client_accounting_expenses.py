@@ -23,11 +23,32 @@ EXPENSE_COLUMNS = (
     "other_expenses",
     "agency_expenses",
 )
-
+LEGACY_EXPENSE_COLUMNS = (
+    "prosthetist_salary",
+    "agent_salary",
+    "support_salary",
+)
 
 def upgrade() -> None:
     bind = op.get_bind()
-    existing = {column["name"] for column in sa.inspect(bind).get_columns("CLIENT")}
+    existing = {
+        column["name"]
+        for column in sa.inspect(bind).get_columns("CLIENT")
+    }
+
+    # Эти колонки всё ещё используются текущим приложением,
+    # но в старой цепочке Alembic они создавались не всегда.
+    for column_name in LEGACY_EXPENSE_COLUMNS:
+        if column_name not in existing:
+            op.add_column(
+                "CLIENT",
+                sa.Column(
+                    column_name,
+                    sa.Float(),
+                    nullable=False,
+                    server_default=sa.text("0"),
+                ),
+            )
 
     for column_name in EXPENSE_COLUMNS:
         if column_name not in existing:
@@ -41,8 +62,7 @@ def upgrade() -> None:
                 ),
             )
 
-    # Preserve values entered in the previous three-column client accounting.
-    bind.execute(sa.text('''
+    bind.execute(sa.text("""
         UPDATE "CLIENT"
         SET prosthetist_work = COALESCE(prosthetist_salary, 0),
             agency_expenses = COALESCE(agent_salary, 0),
@@ -50,7 +70,7 @@ def upgrade() -> None:
         WHERE prosthetist_work = 0
           AND agency_expenses = 0
           AND other_expenses = 0
-    '''))
+    """))
 
 
 def downgrade() -> None:

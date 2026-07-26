@@ -30,7 +30,19 @@ import type {
 } from '@/shared/api/generated/types.gen'
 
 export type Agent = AgentRead
-export type Client = ClientRead
+export type Client = Omit<ClientRead, 'modules'> & {
+  prosthetist?: string | null
+  is_archived?: boolean
+  taxation_system?: 'УСН' | 'ОСНО'
+  prosthetist_work?: number | null
+  patient_travel?: number | null
+  patient_accommodation?: number | null
+  patient_meals?: number | null
+  patient_payment?: number | null
+  other_expenses?: number | null
+  agency_expenses?: number | null
+  modules?: ComponentItem[]
+}
 export type ClientPhone = PhoneRead
 export type ClientPhoneCreate = PhoneCreate
 export type ClientPhoneUpdate = PhoneUpdate
@@ -40,15 +52,33 @@ export type ClientPassportUpdate = PassportUpdate
 export type ClientSnils = SnilsRead
 export type ClientSnilsCreate = SnilsCreate
 export type ClientSnilsUpdate = SnilsUpdate
-export type ClientCreatePayload = ClientCreate
-export type ClientUpdatePayload = ClientUpdate
+export type ClientCreatePayload = ClientCreate & {
+  prosthetist?: string | null
+  taxation_system?: 'УСН' | 'ОСНО'
+}
+export type ClientUpdatePayload = ClientUpdate & {
+  prosthetist?: string | null
+  taxation_system?: 'УСН' | 'ОСНО'
+  prosthetist_work?: number | null
+  patient_travel?: number | null
+  patient_accommodation?: number | null
+  patient_meals?: number | null
+  patient_payment?: number | null
+  other_expenses?: number | null
+  agency_expenses?: number | null
+}
 export type ClientDocument = DocumentRead
 export type ContractGenerationPayload = ContractGeneration
-export type ModuleItem = ModuleRead
+export type ComponentItem = ModuleRead & {
+  is_archived?: boolean
+  is_manually_archived?: boolean
+}
+export type ComponentCreatePayload = ModuleCreate
+export type ComponentUpdatePayload = ModuleUpdate
+// Внутренние имена API сохранены для совместимости со схемой БД.
+export type ModuleItem = ComponentItem
 export type ModuleCreatePayload = ModuleCreate
 export type ModuleUpdatePayload = ModuleUpdate
-export type ModuleComponentItem = import('@/shared/api/generated/types.gen').ModuleComponentRead
-export type ModuleComponentPayload = Omit<ModuleComponentItem, 'component_id' | 'created_at' | 'updated_at' | 'module'>
 export type AuditLogItem = AuditLogRead
 
 export type {
@@ -114,6 +144,7 @@ export interface AccountingReportClient {
   current_stage?: string | null
   agent_id?: string | null
   date?: string | null
+  taxation_system?: 'УСН' | 'ОСНО'
 }
 
 export interface AccountingReportAmounts {
@@ -144,6 +175,8 @@ export interface AccountingReport {
     end_date?: string | null
     hide_failed: boolean
     tax_percent: number
+    tax_usn_percent?: number
+    tax_osno_percent?: number
     acquiring_percent: number
   }
   custom_fields: AccountingReportField[]
@@ -153,17 +186,24 @@ export interface AccountingReport {
 
 export interface ContractAccountingAmounts {
   certificate: number
+  certificate_original?: number
+  certificate_remaining?: number
   modules_cost: number
   prosthetist_work: number
   patient_travel: number
   patient_accommodation: number
+  patient_meals: number
   patient_payment: number
   other_expenses: number
   agency_expenses: number
   custom_expenses: number
   tax: number
+  tax_percent?: number
   acquiring: number
   profit: number
+  applies_percentage_expenses?: boolean
+  contract_index?: number
+  contract_count?: number
 }
 
 export interface ContractAccountingRow {
@@ -172,8 +212,8 @@ export interface ContractAccountingRow {
     filename: string
     document_number?: string | null
     document_type?: string | null
-    created_at?: string | null
     date?: string | null
+    created_at?: string | null
   }
   client: {
     client_id: string
@@ -181,6 +221,7 @@ export interface ContractAccountingRow {
     short_name: string
     status?: string | null
     current_stage?: string | null
+    taxation_system?: 'УСН' | 'ОСНО'
   }
   amounts: ContractAccountingAmounts
   custom_values: Record<string, string | number>

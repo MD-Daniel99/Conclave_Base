@@ -15,8 +15,6 @@ import type { AuditLogItem } from '@/shared/types/entities'
 import type { User } from '@/shared/types/auth'
 
 type UserForm = {
-  username: string
-  password: string
   role: 'user' | 'admin'
   is_active: boolean
 }
@@ -40,8 +38,6 @@ const newUser = reactive({
 })
 
 const editForm = reactive<UserForm>({
-  username: '',
-  password: '',
   role: 'user',
   is_active: true,
 })
@@ -60,8 +56,7 @@ const visibleUsers = computed(() => {
   return users.value.filter((user) => {
     return (
       user.username.toLowerCase().includes(needle) ||
-      user.role.toLowerCase().includes(needle) ||
-      String(user.user_id).toLowerCase().includes(needle)
+      user.role.toLowerCase().includes(needle)
     )
   })
 })
@@ -85,8 +80,6 @@ function resetMessages() {
 }
 
 function fillEditForm(user: User) {
-  editForm.username = user.username ?? ''
-  editForm.password = ''
   editForm.role = user.role === 'admin' ? 'admin' : 'user'
   editForm.is_active = Boolean(user.is_active)
 }
@@ -104,8 +97,6 @@ function resetSelection() {
   selectedUser.value = null
   userAuditItems.value = []
   auditError.value = ''
-  editForm.username = ''
-  editForm.password = ''
   editForm.role = 'user'
   editForm.is_active = true
   resetMessages()
@@ -176,16 +167,6 @@ function validateEditUser() {
     return false
   }
 
-  if (!editForm.username.trim()) {
-    error.value = 'Логин пользователя не может быть пустым'
-    return false
-  }
-
-  if (editForm.password && editForm.password.length < 6) {
-    error.value = 'Новый пароль должен быть не короче 6 символов'
-    return false
-  }
-
   if (isSelfSelected.value) {
     if (editForm.role !== selectedUser.value.role) {
       error.value = 'Нельзя изменить собственную роль'
@@ -240,25 +221,15 @@ async function saveSelectedUser() {
   isSaving.value = true
 
   try {
-    const payload: Parameters<typeof updateUser>[1] = {
-      username: editForm.username.trim(),
-    }
+    const payload: Parameters<typeof updateUser>[1] = {}
 
     if (!isSelfSelected.value) {
       payload.role = editForm.role
       payload.is_active = editForm.is_active
     }
 
-    if (editForm.password) {
-      payload.password = editForm.password
-    }
-
     const updated = await updateUser(selectedUser.value.user_id, payload)
     successMessage.value = 'Пользователь обновлен'
-
-    if (updated.user_id === authStore.user?.user_id) {
-      authStore.user = updated
-    }
 
     await loadUsers()
     await selectUser(updated)
@@ -429,25 +400,11 @@ onMounted(loadUsers)
         </div>
 
         <p v-if="!selectedUser" class="form-hint">
-          Выберите пользователя в таблице, чтобы изменить роль, активность, логин или пароль.
+          Выберите пользователя в таблице, чтобы изменить роль или активность.
+          Логин и пароль каждый пользователь меняет в собственных настройках.
         </p>
 
         <form v-else class="flat-form" @submit.prevent="saveSelectedUser">
-          <label>
-            Логин *
-            <input v-model="editForm.username" required />
-          </label>
-
-          <label>
-            Новый пароль
-            <input
-              v-model="editForm.password"
-              autocomplete="new-password"
-              placeholder="Оставьте пустым, чтобы не менять"
-              type="password"
-            />
-          </label>
-
           <div class="form-grid">
             <label>
               Роль
@@ -464,10 +421,10 @@ onMounted(loadUsers)
           </div>
 
           <p v-if="isSelfSelected" class="form-hint">
-            Собственную роль, блокировку и удаление менять нельзя. Логин и пароль можно обновить.
+            Собственную роль, блокировку и удаление менять нельзя. Логин и пароль доступны в разделе «Настройки».
           </p>
 
-          <button class="primary-button" type="submit" :disabled="isSaving">
+          <button class="primary-button" type="submit" :disabled="isSaving || isSelfSelected">
             {{ isSaving ? 'Сохраняем...' : 'Сохранить изменения' }}
           </button>
 

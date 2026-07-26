@@ -1,18 +1,38 @@
 import { api } from './http'
-import type { ModuleComponentItem, ModuleComponentPayload } from '@/shared/types/entities'
+import type { ComponentCreatePayload, ComponentItem, ComponentUpdatePayload } from '@/shared/types/entities'
 
-export async function fetchComponents(params: Record<string, unknown> = {}) {
-  const { data } = await api.get<ModuleComponentItem[]>('/components/', { params })
+export interface ListComponentsParams {
+  skip?: number
+  limit?: number
+  q?: string
+  supplier?: string
+  client_id?: string
+  unassigned?: boolean
+  archived?: boolean
+}
+
+export async function fetchComponents(params: ListComponentsParams = {}) {
+  const { data } = await api.get<ComponentItem[]>('/components/', { params })
   return data
 }
 
-export async function createComponent(payload: ModuleComponentPayload) {
-  const { data } = await api.post<ModuleComponentItem>('/components/', payload)
+export async function createComponent(payload: ComponentCreatePayload) {
+  const { data } = await api.post<ComponentItem>('/components/', payload)
   return data
 }
 
-export async function updateComponent(componentId: string, payload: Partial<ModuleComponentPayload>) {
-  const { data } = await api.patch<ModuleComponentItem>(`/components/${componentId}`, payload)
+export async function updateComponent(componentId: string, payload: ComponentUpdatePayload) {
+  const { data } = await api.patch<ComponentItem>(`/components/${componentId}`, payload)
+  return data
+}
+
+export async function archiveComponent(componentId: string) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/archive`)
+  return data
+}
+
+export async function restoreComponent(componentId: string) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/restore`)
   return data
 }
 

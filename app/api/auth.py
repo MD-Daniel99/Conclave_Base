@@ -106,15 +106,21 @@ def update_user(
     require_self_or_admin(user_id, current_user)
 
     is_admin = str(current_user.role).lower() == "admin"
+    is_self = user_id == current_user.user_id
+    if not is_self and (payload.username is not None or payload.password is not None):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Логин и пароль пользователь меняет только в собственных настройках",
+        )
     if not is_admin and (payload.role is not None or payload.is_active is not None):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Роль и активность может менять только администратор")
 
     before = crud.get_user(db, user_id)
     if not before:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if user_id == current_user.user_id and payload.is_active is False:
+    if is_self and payload.is_active is False:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя заблокировать самого себя")
-    if user_id == current_user.user_id and payload.role is not None and payload.role != current_user.role:
+    if is_self and payload.role is not None and payload.role != current_user.role:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя изменить собственную роль")
 
     before_snapshot = {c.name: getattr(before, c.name) for c in before.__table__.columns if c.name != "password_hash"}
@@ -126,7 +132,16 @@ def update_user(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     after_snapshot = {c.name: getattr(user, c.name) for c in user.__table__.columns if c.name != "password_hash"}
-    log_action(db, entity="user", entity_id=user.user_id, action="update", user=current_user, before=before_snapshot, after=after_snapshot)
+    log_action(
+        db,
+        entity="user",
+        entity_id=user.user_id,
+        action="update",
+        user=current_user,
+        before=before_snapshot,
+        after=after_snapshot,
+        details={"password_changed": payload.password is not None},
+    )
     return user
 
 

@@ -8,12 +8,12 @@ export default defineConfig({
         alias: {
             '@': srcPath,
         },
-    },
+    }, 
     server: {
         port: 5173,
         strictPort: true,
         proxy: {
-            '/auth': 'http://localhost:8000',
+            '/auth': 'http://localhost:8000',  
             '/clients': 'http://localhost:8000',
             '/agents': 'http://localhost:8000',
             '/modules': 'http://localhost:8000',

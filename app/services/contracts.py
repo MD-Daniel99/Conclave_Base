@@ -224,36 +224,71 @@ def build_contract_items(client: dict[str, Any], modules: list[dict[str, Any]]) 
     return items
 
 
-def build_llc_contract_items(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build reliable LLC rows from the explicit Module -> TSR relation."""
-    items: list[dict[str, Any]] = []
-    for index, module in enumerate(modules, start=1):
-        tsr = module.get("tsr") or {}
+def group_llc_components_by_tsr(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group client components by their explicit TSR relation."""
+    groups: dict[str, dict[str, Any]] = {}
+    ordered_components = sorted(
+        components,
+        key=lambda component: (
+            str((component.get("tsr") or {}).get("full_tsr_code") or "").casefold(),
+            str(component.get("module_name_index") or "").casefold(),
+            str(component.get("module_id") or ""),
+        ),
+    )
+
+    for index, component in enumerate(ordered_components, start=1):
+        tsr = component.get("tsr") or {}
         tsr_full = str(tsr.get("full_tsr_code") or "").strip()
         if not tsr_full:
-            raise ValueError(f"У модуля «{module.get('module_name_index') or index}» не выбран ТСР")
+            raise ValueError(
+                f"У комплектующей «{component.get('module_name_index') or index}» не выбран ТСР"
+            )
 
+        group_key = str(component.get("tsr_id") or tsr.get("id") or tsr_full)
+        if group_key not in groups:
+            groups[group_key] = {
+                "key": group_key,
+                "tsr_id": str(component.get("tsr_id") or tsr.get("id") or ""),
+                "tsr_full": tsr_full,
+                "components": [],
+            }
+        groups[group_key]["components"].append(component)
+
+    return list(groups.values())
+
+
+def build_llc_contract_items(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build one LLC contract row per TSR with its selected components."""
+    items: list[dict[str, Any]] = []
+    for group in group_llc_components_by_tsr(components):
+        tsr_full = group["tsr_full"]
         code = extract_tsr_numeric(tsr_full)
         name = extract_tsr_literals(tsr_full) or tsr_full
-        quantity = max(1, int(parse_money(module.get("quantity")) or 1))
-        total_price = parse_money(module.get("price"))
-        unit_price = total_price / quantity if quantity else total_price
-        component_names = [
-            str(component.get("component_index") or "").strip()
-            for component in (module.get("components") or [])
-            if str(component.get("component_index") or "").strip()
-        ]
+        group_components = group["components"]
+        total_price = sum(parse_money(component.get("price")) for component in group_components)
+        component_names: list[str] = []
+        for component_index, component in enumerate(group_components, start=1):
+            component_name = str(component.get("module_name_index") or "").strip() or "Без названия"
+            component_quantity = max(1, int(parse_money(component.get("quantity")) or 1))
+            quantity_suffix = f" — {component_quantity} шт." if component_quantity != 1 else ""
+            component_names.append(f"{component_index}. {component_name}{quantity_suffix}")
+
         items.append({
             "number": code or tsr_full,
             "description": name,
             "name_and_code": "\n".join(part for part in (code or tsr_full, name) if part),
-            "quantity": quantity,
-            "price": format_money(unit_price),
-            "raw_price": unit_price,
+            # Одна строка — один выбранный ТСР (протез), а не количество его деталей.
+            "quantity": 1,
+            "price": format_money(total_price),
+            "raw_price": total_price,
             "total_price": format_money(total_price),
             "raw_total_price": total_price,
-            "module_name": str(module.get("module_name_index") or ""),
-            "components_text": ", ".join(component_names),
+            "module_name": ", ".join(
+                str(component.get("module_name_index") or "")
+                for component in group_components
+                if str(component.get("module_name_index") or "").strip()
+            ),
+            "components_text": "\n".join(component_names),
         })
     return items
 
@@ -262,11 +297,11 @@ def select_llc_modules(client: dict[str, Any], payload: Any) -> list[dict[str, A
     modules = client.get("modules") or []
     selected_ids = {str(value) for value in (getattr(payload, "selected_module_ids", None) or [])}
     if not selected_ids:
-        raise ValueError("Для договора ООО выберите хотя бы один модуль клиента")
+        raise ValueError("Для договора ООО выберите хотя бы одну комплектующую клиента")
 
     selected = [module for module in modules if str(module.get("module_id")) in selected_ids]
     if len(selected) != len(selected_ids):
-        raise ValueError("Один или несколько выбранных модулей не принадлежат клиенту")
+        raise ValueError("Одна или несколько выбранных комплектующих не принадлежат клиенту")
     return selected
 
 
@@ -417,6 +452,43 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     save_path = os.path.join(STORAGE_DIR, unique_name)
     doc.save(save_path)
 
+    selected_document_components = (
+        select_llc_modules(client, payload)
+        if template_key == "llc_contract"
+        else (client.get("modules") or [])
+    )
+    component_snapshot = [
+        {
+            "component_id": str(component.get("module_id")),
+            "component_name": component.get("module_name_index"),
+            "tsr_id": str(component.get("tsr_id") or (component.get("tsr") or {}).get("id") or ""),
+            "tsr": (component.get("tsr") or {}).get("full_tsr_code"),
+            "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
+            "price": parse_money(component.get("price")),
+        }
+        for component in selected_document_components
+    ]
+    tsr_component_snapshot = (
+        [
+            {
+                "tsr_id": group["tsr_id"],
+                "tsr": group["tsr_full"],
+                "components": [
+                    {
+                        "component_id": str(component.get("module_id")),
+                        "component_name": component.get("module_name_index"),
+                        "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
+                        "price": parse_money(component.get("price")),
+                    }
+                    for component in group["components"]
+                ],
+            }
+            for group in group_llc_components_by_tsr(selected_document_components)
+        ]
+        if template_key == "llc_contract"
+        else []
+    )
+
     db_doc = models.Document(
         client_id=client_id,
         filename=filename,
@@ -428,18 +500,17 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         contract_total=parse_money(context.get("Сумма")),
         certificate_amount=parse_money(client.get("certificate_price")),
         contract_metadata={
+            "selected_components": component_snapshot,
+            "selected_tsr_components": tsr_component_snapshot,
+            # Обратная совместимость с ранее сформированными отчётами/выгрузками.
             "selected_modules": [
                 {
-                    "module_id": str(module.get("module_id")),
-                    "module_name": module.get("module_name_index"),
-                    "tsr": (module.get("tsr") or {}).get("full_tsr_code"),
-                    "price": parse_money(module.get("price")),
+                    "module_id": str(component.get("module_id")),
+                    "module_name": component.get("module_name_index"),
+                    "tsr": (component.get("tsr") or {}).get("full_tsr_code"),
+                    "price": parse_money(component.get("price")),
                 }
-                for module in (
-                    select_llc_modules(client, payload)
-                    if template_key == "llc_contract"
-                    else (client.get("modules") or [])
-                )
+                for component in selected_document_components
             ],
             "document_date": str(getattr(payload, "document_date", "") or ""),
         },

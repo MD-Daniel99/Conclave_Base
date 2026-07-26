@@ -116,8 +116,22 @@ class Client(Base):
 
     check_date = Column(Date, nullable=True)          
     certificate_price = Column(String(255), nullable=True)
+    taxation_system = Column(
+        String(4),
+        nullable=False,
+        default="УСН",
+        server_default=text("'УСН'"),
+    )
     ipra_code = Column(String(64), nullable = True)
     place_of_residence = Column(String(255), nullable = True)
+    prosthetist = Column(String(255), nullable=True)
+    is_archived = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        index=True,
+    )
 
     prosthesis_type = Column(String(255), ForeignKey("REF_PROSTHESIS.name"), nullable=True) 
     # Хранится как многострочное текстовое поле, потому что в текущем UI можно выбрать несколько ТСР.
@@ -127,12 +141,15 @@ class Client(Base):
     prosthetist_salary = Column(Float, default=0.0)
     agent_salary = Column(Float, default=0.0)
     support_salary = Column(Float, default=0.0)
-    prosthetist_work = Column(Float, nullable=False, default=0.0)
-    patient_travel = Column(Float, nullable=False, default=0.0)
-    patient_accommodation = Column(Float, nullable=False, default=0.0)
-    patient_payment = Column(Float, nullable=False, default=0.0)
-    other_expenses = Column(Float, nullable=False, default=0.0)
-    agency_expenses = Column(Float, nullable=False, default=0.0)
+
+    # Единые статьи расходов для бухгалтерии «По клиентам» и «По договорам».
+    prosthetist_work = Column(Float, nullable=False, default=0.0, server_default=text("0"))
+    patient_travel = Column(Float, nullable=False, default=0.0, server_default=text("0"))
+    patient_accommodation = Column(Float, nullable=False, default=0.0, server_default=text("0"))
+    patient_meals = Column(Float, nullable=False, default=0.0, server_default=text("0"))
+    patient_payment = Column(Float, nullable=False, default=0.0, server_default=text("0"))
+    other_expenses = Column(Float, nullable=False, default=0.0, server_default=text("0"))
+    agency_expenses = Column(Float, nullable=False, default=0.0, server_default=text("0"))
 
     # отношения
     # prosthesis_type = relationship("ProsthesisRef", back_populates = "client")
@@ -143,7 +160,7 @@ class Client(Base):
     snils = relationship("Snils", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
     documents = relationship("Document", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
     reminders = relationship("Reminder", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
-    # Модули — складские позиции, поэтому при удалении клиента их нельзя удалять каскадом.
+    # Комплектующие — складские позиции, поэтому при удалении клиента их нельзя удалять каскадом.
     modules = relationship("Module", back_populates="client", passive_deletes=True)
 
     # В класс Client добавьте relationship (после существующих)
@@ -253,7 +270,7 @@ class Module(Base):
     tsr_id = Column(UUID(as_uuid=True), ForeignKey("REF_TSR.tsr_id", ondelete="RESTRICT"), nullable=True, index=True)
     module_name_index = Column(String(128), ForeignKey("REF_NameIndex.name_index"), nullable = False) 
     supplier = Column(String(64), nullable = False)
-    ordered = Column(Integer, nullable=False, default=0)
+    ordered = Column(Integer, nullable=False, default=0, server_default=text("0"))
     order_date_acc_num = Column(String(64), nullable = False)
     quantity = Column(Integer, nullable = False, default = 1)
     size = Column(String(64), nullable=True)
@@ -261,17 +278,30 @@ class Module(Base):
     side = Column(String(64), nullable=True)
     cost = Column(Float)
     price = Column(Float)
-    recd = Column(Integer, nullable=False, default=0)
-    pending = Column(Integer, nullable=False, default=0)
-    prosthetist_keep = Column(Integer, nullable=False, default=0)
+    recd = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    pending = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    prosthetist_keep = Column(Integer, nullable=False, default=0, server_default=text("0"))
     properties = Column(String(64), nullable = False)
     created_at = Column(DateTime(timezone = True), server_default = func.now(), nullable = False)
     updated_at = Column(DateTime(timezone = True), server_default = func.now(), onupdate = func.now(), nullable = False)
     notes = Column(Text, nullable=True)
+    is_archived = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        index=True,
+    )
+    # Ручной архив не сбрасывается при восстановлении карточки клиента.
+    is_manually_archived = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
 
     client = relationship("Client", back_populates = "modules")
     tsr = relationship("TstCodeRef", back_populates="modules")
-    components = relationship("ModuleComponent", back_populates="module", passive_deletes=True)
 
 
 class User(Base):
@@ -301,25 +331,6 @@ class TstCodeRef(Base):
     full_tsr_code = Column(Text, nullable=True, unique=True)
     modules = relationship("Module", back_populates="tsr", passive_deletes=True)
 
-
-class ModuleComponent(Base):
-    __tablename__ = "MODULE_COMPONENT"
-
-    component_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
-    module_id = Column(UUID(as_uuid=True), ForeignKey("MODULES.module_id", ondelete="SET NULL"), nullable=True, index=True)
-    component_index = Column(String(128), nullable=False)
-    supplier = Column(String(128), nullable=False)
-    quantity = Column(Integer, nullable=False, default=1)
-    cost = Column(Float, nullable=False, default=0.0)
-    price = Column(Float, nullable=False, default=0.0)
-    ordered = Column(String(64), nullable=False, default="0")
-    received = Column(String(64), nullable=False, default="0")
-    pending = Column(String(64), nullable=False, default="0")
-    notes = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    module = relationship("Module", back_populates="components")
 
 class ModuleNameIndex(Base):
     __tablename__ = "REF_NameIndex"
@@ -368,6 +379,7 @@ class ContractAccounting(Base):
     prosthetist_work = Column(Float, nullable=False, default=0.0)
     patient_travel = Column(Float, nullable=False, default=0.0)
     patient_accommodation = Column(Float, nullable=False, default=0.0)
+    patient_meals = Column(Float, nullable=False, default=0.0)
     patient_payment = Column(Float, nullable=False, default=0.0)
     other_expenses = Column(Float, nullable=False, default=0.0)
     agency_expenses = Column(Float, nullable=False, default=0.0)

@@ -451,7 +451,7 @@ def build_clients(
         if not phone:
             warnings.append(f"{full_name}: валидный телефон не найден.")
         if not related_monitoring:
-            warnings.append(f"{full_name}: модули в «Мониторинге поставок» не найдены.")
+            warnings.append(f"{full_name}: комплектующие в «Мониторинге поставок» не найдены.")
         if not tsr_items:
             warnings.append(f"{full_name}: в строке нет ТСР с распознаваемым числовым кодом.")
         if len(clients) >= limit:
@@ -478,7 +478,7 @@ def split_lines(value: Any) -> list[str]:
 def module_label(name: str, catalogue: str) -> str:
     if catalogue and name:
         return f"{catalogue} — {name}"[:128]
-    return (catalogue or name or "Модуль без наименования")[:128]
+    return (catalogue or name or "Комплектующая без наименования")[:128]
 
 
 def infer_side(size: str) -> str | None:
@@ -528,7 +528,7 @@ def prepare_warehouse(rows: Sequence[dict[str, str]], warnings: list[str]) -> tu
             side=infer_side(clean(row.get("РАЗМЕР"))),
             properties=clean(row.get("СОСТОЯНИЕ")) or "Склад",
             notes="; ".join(filter(None, [
-                "Бесхозный модуль, импортирован из CSV «СКЛАД»",
+                "Комплектующая без владельца, импортирована из CSV «СКЛАД»",
                 f"Уход: {clean(row.get('УХОД'))}" if clean(row.get("УХОД")) else "",
                 f"Источник, строка {row_number}",
             ])),
@@ -552,7 +552,7 @@ def find_warehouse_match(raw_index: str, warehouse_index: dict[str, list[dict[st
 
 
 def choose_module_tsr_code(tsr_items: Sequence[TsrItem], module_text: str) -> str | None:
-    """Подбирает ТСР модуля только когда связь выводится из названия.
+    """Подбирает ТСР комплектующей только когда связь выводится из названия.
 
     Для деталей протеза базовым вариантом считается модульный протез; лайнеры
     и оболочки получают отдельный ТСР, если такой код есть у клиента.
@@ -600,10 +600,10 @@ def monitoring_module_plans(clients: Sequence[ClientPlan], warehouse_index: dict
             if not count:
                 continue
             if len(names) != len(indexes):
-                warnings.append(f"{client.full_name}: число названий модулей ({len(names)}) не равно числу индексов ({len(indexes)}).")
+                warnings.append(f"{client.full_name}: число названий комплектующих ({len(names)}) не равно числу индексов ({len(indexes)}).")
             total_monitoring_cost = parse_money(monitoring.get("ЗАТРАТЫ"))
             for pos in range(count):
-                name = names[pos] if pos < len(names) else "Модуль без наименования"
+                name = names[pos] if pos < len(names) else "Комплектующая без наименования"
                 raw_index = indexes[pos] if pos < len(indexes) else ""
                 catalogue = re.sub(r"\s*\(\s*\d+\s*шт.*$", "", raw_index, flags=re.IGNORECASE).strip()
                 match = find_warehouse_match(catalogue, warehouse_index)
@@ -723,7 +723,6 @@ def reset_business_data(db: Any, models: Any, delete: Any, text: Any) -> None:
         models.Passport,
         models.Snils,
         models.Reminder,
-        models.ModuleComponent,
         models.Module,
         models.Client,
         models.Agent,

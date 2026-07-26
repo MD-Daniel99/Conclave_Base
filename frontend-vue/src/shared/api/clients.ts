@@ -21,6 +21,7 @@ export interface ListClientsParams {
   status?: string
   agent_id?: string
   current_stage?: string
+  archived?: boolean
 }
 
 export async function fetchClients(params: ListClientsParams = {}) {
@@ -45,6 +46,23 @@ export async function updateClient(clientId: string, payload: ClientUpdatePayloa
 
 export async function deleteClient(clientId: string) {
   await api.delete(`/clients/${clientId}`)
+}
+
+export async function archiveClient(clientId: string) {
+  const { data } = await api.post<Client>(`/clients/${clientId}/archive`)
+  return data
+}
+
+export async function restoreClient(clientId: string) {
+  const { data } = await api.post<Client>(`/clients/${clientId}/restore`)
+  return data
+}
+
+export async function assignClientComponentsTsr(
+  clientId: string,
+  payload: { component_ids: string[]; tsr_id: string },
+) {
+  await api.patch(`/clients/${clientId}/components/tsr`, payload)
 }
 
 export async function fetchClientPhones(clientId: string) {

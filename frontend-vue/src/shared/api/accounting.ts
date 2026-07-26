@@ -15,7 +15,10 @@ export interface AccountingReportParams {
   start_date?: string | null
   end_date?: string | null
   hide_failed?: boolean
+  // tax_percent поддерживает старые backend-сборки.
   tax_percent?: number
+  tax_usn_percent?: number
+  tax_osno_percent?: number
   acquiring_percent?: number
 }
 

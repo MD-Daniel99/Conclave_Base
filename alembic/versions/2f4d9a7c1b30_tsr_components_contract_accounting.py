@@ -21,6 +21,31 @@ def upgrade() -> None:
     def inspector():
         return sa.inspect(bind)
 
+    table_names = set(inspector().get_table_names())
+
+    if "REF_TSR" not in table_names:
+        op.create_table(
+            "REF_TSR",
+            sa.Column(
+                "tsr_id",
+                postgresql.UUID(as_uuid=True),
+                nullable=False,
+            ),
+            sa.Column(
+                "full_tsr_code",
+                sa.Text(),
+                nullable=True,
+            ),
+            sa.PrimaryKeyConstraint("tsr_id"),
+            sa.UniqueConstraint("full_tsr_code"),
+        )
+
+    # Дальше существующий код миграции:
+    module_columns = {
+        column["name"]
+        for column in inspector().get_columns("MODULES")
+    }
+
     module_columns = {column["name"] for column in inspector().get_columns("MODULES")}
     if "tsr_id" not in module_columns:
         op.add_column("MODULES", sa.Column("tsr_id", postgresql.UUID(as_uuid=True), nullable=True))

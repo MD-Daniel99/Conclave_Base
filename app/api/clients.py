@@ -34,10 +34,11 @@ def read_clients(
     status: str | None = Query(None),
     agent_id: UUID | None = Query(None),
     current_stage: str | None = Query(None),
+    archived: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return crud.list_clients(db, skip, limit, q, status, agent_id, current_stage)
+    return crud.list_clients(db, skip, limit, q, status, agent_id, current_stage, archived)
 
 
 @router.get("/{client_id}", response_model=schemas.ClientRead)
@@ -67,6 +68,90 @@ def patch_client(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
     log_action(db, entity="client", entity_id=client_id, action="update", user=current_user, before=before, after=updated)
     return updated
+
+
+@router.patch("/{client_id}/components/tsr", response_model=List[schemas.ModuleRead])
+def assign_tsr_to_client_components(
+    client_id: UUID,
+    payload: schemas.ClientComponentsTsrUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        components = crud.assign_tsr_to_client_modules(
+            db,
+            client_id,
+            payload.component_ids,
+            payload.tsr_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action="components.tsr.assign",
+        user=current_user,
+        details={
+            "component_ids": [str(component_id) for component_id in payload.component_ids],
+            "tsr_id": str(payload.tsr_id),
+        },
+    )
+    return components
+
+
+def _change_client_archive_state(
+    client_id: UUID,
+    *,
+    is_archived: bool,
+    db: Session,
+    current_user: models.User,
+):
+    before = crud.get_client(db, client_id)
+    if not before:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+
+    updated = crud.set_client_archive_state(db, client_id, is_archived=is_archived)
+    action = "archive" if is_archived else "restore"
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action=action,
+        user=current_user,
+        before=before,
+        after=updated,
+    )
+    return updated
+
+
+@router.post("/{client_id}/archive", response_model=schemas.ClientRead)
+def archive_client(
+    client_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return _change_client_archive_state(
+        client_id,
+        is_archived=True,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/{client_id}/restore", response_model=schemas.ClientRead)
+def restore_client(
+    client_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return _change_client_archive_state(
+        client_id,
+        is_archived=False,
+        db=db,
+        current_user=current_user,
+    )
 
 
 @router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)

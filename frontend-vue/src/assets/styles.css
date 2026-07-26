@@ -113,8 +113,11 @@ input[type='checkbox'] {
   accent-color: var(--accent);
 }
 
-input[type='date'] {
-  min-width: 0;
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'] {
+  min-width: 180px;
+  font-variant-numeric: tabular-nums;
 }
 
 .primary-button,
@@ -456,12 +459,18 @@ input[type='date'] {
 
 .inline-search {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   width: min(100%, 430px);
   gap: 10px;
 }
 
 .wide-search {
-  width: min(100%, 760px);
+  width: min(100%, 1040px);
+}
+
+.wide-search > input:first-child {
+  flex: 1 1 240px;
 }
 
 .toolbar-search-input {
@@ -481,7 +490,16 @@ input[type='date'] {
 }
 
 .accounting-toolbar {
-  grid-template-columns: minmax(110px, 130px) minmax(130px, 150px) minmax(150px, 180px) minmax(180px, 1fr) auto auto;
+  grid-template-columns: minmax(230px, auto) minmax(240px, 1fr) minmax(150px, 190px) auto minmax(110px, 140px);
+}
+
+.accounting-percent-toolbar {
+  grid-template-columns: repeat(3, minmax(130px, 165px)) minmax(230px, 1fr);
+}
+
+.accounting-tab-content {
+  display: grid;
+  gap: 20px;
 }
 
 .admin-create-toolbar {
@@ -540,6 +558,133 @@ input[type='date'] {
   padding: 0.55rem 0;
 }
 
+.tsr-component-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.tsr-component-group,
+.contract-tsr-group {
+  overflow: hidden;
+  border: 1px solid #dbe5f0;
+  border-radius: 15px;
+  background: #ffffff;
+}
+
+.tsr-component-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e5eaf0;
+  background: linear-gradient(135deg, #eff6ff, #f8fbff);
+}
+
+.tsr-component-header strong,
+.tsr-component-header span,
+.component-name-list strong,
+.component-name-list span {
+  display: block;
+}
+
+.tsr-component-header span,
+.component-name-list span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.tsr-assignment-controls {
+  display: grid;
+  align-items: end;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5eaf0;
+  background: #f8fafc;
+}
+
+.tsr-assignment-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.tsr-assignment-field > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tsr-assignment-field select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.tsr-assignment-controls > button,
+.component-actions > button {
+  white-space: nowrap;
+}
+
+.tsr-component-group .list-row {
+  align-items: flex-start;
+}
+
+.tsr-component-group .list-row > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.component-actions {
+  flex: 0 0 auto;
+}
+
+.component-name-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.component-name-list li {
+  padding: 10px 14px;
+}
+
+.component-name-list li + li {
+  border-top: 1px solid #edf1f5;
+}
+
+.tsr-component-group > .list-stack {
+  padding: 10px;
+}
+
+.contract-tsr-group {
+  display: grid;
+}
+
+.contract-module-selector .contract-tsr-heading {
+  padding: 11px 13px;
+  border-bottom: 1px solid #e5eaf0;
+  background: linear-gradient(135deg, #eff6ff, #f8fbff);
+}
+
+.contract-component-list {
+  display: grid;
+  gap: 7px;
+  padding: 9px 12px 11px 38px;
+}
+
+.contract-module-selector .contract-component-list .checkbox-label {
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid #edf1f5;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
 .contract-accounting-search {
   margin: 1rem 0;
 }
@@ -549,27 +694,38 @@ input[type='date'] {
   margin-top: 0.25rem;
 }
 
-.accounting-table tbody tr.accounting-contract-required > td {
-  border-bottom-color: #fecaca;
+.accounting-identity-cell {
+  min-width: 230px;
+}
+
+.accounting-client-link {
+  display: grid;
+  width: 100%;
+  justify-items: start;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.accounting-client-link .muted {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.contract-required-row td {
   background: #fff1f2;
 }
 
-.accounting-table tbody tr.accounting-contract-required:hover > td {
+.contract-required-row:hover td {
   background: #ffe4e6;
 }
 
-.accounting-contract-warning {
+.contract-warning {
   display: block;
-  width: fit-content;
-  margin-top: 6px;
-  padding: 3px 8px;
-  border: 1px solid #fca5a5;
-  border-radius: 999px;
+  margin-top: 5px;
   color: #b91c1c;
-  background: #ffffff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 900;
-  white-space: nowrap;
+  line-height: 1.3;
 }
 
 .contract-toolbar:has(.contract-date-field:nth-of-type(6)) {
@@ -936,90 +1092,8 @@ body.modal-open {
   overflow: auto;
 }
 
-.warehouse-table {
-  min-width: 1480px;
-}
-
-.warehouse-table .money-cell {
-  min-width: 132px;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.warehouse-table .count-cell {
-  min-width: 88px;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
 .accounting-table {
   max-height: calc(100vh - 330px);
-  overflow-x: hidden;
-}
-
-.accounting-tab-content {
-  display: grid;
-  min-width: 0;
-  gap: 20px;
-}
-
-.accounting-table table {
-  width: 100%;
-  min-width: 0;
-  table-layout: fixed;
-  font-size: 12px;
-}
-
-.accounting-table th,
-.accounting-table td {
-  min-width: 0;
-  padding: 8px 5px;
-}
-
-.accounting-table th {
-  font-size: 11px;
-  line-height: 1.2;
-  white-space: normal;
-  overflow-wrap: break-word;
-  word-break: normal;
-}
-
-.accounting-table th:first-child,
-.accounting-table td:first-child {
-  width: 14%;
-}
-
-.accounting-table th:last-child,
-.accounting-table td:last-child {
-  width: 88px;
-}
-
-.accounting-table .table-input {
-  width: 100%;
-  min-width: 0;
-  min-height: 32px;
-  padding: 5px 4px;
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.accounting-table td {
-  overflow-wrap: anywhere;
-}
-
-.accounting-actions-cell {
-  display: table-cell;
-  text-align: center;
-  vertical-align: middle;
-}
-
-.accounting-actions-cell .ghost-button {
-  width: auto;
-  min-width: 72px;
-  min-height: 32px;
-  padding: 5px 7px;
-  font-size: 11px;
-  white-space: nowrap;
 }
 
 table {
@@ -1069,6 +1143,12 @@ tr.selected td {
 
 .money-value,
 td:has(strong) {
+  font-variant-numeric: tabular-nums;
+}
+
+.table-money {
+  min-width: 112px;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1146,7 +1226,58 @@ td:has(strong) {
 }
 
 .date-input {
-  display: block;
+  display: flex;
+  flex: 1 1 252px;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 244px;
+  max-width: 270px;
+  font-variant-numeric: tabular-nums;
+}
+
+.inline-search > .date-input {
+  flex: 0 1 252px;
+  min-width: 244px;
+}
+
+.date-input select,
+.date-input input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.date-input-day,
+.date-input-month {
+  flex: 0 0 58px;
+  width: 58px;
+}
+
+.date-input-year {
+  flex: 1 1 86px;
+  width: 86px;
+  appearance: textfield;
+}
+
+.date-input-year::-webkit-inner-spin-button,
+.date-input-year::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.date-input-clear {
+  flex: 0 0 30px;
+  width: 30px;
+  min-height: 42px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 20px;
+  line-height: 1;
 }
 
 .accounting-autosave-status {
@@ -1165,6 +1296,7 @@ td:has(strong) {
   .clients-toolbar,
   .warehouse-toolbar,
   .accounting-toolbar,
+  .accounting-percent-toolbar,
   .contract-toolbar,
   .contract-toolbar:has(.contract-date-field:nth-of-type(6)),
   .detail-panel .compact-toolbar {
@@ -1254,6 +1386,7 @@ td:has(strong) {
   .agents-toolbar,
   .warehouse-toolbar,
   .accounting-toolbar,
+  .accounting-percent-toolbar,
   .admin-create-toolbar,
   .reference-toolbar,
   .compact-toolbar,
@@ -1278,6 +1411,23 @@ td:has(strong) {
   .reference-list-item {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .tsr-component-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tsr-assignment-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .tsr-assignment-controls > button {
+    width: 100%;
+  }
+
+  .contract-component-list {
+    padding-left: 12px;
   }
 
   .modal-panel {

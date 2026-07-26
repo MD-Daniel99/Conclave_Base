@@ -47,7 +47,7 @@ export type AccountingCustomFieldRead = {
 /**
  * AccountingFieldValueUpdate
  *
- * Для обновления значений кастомных полей клиента
+ * Ð”Ð»Ñ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ñ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ð¹ ÐºÐ°ÑÑ‚Ð¾Ð¼Ð½Ñ‹Ñ… Ð¿Ð¾Ð»ÐµÐ¹ ÐºÐ»Ð¸ÐµÐ½Ñ‚Ð°
  */
 export type AccountingFieldValueUpdate = {
     /**
@@ -63,7 +63,7 @@ export type AccountingFieldValueUpdate = {
 /**
  * AccountingValuesUpdate
  *
- * Тело запроса на обновление нескольких значений
+ * Ð¢ÐµÐ»Ð¾ Ð·Ð°Ð¿Ñ€Ð¾ÑÐ° Ð½Ð° Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ Ð½ÐµÑÐºÐ¾Ð»ÑŒÐºÐ¸Ñ… Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ð¹
  */
 export type AccountingValuesUpdate = {
     /**
@@ -75,67 +75,67 @@ export type AccountingValuesUpdate = {
 /**
  * AgentCreate
  *
- * Схема для создания агента.
+ * Ð¡Ñ…ÐµÐ¼Ð° Ð´Ð»Ñ ÑÐ¾Ð·Ð´Ð°Ð½Ð¸Ñ Ð°Ð³ÐµÐ½Ñ‚Ð°.
  */
 export type AgentCreate = {
     /**
      * Last Name
      *
-     * Фамилия
+     * Ð¤Ð°Ð¼Ð¸Ð»Ð¸Ñ
      */
     last_name: string;
     /**
      * First Name
      *
-     * Имя
+     * Ð˜Ð¼Ñ
      */
     first_name?: string | null;
     /**
      * Middle Name
      *
-     * Отчество
+     * ÐžÑ‚Ñ‡ÐµÑÑ‚Ð²Ð¾
      */
     middle_name?: string | null;
     /**
      * Legal Address
      *
-     * Юридический адрес
+     * Ð®Ñ€Ð¸Ð´Ð¸Ñ‡ÐµÑÐºÐ¸Ð¹ Ð°Ð´Ñ€ÐµÑ
      */
     legal_address?: string | null;
     /**
      * Actual Address
      *
-     * Фактический адрес
+     * Ð¤Ð°ÐºÑ‚Ð¸Ñ‡ÐµÑÐºÐ¸Ð¹ Ð°Ð´Ñ€ÐµÑ
      */
     actual_address?: string | null;
     /**
      * Inn
      *
-     * ИНН (10 или 12 цифр)
+     * Ð˜ÐÐ (10 Ð¸Ð»Ð¸ 12 Ñ†Ð¸Ñ„Ñ€)
      */
     inn?: string | null;
     /**
      * Ogrnip
      *
-     * ОГРНИП (15 цифр)
+     * ÐžÐ“Ð ÐÐ˜ÐŸ (15 Ñ†Ð¸Ñ„Ñ€)
      */
     ogrnip?: string | null;
     /**
      * Account Number
      *
-     * Расчётный счёт (20–34 цифр)
+     * Ð Ð°ÑÑ‡Ñ‘Ñ‚Ð½Ñ‹Ð¹ ÑÑ‡Ñ‘Ñ‚ (20â€“34 Ñ†Ð¸Ñ„Ñ€)
      */
     account_number?: string | null;
     /**
      * Correspondent Account
      *
-     * Корреспондентский счёт (20–34 цифр)
+     * ÐšÐ¾Ñ€Ñ€ÐµÑÐ¿Ð¾Ð½Ð´ÐµÐ½Ñ‚ÑÐºÐ¸Ð¹ ÑÑ‡Ñ‘Ñ‚ (20â€“34 Ñ†Ð¸Ñ„Ñ€)
      */
     correspondent_account?: string | null;
     /**
      * Bic
      *
-     * БИК (9 цифр)
+     * Ð‘Ð˜Ðš (9 Ñ†Ð¸Ñ„Ñ€)
      */
     bic?: string | null;
 };
@@ -143,67 +143,67 @@ export type AgentCreate = {
 /**
  * AgentRead
  *
- * Схема для вывода агента из БД (response_model).
+ * Ð¡Ñ…ÐµÐ¼Ð° Ð´Ð»Ñ Ð²Ñ‹Ð²Ð¾Ð´Ð° Ð°Ð³ÐµÐ½Ñ‚Ð° Ð¸Ð· Ð‘Ð” (response_model).
  */
 export type AgentRead = {
     /**
      * Last Name
      *
-     * Фамилия
+     * Ð¤Ð°Ð¼Ð¸Ð»Ð¸Ñ
      */
     last_name: string;
     /**
      * First Name
      *
-     * Имя
+     * Ð˜Ð¼Ñ
      */
     first_name?: string | null;
     /**
      * Middle Name
      *
-     * Отчество
+     * ÐžÑ‚Ñ‡ÐµÑÑ‚Ð²Ð¾
      */
     middle_name?: string | null;
     /**
      * Legal Address
      *
-     * Юридический адрес
+     * Ð®Ñ€Ð¸Ð´Ð¸Ñ‡ÐµÑÐºÐ¸Ð¹ Ð°Ð´Ñ€ÐµÑ
      */
     legal_address?: string | null;
     /**
      * Actual Address
      *
-     * Фактический адрес
+     * Ð¤Ð°ÐºÑ‚Ð¸Ñ‡ÐµÑÐºÐ¸Ð¹ Ð°Ð´Ñ€ÐµÑ
      */
     actual_address?: string | null;
     /**
      * Inn
      *
-     * ИНН (10 или 12 цифр)
+     * Ð˜ÐÐ (10 Ð¸Ð»Ð¸ 12 Ñ†Ð¸Ñ„Ñ€)
      */
     inn?: string | null;
     /**
      * Ogrnip
      *
-     * ОГРНИП (15 цифр)
+     * ÐžÐ“Ð ÐÐ˜ÐŸ (15 Ñ†Ð¸Ñ„Ñ€)
      */
     ogrnip?: string | null;
     /**
      * Account Number
      *
-     * Расчётный счёт (20–34 цифр)
+     * Ð Ð°ÑÑ‡Ñ‘Ñ‚Ð½Ñ‹Ð¹ ÑÑ‡Ñ‘Ñ‚ (20â€“34 Ñ†Ð¸Ñ„Ñ€)
      */
     account_number?: string | null;
     /**
      * Correspondent Account
      *
-     * Корреспондентский счёт (20–34 цифр)
+     * ÐšÐ¾Ñ€Ñ€ÐµÑÐ¿Ð¾Ð½Ð´ÐµÐ½Ñ‚ÑÐºÐ¸Ð¹ ÑÑ‡Ñ‘Ñ‚ (20â€“34 Ñ†Ð¸Ñ„Ñ€)
      */
     correspondent_account?: string | null;
     /**
      * Bic
      *
-     * БИК (9 цифр)
+     * Ð‘Ð˜Ðš (9 Ñ†Ð¸Ñ„Ñ€)
      */
     bic?: string | null;
     /**
@@ -219,7 +219,7 @@ export type AgentRead = {
 /**
  * AgentSummary
  *
- * Краткая схема агента для вложений (в списках клиентов).
+ * ÐšÑ€Ð°Ñ‚ÐºÐ°Ñ ÑÑ…ÐµÐ¼Ð° Ð°Ð³ÐµÐ½Ñ‚Ð° Ð´Ð»Ñ Ð²Ð»Ð¾Ð¶ÐµÐ½Ð¸Ð¹ (Ð² ÑÐ¿Ð¸ÑÐºÐ°Ñ… ÐºÐ»Ð¸ÐµÐ½Ñ‚Ð¾Ð²).
  */
 export type AgentSummary = {
     /**
@@ -247,7 +247,7 @@ export type AgentSummary = {
 /**
  * AgentUpdate
  *
- * Частичное обновление (PATCH) — все поля опциональны.
+ * Ð§Ð°ÑÑ‚Ð¸Ñ‡Ð½Ð¾Ðµ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ (PATCH) â€” Ð²ÑÐµ Ð¿Ð¾Ð»Ñ Ð¾Ð¿Ñ†Ð¸Ð¾Ð½Ð°Ð»ÑŒÐ½Ñ‹.
  */
 export type AgentUpdate = {
     /**
@@ -345,37 +345,37 @@ export type ClientCreate = {
     /**
      * Last Name
      *
-     * Фамилия
+     * Ð¤Ð°Ð¼Ð¸Ð»Ð¸Ñ
      */
     last_name: string;
     /**
      * First Name
      *
-     * Имя
+     * Ð˜Ð¼Ñ
      */
     first_name: string;
     /**
      * Middle Name
      *
-     * Отчество
+     * ÐžÑ‚Ñ‡ÐµÑÑ‚Ð²Ð¾
      */
     middle_name?: string | null;
     /**
      * Status Code
      *
-     * Статус работы (code)
+     * Ð¡Ñ‚Ð°Ñ‚ÑƒÑ Ñ€Ð°Ð±Ð¾Ñ‚Ñ‹ (code)
      */
     status_code: string;
     /**
      * Current Stage
      *
-     * Этап работы (code)
+     * Ð­Ñ‚Ð°Ð¿ Ñ€Ð°Ð±Ð¾Ñ‚Ñ‹ (code)
      */
     current_stage: string;
     /**
      * Agent Id
      *
-     * ID агента (UUID)
+     * ID Ð°Ð³ÐµÐ½Ñ‚Ð° (UUID)
      */
     agent_id: string;
     /**
@@ -422,18 +422,6 @@ export type ClientCreate = {
      * Support Salary
      */
     support_salary?: number | null;
-    /** Prosthetist Work */
-    prosthetist_work?: number | null;
-    /** Patient Travel */
-    patient_travel?: number | null;
-    /** Patient Accommodation */
-    patient_accommodation?: number | null;
-    /** Patient Payment */
-    patient_payment?: number | null;
-    /** Other Expenses */
-    other_expenses?: number | null;
-    /** Agency Expenses */
-    agency_expenses?: number | null;
     /**
      * Phones
      */
@@ -447,37 +435,37 @@ export type ClientRead = {
     /**
      * Last Name
      *
-     * Фамилия
+     * Ð¤Ð°Ð¼Ð¸Ð»Ð¸Ñ
      */
     last_name: string;
     /**
      * First Name
      *
-     * Имя
+     * Ð˜Ð¼Ñ
      */
     first_name: string;
     /**
      * Middle Name
      *
-     * Отчество
+     * ÐžÑ‚Ñ‡ÐµÑÑ‚Ð²Ð¾
      */
     middle_name?: string | null;
     /**
      * Status Code
      *
-     * Статус работы (code)
+     * Ð¡Ñ‚Ð°Ñ‚ÑƒÑ Ñ€Ð°Ð±Ð¾Ñ‚Ñ‹ (code)
      */
     status_code: string;
     /**
      * Current Stage
      *
-     * Этап работы (code)
+     * Ð­Ñ‚Ð°Ð¿ Ñ€Ð°Ð±Ð¾Ñ‚Ñ‹ (code)
      */
     current_stage: string;
     /**
      * Agent Id
      *
-     * ID агента (UUID)
+     * ID Ð°Ð³ÐµÐ½Ñ‚Ð° (UUID)
      */
     agent_id: string;
     /**
@@ -524,18 +512,6 @@ export type ClientRead = {
      * Support Salary
      */
     support_salary?: number | null;
-    /** Prosthetist Work */
-    prosthetist_work?: number | null;
-    /** Patient Travel */
-    patient_travel?: number | null;
-    /** Patient Accommodation */
-    patient_accommodation?: number | null;
-    /** Patient Payment */
-    patient_payment?: number | null;
-    /** Other Expenses */
-    other_expenses?: number | null;
-    /** Agency Expenses */
-    agency_expenses?: number | null;
     /**
      * Client Id
      */
@@ -673,18 +649,6 @@ export type ClientUpdate = {
      * Support Salary
      */
     support_salary?: number | null;
-    /** Prosthetist Work */
-    prosthetist_work?: number | null;
-    /** Patient Travel */
-    patient_travel?: number | null;
-    /** Patient Accommodation */
-    patient_accommodation?: number | null;
-    /** Patient Payment */
-    patient_payment?: number | null;
-    /** Other Expenses */
-    other_expenses?: number | null;
-    /** Agency Expenses */
-    agency_expenses?: number | null;
 };
 
 /**
@@ -941,7 +905,6 @@ export type ModuleRead = {
     client_id?: string | null;
     client?: ClientSummary | null;
     tsr?: { id: string; full_tsr_code?: string | null } | null;
-    components?: Array<ModuleComponentRead>;
     /**
      * Created At
      */
@@ -1021,28 +984,6 @@ export type ModuleUpdate = {
      * Notes
      */
     notes?: string | null;
-};
-
-export type ModuleComponentRead = {
-    component_id: string;
-    module_id?: string | null;
-    component_index: string;
-    supplier: string;
-    quantity: number;
-    cost: number;
-    price: number;
-    ordered: string;
-    received: string;
-    pending: string;
-    notes?: string | null;
-    created_at: string;
-    updated_at: string;
-    module?: {
-        module_id: string;
-        module_name_index?: string | null;
-        client_id?: string | null;
-        client?: ClientSummary | null;
-    } | null;
 };
 
 /**
@@ -2573,7 +2514,7 @@ export type ApiUpdatePhonePhonesPhoneIdPatchResponses = {
 
 export type ApiUpdatePhonePhonesPhoneIdPatchResponse = ApiUpdatePhonePhonesPhoneIdPatchResponses[keyof ApiUpdatePhonePhonesPhoneIdPatchResponses];
 
-export type ApiListModulesModulesGetData = {
+export type ApiListComponentsComponentsGetData = {
     body?: never;
     path?: never;
     query?: {
@@ -2598,143 +2539,143 @@ export type ApiListModulesModulesGetData = {
          */
         client_id?: string | null;
     };
-    url: '/modules/';
+    url: '/components/';
 };
 
-export type ApiListModulesModulesGetErrors = {
+export type ApiListComponentsComponentsGetErrors = {
     /**
      * Validation Error
      */
     422: HttpValidationError;
 };
 
-export type ApiListModulesModulesGetError = ApiListModulesModulesGetErrors[keyof ApiListModulesModulesGetErrors];
+export type ApiListComponentsComponentsGetError = ApiListComponentsComponentsGetErrors[keyof ApiListComponentsComponentsGetErrors];
 
-export type ApiListModulesModulesGetResponses = {
+export type ApiListComponentsComponentsGetResponses = {
     /**
-     * Response Api List Modules Modules  Get
+     * Response Api List Components Components Get
      *
      * Successful Response
      */
     200: Array<ModuleRead>;
 };
 
-export type ApiListModulesModulesGetResponse = ApiListModulesModulesGetResponses[keyof ApiListModulesModulesGetResponses];
+export type ApiListComponentsComponentsGetResponse = ApiListComponentsComponentsGetResponses[keyof ApiListComponentsComponentsGetResponses];
 
-export type ApiCreateModuleModulesPostData = {
+export type ApiCreateComponentComponentsPostData = {
     body: ModuleCreate;
     path?: never;
     query?: never;
-    url: '/modules/';
+    url: '/components/';
 };
 
-export type ApiCreateModuleModulesPostErrors = {
+export type ApiCreateComponentComponentsPostErrors = {
     /**
      * Validation Error
      */
     422: HttpValidationError;
 };
 
-export type ApiCreateModuleModulesPostError = ApiCreateModuleModulesPostErrors[keyof ApiCreateModuleModulesPostErrors];
+export type ApiCreateComponentComponentsPostError = ApiCreateComponentComponentsPostErrors[keyof ApiCreateComponentComponentsPostErrors];
 
-export type ApiCreateModuleModulesPostResponses = {
+export type ApiCreateComponentComponentsPostResponses = {
     /**
      * Successful Response
      */
     201: ModuleRead;
 };
 
-export type ApiCreateModuleModulesPostResponse = ApiCreateModuleModulesPostResponses[keyof ApiCreateModuleModulesPostResponses];
+export type ApiCreateComponentComponentsPostResponse = ApiCreateComponentComponentsPostResponses[keyof ApiCreateComponentComponentsPostResponses];
 
-export type ApiDeleteModuleModulesModuleIdDeleteData = {
+export type ApiDeleteComponentComponentsComponentIdDeleteData = {
     body?: never;
     path: {
         /**
-         * Module Id
+         * Component Id
          */
-        module_id: string;
+        component_id: string;
     };
     query?: never;
-    url: '/modules/{module_id}';
+    url: '/components/{component_id}';
 };
 
-export type ApiDeleteModuleModulesModuleIdDeleteErrors = {
+export type ApiDeleteComponentComponentsComponentIdDeleteErrors = {
     /**
      * Validation Error
      */
     422: HttpValidationError;
 };
 
-export type ApiDeleteModuleModulesModuleIdDeleteError = ApiDeleteModuleModulesModuleIdDeleteErrors[keyof ApiDeleteModuleModulesModuleIdDeleteErrors];
+export type ApiDeleteComponentComponentsComponentIdDeleteError = ApiDeleteComponentComponentsComponentIdDeleteErrors[keyof ApiDeleteComponentComponentsComponentIdDeleteErrors];
 
-export type ApiDeleteModuleModulesModuleIdDeleteResponses = {
+export type ApiDeleteComponentComponentsComponentIdDeleteResponses = {
     /**
      * Successful Response
      */
     204: void;
 };
 
-export type ApiDeleteModuleModulesModuleIdDeleteResponse = ApiDeleteModuleModulesModuleIdDeleteResponses[keyof ApiDeleteModuleModulesModuleIdDeleteResponses];
+export type ApiDeleteComponentComponentsComponentIdDeleteResponse = ApiDeleteComponentComponentsComponentIdDeleteResponses[keyof ApiDeleteComponentComponentsComponentIdDeleteResponses];
 
-export type ApiGetModuleModulesModuleIdGetData = {
+export type ApiGetComponentComponentsComponentIdGetData = {
     body?: never;
     path: {
         /**
-         * Module Id
+         * Component Id
          */
-        module_id: string;
+        component_id: string;
     };
     query?: never;
-    url: '/modules/{module_id}';
+    url: '/components/{component_id}';
 };
 
-export type ApiGetModuleModulesModuleIdGetErrors = {
+export type ApiGetComponentComponentsComponentIdGetErrors = {
     /**
      * Validation Error
      */
     422: HttpValidationError;
 };
 
-export type ApiGetModuleModulesModuleIdGetError = ApiGetModuleModulesModuleIdGetErrors[keyof ApiGetModuleModulesModuleIdGetErrors];
+export type ApiGetComponentComponentsComponentIdGetError = ApiGetComponentComponentsComponentIdGetErrors[keyof ApiGetComponentComponentsComponentIdGetErrors];
 
-export type ApiGetModuleModulesModuleIdGetResponses = {
+export type ApiGetComponentComponentsComponentIdGetResponses = {
     /**
      * Successful Response
      */
     200: ModuleRead;
 };
 
-export type ApiGetModuleModulesModuleIdGetResponse = ApiGetModuleModulesModuleIdGetResponses[keyof ApiGetModuleModulesModuleIdGetResponses];
+export type ApiGetComponentComponentsComponentIdGetResponse = ApiGetComponentComponentsComponentIdGetResponses[keyof ApiGetComponentComponentsComponentIdGetResponses];
 
-export type ApiUpdateModuleModulesModuleIdPatchData = {
+export type ApiUpdateComponentComponentsComponentIdPatchData = {
     body: ModuleUpdate;
     path: {
         /**
-         * Module Id
+         * Component Id
          */
-        module_id: string;
+        component_id: string;
     };
     query?: never;
-    url: '/modules/{module_id}';
+    url: '/components/{component_id}';
 };
 
-export type ApiUpdateModuleModulesModuleIdPatchErrors = {
+export type ApiUpdateComponentComponentsComponentIdPatchErrors = {
     /**
      * Validation Error
      */
     422: HttpValidationError;
 };
 
-export type ApiUpdateModuleModulesModuleIdPatchError = ApiUpdateModuleModulesModuleIdPatchErrors[keyof ApiUpdateModuleModulesModuleIdPatchErrors];
+export type ApiUpdateComponentComponentsComponentIdPatchError = ApiUpdateComponentComponentsComponentIdPatchErrors[keyof ApiUpdateComponentComponentsComponentIdPatchErrors];
 
-export type ApiUpdateModuleModulesModuleIdPatchResponses = {
+export type ApiUpdateComponentComponentsComponentIdPatchResponses = {
     /**
      * Successful Response
      */
     200: ModuleRead;
 };
 
-export type ApiUpdateModuleModulesModuleIdPatchResponse = ApiUpdateModuleModulesModuleIdPatchResponses[keyof ApiUpdateModuleModulesModuleIdPatchResponses];
+export type ApiUpdateComponentComponentsComponentIdPatchResponse = ApiUpdateComponentComponentsComponentIdPatchResponses[keyof ApiUpdateComponentComponentsComponentIdPatchResponses];
 
 export type UploadFileDocumentsClientsClientIdUploadPostData = {
     body: BodyUploadFileDocumentsClientsClientIdUploadPost;

@@ -195,14 +195,24 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
             })
     
     modules_list: List[Dict[str, Any]] = []
-    if "modules" in client.__dict__: 
-        for m in client.modules:
-            modules_list.append(schemas.ModuleRead.from_orm(m).model_dump())
+    if "modules" in client.__dict__:
+        visible_modules = [
+            module
+            for module in client.modules
+            if bool(module.is_archived) == bool(client.is_archived)
+        ]
+        for m in visible_modules:
+            modules_list.append(schemas.ModuleRead.model_validate(m).model_dump())
     else:
         # Fallback (на всякий случай, если вызвана функцию без selectinload)
-        m_q = db.execute(select(models.Module).where(models.Module.client_id == client.client_id)).scalars().all()
+        m_q = db.execute(
+            select(models.Module).where(
+                models.Module.client_id == client.client_id,
+                models.Module.is_archived.is_(bool(client.is_archived)),
+            )
+        ).scalars().all()
         for m in m_q:
-            modules_list.append(schemas.ModuleRead.from_orm(m).model_dump())
+            modules_list.append(schemas.ModuleRead.model_validate(m).model_dump())
 
     custom_fields = get_client_custom_field_values(db, client.client_id)
 
@@ -222,8 +232,11 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "check_date": client.check_date,
         "prosthesis_type": client.prosthesis_type,
         "certificate_price": client.certificate_price,
+        "taxation_system": client.taxation_system or "УСН",
         "ipra_code": client.ipra_code,
         "place_of_residence": client.place_of_residence,
+        "prosthetist": client.prosthetist,
+        "is_archived": bool(client.is_archived),
         # вложенные
         "agent": agent_summary,
         "status": status_summary,
@@ -239,6 +252,7 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "prosthetist_work": getattr(client, "prosthetist_work", 0.0),
         "patient_travel": getattr(client, "patient_travel", 0.0),
         "patient_accommodation": getattr(client, "patient_accommodation", 0.0),
+        "patient_meals": getattr(client, "patient_meals", 0.0),
         "patient_payment": getattr(client, "patient_payment", 0.0),
         "other_expenses": getattr(client, "other_expenses", 0.0),
         "agency_expenses": getattr(client, "agency_expenses", 0.0),
@@ -274,9 +288,18 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         check_date=client_in.check_date,
         prosthesis_type=client_in.prosthesis_type,
         certificate_price=client_in.certificate_price,
+        taxation_system=client_in.taxation_system,
         place_of_residence=client_in.place_of_residence,
+        prosthetist=client_in.prosthetist,
         ipra_code=client_in.ipra_code,
         tsr_code = client_in.tsr_code,
+        prosthetist_work=client_in.prosthetist_work,
+        patient_travel=client_in.patient_travel,
+        patient_accommodation=client_in.patient_accommodation,
+        patient_meals=client_in.patient_meals,
+        patient_payment=client_in.patient_payment,
+        other_expenses=client_in.other_expenses,
+        agency_expenses=client_in.agency_expenses,
     )
 
     db.add(client)
@@ -306,7 +329,6 @@ def get_client(db: Session, client_id: UUID) -> Optional[Dict[str, Any]]:
             selectinload(models.Client.passports),
             selectinload(models.Client.snils),
             selectinload(models.Client.modules).selectinload(models.Module.tsr),
-            selectinload(models.Client.modules).selectinload(models.Module.components),
             selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
         )
     )
@@ -324,6 +346,7 @@ def list_clients(
     status: Optional[str] = None,
     agent_id: Optional[UUID] = None,
     current_stage: Optional[str] = None, 
+    archived: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Возвращает список клиентов с вложенными сущностями (agent, status, stage, phones, passports, snils).
@@ -335,11 +358,10 @@ def list_clients(
         selectinload(models.Client.passports),
         selectinload(models.Client.snils),
         selectinload(models.Client.modules).selectinload(models.Module.tsr),
-        selectinload(models.Client.modules).selectinload(models.Module.components),
         selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
     )
 
-    conditions = []
+    conditions = [models.Client.is_archived.is_(archived)]
     if q:
         like = f"%{q}%"
         conditions.append(
@@ -399,13 +421,14 @@ def delete_client(db: Session, client_id: UUID) -> bool:
     if not client:
         return False
 
-    # Важно: модули — это складские позиции. При удалении клиента они не должны
+    # Важно: комплектующие — это складские позиции. При удалении клиента они не должны
     # удаляться каскадом; сначала отвязываем их и оставляем "на складе".
     linked_modules = db.execute(
         select(models.Module).where(models.Module.client_id == client_id)
     ).scalars().all()
     for module in linked_modules:
         module.client_id = None
+        module.is_archived = bool(module.is_manually_archived)
 
     db.flush()
     db.delete(client)
@@ -415,6 +438,81 @@ def delete_client(db: Session, client_id: UUID) -> bool:
     except Exception:
         db.rollback()
         raise
+
+
+def set_client_archive_state(
+    db: Session,
+    client_id: UUID,
+    *,
+    is_archived: bool,
+) -> Optional[Dict[str, Any]]:
+    """Архивирует/восстанавливает клиента и все закрепленные за ним комплектующие."""
+    client = db.get(models.Client, client_id)
+    if not client:
+        return None
+
+    client.is_archived = is_archived
+    module_update = update(models.Module).where(models.Module.client_id == client_id)
+    if is_archived:
+        module_update = module_update.values(is_archived=True)
+    else:
+        # Ручно архивированные позиции остаются в архиве после восстановления клиента.
+        module_update = module_update.values(
+            is_archived=models.Module.is_manually_archived,
+        )
+    db.execute(module_update)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return get_client(db, client_id)
+
+
+def assign_tsr_to_client_modules(
+    db: Session,
+    client_id: UUID,
+    component_ids: List[UUID],
+    tsr_id: UUID,
+) -> List[models.Module]:
+    """Атомарно назначает один ТСР выбранным существующим комплектующим клиента."""
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Клиент не найден")
+    if client.is_archived:
+        raise ValueError("Сначала восстановите клиента из архива")
+    if not db.get(models.TstCodeRef, tsr_id):
+        raise ValueError("Выбранный ТСР не найден")
+
+    unique_ids = list(dict.fromkeys(component_ids))
+    components = db.execute(
+        select(models.Module).where(models.Module.module_id.in_(unique_ids))
+    ).scalars().all()
+
+    if len(components) != len(unique_ids):
+        raise ValueError("Одна или несколько комплектующих не найдены")
+    if any(component.client_id != client_id for component in components):
+        raise ValueError("Все выбранные комплектующие должны принадлежать этому клиенту")
+
+    for component in components:
+        component.tsr_id = tsr_id
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return db.execute(
+        select(models.Module)
+        .where(models.Module.module_id.in_(unique_ids))
+        .options(
+            selectinload(models.Module.client),
+            selectinload(models.Module.tsr),
+        )
+    ).scalars().all()
 
 
 # -------------------------
@@ -762,8 +860,9 @@ def create_status(db: Session, status_in: schemas.StatusCreate):
 # -------------------------
 
 def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module:
-    """Создает модуль. Проверяет клиента, если ID передан."""
+    """Создает комплектующую. Проверяет клиента, если ID передан."""
     # Если client_id передан (не None), проверяем, существует ли такой клиент
+    client = None
     if module_in.client_id:
         client = db.get(models.Client, module_in.client_id)
         if not client:
@@ -773,7 +872,11 @@ def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module
         raise ValueError("Выбранный ТСР не найден")
     
     # Создаем объект модели
-    db_module = models.Module(**module_in.model_dump())
+    db_module = models.Module(
+        **module_in.model_dump(),
+        is_archived=bool(client.is_archived) if client else False,
+        is_manually_archived=False,
+    )
 
     db.add(db_module)
     db.commit()
@@ -787,7 +890,6 @@ def get_module(db: Session, module_id: UUID) -> Optional[models.Module]:
         .options(
             selectinload(models.Module.client),
             selectinload(models.Module.tsr),
-            selectinload(models.Module.components),
         )
     ).scalars().first()
 
@@ -799,16 +901,16 @@ def list_modules(
     supplier: Optional[str] = None, 
     client_id: Optional[UUID] = None,
     unassigned: bool = False,
+    archived: bool = False,
 ) -> List[models.Module]:
     
     stmt = select(models.Module).options(
         selectinload(models.Module.client),
         selectinload(models.Module.tsr),
-        selectinload(models.Module.components),
     )
 
     # условия фильтрации
-    conditions = []
+    conditions = [models.Module.is_archived.is_(archived)]
     if q:
         conditions.append(models.Module.module_name_index.ilike(f"%{q}%"))
     if supplier:
@@ -833,13 +935,18 @@ def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -
     data = payload.model_dump(exclude_unset=True)
     
     # Если меняем владельца
-    if 'client_id' in data and data['client_id'] is not None:
-        client = db.get(models.Client, data['client_id'])
-        if not client: raise ValueError("Target client not found")
+    if 'client_id' in data:
+        if data['client_id'] is None:
+            data['is_archived'] = bool(db_module.is_manually_archived)
+        else:
+            client = db.get(models.Client, data['client_id'])
+            if not client:
+                raise ValueError("Target client not found")
+            data['is_archived'] = bool(client.is_archived or db_module.is_manually_archived)
 
     if 'tsr_id' in data:
         if data['tsr_id'] is None:
-            raise ValueError("Для модуля необходимо выбрать ТСР")
+            raise ValueError("Для комплектующей необходимо выбрать ТСР")
         if not db.get(models.TstCodeRef, data['tsr_id']):
             raise ValueError("Выбранный ТСР не найден")
 
@@ -860,77 +967,34 @@ def delete_module(db: Session, module_id: UUID) -> bool:
     return True
 
 
-# -------------------------
-# Module components
-# -------------------------
-
-def create_component(db: Session, payload: schemas.ModuleComponentCreate) -> models.ModuleComponent:
-    if payload.module_id and not db.get(models.Module, payload.module_id):
-        raise ValueError("Выбранный модуль не найден")
-    component = models.ModuleComponent(**payload.model_dump())
-    db.add(component)
-    db.commit()
-    db.refresh(component)
-    return component
-
-
-def get_component(db: Session, component_id: UUID) -> Optional[models.ModuleComponent]:
-    return db.get(models.ModuleComponent, component_id)
-
-
-def list_components(
+def set_module_archive_state(
     db: Session,
-    skip: int = 0,
-    limit: int = 100,
-    q: Optional[str] = None,
-    supplier: Optional[str] = None,
-    module_id: Optional[UUID] = None,
-    unassigned: bool = False,
-) -> List[models.ModuleComponent]:
-    stmt = select(models.ModuleComponent).options(
-        selectinload(models.ModuleComponent.module).selectinload(models.Module.client)
-    )
-    conditions = []
-    if q:
-        conditions.append(models.ModuleComponent.component_index.ilike(f"%{q}%"))
-    if supplier:
-        conditions.append(models.ModuleComponent.supplier.ilike(f"%{supplier}%"))
-    if module_id:
-        conditions.append(models.ModuleComponent.module_id == module_id)
-    elif unassigned:
-        conditions.append(models.ModuleComponent.module_id.is_(None))
-    if conditions:
-        stmt = stmt.where(and_(*conditions))
-    return db.execute(
-        stmt.order_by(models.ModuleComponent.updated_at.desc()).offset(skip).limit(limit)
-    ).scalars().all()
-
-
-def update_component(
-    db: Session,
-    component_id: UUID,
-    payload: schemas.ModuleComponentUpdate,
-) -> Optional[models.ModuleComponent]:
-    component = db.get(models.ModuleComponent, component_id)
-    if not component:
+    module_id: UUID,
+    *,
+    is_archived: bool,
+) -> Optional[models.Module]:
+    """Архивирует комплектующую независимо от состояния карточки клиента."""
+    db_module = db.get(models.Module, module_id)
+    if not db_module:
         return None
-    data = payload.model_dump(exclude_unset=True)
-    if data.get("module_id") and not db.get(models.Module, data["module_id"]):
-        raise ValueError("Выбранный модуль не найден")
-    for key, value in data.items():
-        setattr(component, key, value)
-    db.commit()
-    db.refresh(component)
-    return component
 
+    if not is_archived and db_module.client_id:
+        owner = db.get(models.Client, db_module.client_id)
+        if owner and owner.is_archived:
+            raise ValueError("Сначала восстановите клиента из архива")
 
-def delete_component(db: Session, component_id: UUID) -> bool:
-    component = db.get(models.ModuleComponent, component_id)
-    if not component:
-        return False
-    db.delete(component)
-    db.commit()
-    return True
+    db_module.is_manually_archived = is_archived
+    db_module.is_archived = is_archived
+
+    try:
+        db.commit()
+        db.refresh(db_module)
+    except Exception:
+        db.rollback()
+        raise
+
+    return get_module(db, module_id)
+
 
 # Documents storage CRUD
 # -------------------------
@@ -1160,7 +1224,7 @@ def delete_tsr(db: Session, tsr_id: UUID):
             select(func.count()).select_from(models.Module).where(models.Module.tsr_id == tsr_id)
         ).scalar_one()
         if linked_modules:
-            raise ValueError("Этот ТСР используется в модулях. Сначала назначьте им другой ТСР.")
+            raise ValueError("Этот ТСР используется в комплектующих. Сначала назначьте им другой ТСР.")
         db.delete(tsr_to_delete)
         db.commit()
         return True

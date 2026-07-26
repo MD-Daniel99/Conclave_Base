@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/app/stores/auth'
 import DateInput from '@/shared/ui/DateInput.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
 import { fetchAgents } from '@/shared/api/agents'
 import { fetchEntityAudit } from '@/shared/api/audit'
 import {
+  archiveClient,
+  assignClientComponentsTsr,
   createClient,
   createClientPassport,
   createClientPhone,
@@ -17,6 +20,7 @@ import {
   fetchClient,
   fetchClientPhones,
   fetchClients,
+  restoreClient,
   updateClient,
   updateClientPassport,
   updateClientPhone,
@@ -37,18 +41,19 @@ import {
   formatAuditTime,
   summarizeAuditDetails,
 } from '@/shared/lib/audit'
-import { createModule, deleteModule, fetchModules, updateModule } from '@/shared/api/modules'
 import {
-  createProsthesisReference,
+  createComponent as createModule,
+  deleteComponent as deleteModule,
+  fetchComponents as fetchModules,
+  updateComponent as updateModule,
+} from '@/shared/api/components'
+import {
   createTsrReference,
-  deleteProsthesisReference,
   deleteTsrReference,
   fetchNameIndexReferences,
-  fetchProsthesisReferences,
   fetchStages,
   fetchStatuses,
   fetchTsrReferences,
-  updateProsthesisReference,
   updateTsrReference,
 } from '@/shared/api/references'
 import type {
@@ -88,11 +93,17 @@ const contractTemplateOptions = ref<ContractTemplateOption[]>([
   { value: 'dmk_instrument', label: 'ИП ДМК · Акт' },
 ])
 
+const prosthesisOptions = [
+  { value: 'Верхних конечностей', label: 'Верхних конечностей' },
+  { value: 'Нижних конечностей', label: 'Нижних конечностей' },
+  { value: 'Верхних и нижних конечностей', label: 'Верхних и нижних конечностей' },
+] as const
+const prosthesisOptionValues = new Set<string>(prosthesisOptions.map((option) => option.value))
+
 type ClientForm = {
   last_name: string
   first_name: string
   middle_name: string
-  phone: string
   status: string
   current_stage: string
   agent_id: string
@@ -100,14 +111,16 @@ type ClientForm = {
   check_date: string
   prosthesis_type: string
   certificate_price: string
+  taxation_system: 'УСН' | 'ОСНО'
   place_of_residence: string
-  ipra_code: string
+  prosthetist: string
   notes: string
 }
 
 type ClientTab = 'main' | 'identity' | 'phones' | 'modules' | 'documents' | 'history'
 type DetailTab = Exclude<ClientTab, 'main'>
-type ReferenceManagerKind = 'prosthesis' | 'tsr'
+type ClientListMode = 'active' | 'archive'
+type CountInput = string | number
 
 type ClientModuleForm = {
   tsr_id: string
@@ -119,20 +132,26 @@ type ClientModuleForm = {
   size: string
   stiffness: string
   side: string
-  ordered: string
-  recd: string
-  pending: string
+  ordered: CountInput
+  recd: CountInput
+  pending: CountInput
   order_date_acc_num: string
   properties: string
-  prosthetist_keep: string
+  prosthetist_keep: CountInput
   notes: string
+}
+
+type ClientTsrGroup = {
+  key: string
+  tsrId: string
+  tsr: string
+  components: ModuleItem[]
 }
 
 const emptyForm: ClientForm = {
   last_name: '',
   first_name: '',
   middle_name: '',
-  phone: '',
   status: '',
   current_stage: '',
   agent_id: '',
@@ -140,12 +159,14 @@ const emptyForm: ClientForm = {
   check_date: '',
   prosthesis_type: '',
   certificate_price: '',
+  taxation_system: 'УСН',
   place_of_residence: '',
-  ipra_code: '',
+  prosthetist: '',
   notes: '',
 }
 
 const authStore = useAuthStore()
+const route = useRoute()
 
 const emptyModuleForm: ClientModuleForm = {
   tsr_id: '',
@@ -162,7 +183,7 @@ const emptyModuleForm: ClientModuleForm = {
   pending: '0',
   order_date_acc_num: '-',
   properties: '-',
-  prosthetist_keep: '',
+  prosthetist_keep: '0',
   notes: '',
 }
 
@@ -171,7 +192,6 @@ const agents = ref<Agent[]>([])
 const statuses = ref<ReferenceItem[]>([])
 const stages = ref<ReferenceItem[]>([])
 const tsrReferences = ref<ReferenceItem[]>([])
-const prosthesisReferences = ref<ReferenceItem[]>([])
 const nameIndexReferences = ref<ReferenceItem[]>([])
 const phones = ref<ClientPhone[]>([])
 const documents = ref<ClientDocument[]>([])
@@ -185,6 +205,7 @@ const agentFilter = ref('')
 const pageLimit = ref(100)
 const currentPage = ref(1)
 const hasMoreClients = ref(false)
+const activeClientListMode = ref<ClientListMode>('active')
 const selectedClient = ref<Client | null>(null)
 const isClientCardOpen = ref(false)
 const activeTab = ref<ClientTab>('main')
@@ -238,34 +259,27 @@ const isSaving = ref(false)
 const error = ref('')
 const successMessage = ref('')
 const isReferenceManagerOpen = ref(false)
-const referenceManagerKind = ref<ReferenceManagerKind>('prosthesis')
 const referenceSearch = ref('')
 const referenceDraft = ref('')
 const referenceEditingId = ref<string | number | null>(null)
-const referenceEditingValue = ref('')
 const referenceError = ref('')
 const referenceSuccess = ref('')
 const isReferenceSaving = ref(false)
+const groupTsrDrafts = reactive<Record<string, string>>({})
 
 const isEditing = computed(() => Boolean(selectedClient.value?.client_id))
 const isClientPersisted = computed(() => Boolean(selectedClient.value && getClientId(selectedClient.value)))
 const modalMessageId = computed(() => (error.value ? 'client-modal-error' : successMessage.value ? 'client-modal-success' : undefined))
 
 const canManageReferences = computed(() => authStore.isAdmin)
-const referenceManagerTitle = computed(() =>
-  referenceManagerKind.value === 'prosthesis' ? 'Виды протезов' : 'Коды ТСР',
-)
-const activeReferenceItems = computed(() =>
-  referenceManagerKind.value === 'prosthesis' ? prosthesisReferences.value : tsrReferences.value,
-)
 const filteredReferenceItems = computed(() => {
   const search = referenceSearch.value.trim().toLowerCase()
 
   if (!search) {
-    return activeReferenceItems.value
+    return tsrReferences.value
   }
 
-  return activeReferenceItems.value.filter((item) => getReferenceLabel(item).toLowerCase().includes(search))
+  return tsrReferences.value.filter((item) => getReferenceLabel(item).toLowerCase().includes(search))
 })
 const isEditingReference = computed(() => referenceEditingId.value !== null)
 
@@ -275,19 +289,30 @@ const tsrOptions = computed(() => tsrReferences.value.map((item) => ({
   value: String(getReferenceId(item)),
   label: getReferenceLabel(item),
 })))
-const prosthesisOptions = computed(() => prosthesisReferences.value.map(normalizeReferenceOption))
 const nameIndexOptions = computed(() => nameIndexReferences.value.map(normalizeReferenceOption))
 const passportItems = computed(() => selectedClient.value?.passports ?? [])
 const snilsItems = computed(() => selectedClient.value?.snils ?? [])
 const hasPreviousPage = computed(() => currentPage.value > 1)
 const hasNextPage = computed(() => hasMoreClients.value)
 const currentSkip = computed(() => (currentPage.value - 1) * pageLimit.value)
-const clientTsrRows = computed(() => {
+const clientTsrGroups = computed<ClientTsrGroup[]>(() => {
   const source = clientModules.value.length ? clientModules.value : (selectedClient.value?.modules ?? [])
-  return source.map((moduleItem) => ({
-  module: moduleItem,
-  tsr: moduleItem.tsr?.full_tsr_code || 'ТСР не выбран',
-  }))
+  const groups = new Map<string, ClientTsrGroup>()
+
+  for (const component of source) {
+    const tsrId = String(component.tsr_id ?? component.tsr?.id ?? '')
+    const tsr = component.tsr?.full_tsr_code || 'ТСР не выбран'
+    const key = tsrId || '__unassigned__'
+    const group = groups.get(key)
+
+    if (group) {
+      group.components.push(component)
+    } else {
+      groups.set(key, { key, tsrId, tsr, components: [component] })
+    }
+  }
+
+  return [...groups.values()].sort((left, right) => left.tsr.localeCompare(right.tsr, 'ru'))
 })
 
 const statusFallbackLabels: Record<string, string> = {
@@ -407,12 +432,10 @@ function resetReferenceManagerMessages() {
 function resetReferenceManagerForm() {
   referenceDraft.value = ''
   referenceEditingId.value = null
-  referenceEditingValue.value = ''
   resetReferenceManagerMessages()
 }
 
-function openReferenceManager(kind: ReferenceManagerKind = 'prosthesis') {
-  referenceManagerKind.value = kind
+function openReferenceManager() {
   referenceSearch.value = ''
   resetReferenceManagerForm()
   isReferenceManagerOpen.value = true
@@ -427,11 +450,6 @@ function closeReferenceManager() {
   resetReferenceManagerForm()
 }
 
-function switchReferenceManagerKind(kind: ReferenceManagerKind) {
-  referenceManagerKind.value = kind
-  resetReferenceManagerForm()
-}
-
 function startEditReference(item: ReferenceItem) {
   const id = getReferenceId(item)
 
@@ -441,37 +459,26 @@ function startEditReference(item: ReferenceItem) {
   }
 
   referenceEditingId.value = id
-  referenceEditingValue.value = getReferenceValue(item)
   referenceDraft.value = getReferenceLabel(item)
   resetReferenceManagerMessages()
 }
 
-function replaceReferenceValueInClientForm(kind: ReferenceManagerKind, oldValue: string, newValue: string) {
-  if (!oldValue || oldValue === newValue) {
-    return
-  }
-
-  if (kind === 'prosthesis' && form.prosthesis_type.trim() === oldValue) {
-    form.prosthesis_type = newValue
-  }
+async function reloadManagedReferences() {
+  tsrReferences.value = await fetchTsrReferences()
 }
 
-function removeReferenceValueFromClientForm(kind: ReferenceManagerKind, value: string) {
-  if (!value) {
-    return
+async function refreshTsrDependentViews() {
+  await reloadManagedReferences()
+
+  const selectedClientId = selectedClient.value ? getClientId(selectedClient.value) : ''
+  if (selectedClientId) {
+    await refreshSelectedClient(selectedClientId, false)
+    if (loadedDetailTabs.modules) {
+      await loadClientTabData('modules', true)
+    }
   }
 
-  if (kind === 'prosthesis' && form.prosthesis_type.trim() === value) {
-    form.prosthesis_type = ''
-  }
-}
-
-async function reloadManagedReferences(kind = referenceManagerKind.value) {
-  if (kind === 'prosthesis') {
-    prosthesisReferences.value = await fetchProsthesisReferences()
-  } else {
-    tsrReferences.value = await fetchTsrReferences()
-  }
+  await loadClients()
 }
 
 async function saveManagedReference() {
@@ -482,9 +489,7 @@ async function saveManagedReference() {
 
   const value = referenceDraft.value.trim()
   if (!value) {
-    referenceError.value = referenceManagerKind.value === 'prosthesis'
-      ? 'Введите название вида протеза.'
-      : 'Введите код ТСР.'
+    referenceError.value = 'Введите код ТСР.'
     return
   }
 
@@ -492,28 +497,17 @@ async function saveManagedReference() {
   resetReferenceManagerMessages()
 
   try {
-    if (referenceManagerKind.value === 'prosthesis') {
-      if (referenceEditingId.value) {
-        await updateProsthesisReference(referenceEditingId.value, { name: value })
-        replaceReferenceValueInClientForm('prosthesis', referenceEditingValue.value, value)
-        referenceSuccess.value = 'Вид протеза обновлен.'
-      } else {
-        await createProsthesisReference({ name: value })
-        referenceSuccess.value = 'Вид протеза добавлен.'
-      }
-    } else if (referenceEditingId.value) {
+    if (referenceEditingId.value) {
       await updateTsrReference(referenceEditingId.value, { full_tsr_code: value })
-      replaceReferenceValueInClientForm('tsr', referenceEditingValue.value, value)
       referenceSuccess.value = 'Код ТСР обновлен.'
     } else {
       await createTsrReference({ full_tsr_code: value })
       referenceSuccess.value = 'Код ТСР добавлен.'
     }
 
-    await reloadManagedReferences()
+    await refreshTsrDependentViews()
     referenceDraft.value = ''
     referenceEditingId.value = null
-    referenceEditingValue.value = ''
   } catch (caughtError) {
     referenceError.value = getApiErrorMessage(caughtError)
   } finally {
@@ -528,7 +522,6 @@ async function removeManagedReference(item: ReferenceItem) {
   }
 
   const id = getReferenceId(item)
-  const value = getReferenceValue(item)
   const label = getReferenceLabel(item)
 
   if (!id) {
@@ -544,17 +537,10 @@ async function removeManagedReference(item: ReferenceItem) {
   resetReferenceManagerMessages()
 
   try {
-    if (referenceManagerKind.value === 'prosthesis') {
-      await deleteProsthesisReference(id)
-      removeReferenceValueFromClientForm('prosthesis', value)
-      referenceSuccess.value = 'Вид протеза удален.'
-    } else {
-      await deleteTsrReference(id)
-      removeReferenceValueFromClientForm('tsr', value)
-      referenceSuccess.value = 'Код ТСР удален.'
-    }
+    await deleteTsrReference(id)
+    referenceSuccess.value = 'Код ТСР удален.'
 
-    await reloadManagedReferences()
+    await refreshTsrDependentViews()
     if (referenceEditingId.value === id) {
       resetReferenceManagerForm()
     }
@@ -610,16 +596,6 @@ function getClientTsrLabel(client: Client) {
   return values.length ? [...new Set(values)].join('; ') : '-'
 }
 
-function getClientProsthesisLabel(client: Client) {
-  const value = String(client.prosthesis_type ?? '').trim()
-
-  if (!value) {
-    return '-'
-  }
-
-  return getOptionLabel(prosthesisOptions.value, value)
-}
-
 function getClientPrimaryPhone(client: Client) {
   return String(client.phones?.[0]?.number ?? '-')
 }
@@ -669,7 +645,44 @@ function getPhoneValue(phone: ClientPhone) {
 }
 
 function getModuleName(moduleItem: ModuleItem) {
-  return moduleItem.module_name_index ?? moduleItem.module_id ?? 'Модуль'
+  return moduleItem.module_name_index ?? moduleItem.module_id ?? 'Комплектующая'
+}
+
+function getGroupTotalPrice(group: ClientTsrGroup) {
+  return group.components.reduce((sum, component) => sum + parseMoney(component.price), 0)
+}
+
+function getContractGroupIds(group: ClientTsrGroup) {
+  return group.components
+    .map((component) => String(component.module_id ?? ''))
+    .filter(Boolean)
+}
+
+function isContractGroupSelected(group: ClientTsrGroup) {
+  const ids = getContractGroupIds(group)
+  return ids.length > 0 && ids.every((id) => selectedContractModuleIds.value.includes(id))
+}
+
+function isContractGroupPartiallySelected(group: ClientTsrGroup) {
+  const ids = getContractGroupIds(group)
+  const selectedCount = ids.filter((id) => selectedContractModuleIds.value.includes(id)).length
+  return selectedCount > 0 && selectedCount < ids.length
+}
+
+function toggleContractGroup(group: ClientTsrGroup, event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  const groupIds = getContractGroupIds(group)
+  const selected = new Set(selectedContractModuleIds.value)
+
+  for (const id of groupIds) {
+    if (checked) {
+      selected.add(id)
+    } else {
+      selected.delete(id)
+    }
+  }
+
+  selectedContractModuleIds.value = [...selected]
 }
 
 function formatDate(value?: string) {
@@ -800,8 +813,8 @@ function parsePositiveInteger(value: string, fallback = 1) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-function parseNonNegativeInteger(value: string) {
-  const parsed = Number.parseInt(value.trim(), 10)
+function parseNonNegativeInteger(value: CountInput | null | undefined) {
+  const parsed = Number.parseInt(String(value ?? '').trim(), 10)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
 }
 
@@ -820,17 +833,17 @@ function fillModuleForm(moduleItem: ModuleItem) {
   moduleForm.module_name_index = moduleItem.module_name_index ?? ''
   moduleForm.supplier = moduleItem.supplier ?? ''
   moduleForm.quantity = String(quantity)
-  moduleForm.unit_cost = cost ? String(cost / quantity) : ''
-  moduleForm.unit_price = price ? String(price / quantity) : ''
+  moduleForm.unit_cost = moduleItem.cost == null ? '' : formatMoneyInput(cost / quantity)
+  moduleForm.unit_price = moduleItem.price == null ? '' : formatMoneyInput(price / quantity)
   moduleForm.size = moduleItem.size ?? ''
   moduleForm.stiffness = moduleItem.stiffness ?? ''
   moduleForm.side = moduleItem.side ?? ''
   moduleForm.ordered = String(moduleItem.ordered ?? 0)
   moduleForm.recd = String(moduleItem.recd ?? 0)
   moduleForm.pending = String(moduleItem.pending ?? 0)
+  moduleForm.prosthetist_keep = String(moduleItem.prosthetist_keep ?? 0)
   moduleForm.order_date_acc_num = moduleItem.order_date_acc_num ?? '-'
   moduleForm.properties = moduleItem.properties ?? '-'
-  moduleForm.prosthetist_keep = String(moduleItem.prosthetist_keep ?? 0)
   moduleForm.notes = moduleItem.notes ?? ''
   resetMessages()
 }
@@ -854,25 +867,25 @@ function buildModulePayload(clientId: string): ModuleCreatePayload {
     ordered: parseNonNegativeInteger(moduleForm.ordered),
     recd: parseNonNegativeInteger(moduleForm.recd),
     pending: parseNonNegativeInteger(moduleForm.pending),
+    prosthetist_keep: parseNonNegativeInteger(moduleForm.prosthetist_keep),
     order_date_acc_num: moduleForm.order_date_acc_num.trim() || '-',
     properties: moduleForm.properties.trim() || '-',
-    prosthetist_keep: parseNonNegativeInteger(moduleForm.prosthetist_keep),
     notes: optionalString(moduleForm.notes),
   }
 }
 
 function validateModuleForm() {
   if (!moduleForm.tsr_id) {
-    error.value = 'Для модуля нужно выбрать ТСР.'
+    error.value = 'Для комплектующей нужно выбрать ТСР.'
     return false
   }
   if (!moduleForm.module_name_index.trim()) {
-    error.value = 'Для модуля нужно заполнить индекс/название.'
+    error.value = 'Для комплектующей нужно заполнить индекс/название.'
     return false
   }
 
   if (!moduleForm.supplier.trim()) {
-    error.value = 'Для модуля нужно заполнить поставщика.'
+    error.value = 'Для комплектующей нужно заполнить поставщика.'
     return false
   }
 
@@ -901,6 +914,7 @@ function resetDetailState() {
   clientModules.value = []
   warehouseModules.value = []
   auditItems.value = []
+  Object.keys(groupTsrDrafts).forEach((key) => delete groupTsrDrafts[key])
 }
 
 function resetForm() {
@@ -985,18 +999,19 @@ function fillForm(client: Client) {
   form.last_name = String(client.last_name ?? '')
   form.first_name = String(client.first_name ?? '')
   form.middle_name = String(client.middle_name ?? '')
-  form.phone = String(client.phones?.[0]?.number ?? '')
   form.status = getReferenceValue(client.status_code)
   form.current_stage = getReferenceValue(client.current_stage)
   form.agent_id = String(client.agent_id ?? '')
   form.deadline = getDateModel(client.deadline)
   form.check_date = getDateModel(client.check_date)
-  form.prosthesis_type = String(client.prosthesis_type ?? '')
-  form.certificate_price = String(client.certificate_price ?? '')
+  const prosthesisType = String(client.prosthesis_type ?? '')
+  form.prosthesis_type = prosthesisOptionValues.has(prosthesisType) ? prosthesisType : ''
+  form.certificate_price = client.certificate_price == null ? '' : formatMoneyInput(client.certificate_price)
+  form.taxation_system = client.taxation_system === 'ОСНО' ? 'ОСНО' : 'УСН'
   form.place_of_residence = String(client.place_of_residence ?? '')
-  form.ipra_code = String(client.ipra_code ?? '')
+  form.prosthetist = String(client.prosthetist ?? '')
   form.notes = String(client.notes ?? '')
-  snilsForm.ipra_number = form.ipra_code
+  snilsForm.ipra_number = String(client.ipra_code ?? '')
 
   passportForm.series = seriesNumberParts[0] ?? ''
   passportForm.number = seriesNumberParts.slice(1).join(' ')
@@ -1010,8 +1025,6 @@ function fillForm(client: Client) {
 }
 
 function buildCreatePayload(): ClientCreatePayload {
-  const phone = form.phone.trim()
-
   return {
     last_name: form.last_name.trim(),
     first_name: form.first_name.trim(),
@@ -1023,10 +1036,11 @@ function buildCreatePayload(): ClientCreatePayload {
     check_date: form.check_date || null,
     prosthesis_type: optionalString(form.prosthesis_type),
     certificate_price: optionalString(form.certificate_price),
+    taxation_system: form.taxation_system,
     place_of_residence: optionalString(form.place_of_residence),
-    ipra_code: optionalString(form.ipra_code),
+    prosthetist: optionalString(form.prosthetist),
     notes: optionalString(form.notes),
-    phones: phone ? [{ number: phone }] : [],
+    phones: [],
   }
 }
 
@@ -1042,8 +1056,9 @@ function buildUpdatePayload(): ClientUpdatePayload {
     check_date: form.check_date || null,
     prosthesis_type: optionalString(form.prosthesis_type),
     certificate_price: optionalString(form.certificate_price),
+    taxation_system: form.taxation_system,
     place_of_residence: optionalString(form.place_of_residence),
-    ipra_code: optionalString(form.ipra_code),
+    prosthetist: optionalString(form.prosthetist),
     notes: optionalString(form.notes),
   }
 }
@@ -1108,6 +1123,7 @@ async function loadClients() {
       status: statusFilter.value.trim() || undefined,
       current_stage: stageFilter.value.trim() || undefined,
       agent_id: agentFilter.value.trim() || undefined,
+      archived: activeClientListMode.value === 'archive',
     })
 
     hasMoreClients.value = fetchedClients.length > pageLimit.value
@@ -1122,6 +1138,19 @@ async function loadClients() {
 
 function applyClientFilters() {
   currentPage.value = 1
+  void loadClients()
+}
+
+function switchClientListMode(mode: ClientListMode) {
+  if (activeClientListMode.value === mode) {
+    return
+  }
+
+  activeClientListMode.value = mode
+  currentPage.value = 1
+  selectedClient.value = null
+  isClientCardOpen.value = false
+  resetMessages()
   void loadClients()
 }
 
@@ -1144,12 +1173,11 @@ async function goToNextClientsPage() {
 }
 
 async function loadReferences() {
-  const [agentsResponse, statusesResponse, stagesResponse, tsrResponse, prosthesisResponse, nameIndexResponse] = await Promise.allSettled([
+  const [agentsResponse, statusesResponse, stagesResponse, tsrResponse, nameIndexResponse] = await Promise.allSettled([
     fetchAgents({ limit: 500 }),
     fetchStatuses(),
     fetchStages(),
     fetchTsrReferences(),
-    fetchProsthesisReferences(),
     fetchNameIndexReferences(),
   ])
 
@@ -1157,7 +1185,6 @@ async function loadReferences() {
   statuses.value = statusesResponse.status === 'fulfilled' ? statusesResponse.value : []
   stages.value = stagesResponse.status === 'fulfilled' ? stagesResponse.value : []
   tsrReferences.value = tsrResponse.status === 'fulfilled' ? tsrResponse.value : []
-  prosthesisReferences.value = prosthesisResponse.status === 'fulfilled' ? prosthesisResponse.value : []
   nameIndexReferences.value = nameIndexResponse.status === 'fulfilled' ? nameIndexResponse.value : []
 }
 
@@ -1176,16 +1203,23 @@ async function loadClientTabData(tab: DetailTab, force = false) {
     } else if (tab === 'phones') {
       phones.value = await fetchClientPhones(clientId)
     } else if (tab === 'modules') {
+      const archived = Boolean(selectedClient.value?.is_archived)
       const [clientModuleResponse, warehouseModuleResponse] = await Promise.all([
-        fetchModules({ limit: 1000, client_id: clientId }),
-        fetchModules({ limit: 1000, unassigned: true }),
+        fetchModules({ limit: 1000, client_id: clientId, archived }),
+        archived
+          ? Promise.resolve([])
+          : fetchModules({ limit: 1000, unassigned: true, archived: false }),
       ])
       clientModules.value = clientModuleResponse
       warehouseModules.value = warehouseModuleResponse
     } else if (tab === 'documents') {
       const [documentResponse, moduleResponse] = await Promise.all([
         fetchClientDocuments(clientId),
-        fetchModules({ limit: 1000, client_id: clientId }),
+        fetchModules({
+          limit: 1000,
+          client_id: clientId,
+          archived: Boolean(selectedClient.value?.is_archived),
+        }),
       ])
       documents.value = documentResponse
       clientModules.value = moduleResponse
@@ -1237,6 +1271,30 @@ async function selectClient(client: Client) {
   void refreshSelectedClient(clientId).catch(() => {
     selectedClient.value = client
   })
+}
+
+async function openClientFromRoute(rawClientId: unknown) {
+  const queryValue = Array.isArray(rawClientId) ? rawClientId[0] : rawClientId
+  const clientId = String(queryValue ?? '').trim()
+
+  if (!clientId) {
+    return
+  }
+
+  try {
+    const client = await fetchClient(clientId)
+    const targetMode: ClientListMode = client.is_archived ? 'archive' : 'active'
+
+    if (activeClientListMode.value !== targetMode) {
+      activeClientListMode.value = targetMode
+      currentPage.value = 1
+      await loadClients()
+    }
+
+    await selectClient(client)
+  } catch (caughtError) {
+    error.value = `Не удалось открыть карточку клиента: ${getApiErrorMessage(caughtError)}`
+  }
 }
 
 async function saveClient() {
@@ -1293,6 +1351,43 @@ async function removeClient(client: Client) {
       resetForm()
     }
 
+    await loadClients()
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+async function changeClientArchiveState(client: Client, archive: boolean) {
+  const clientId = getClientId(client)
+  const action = archive ? 'переместить в архив' : 'восстановить'
+  const componentNote = archive
+    ? ' Все привязанные комплектующие также будут перемещены в архив.'
+    : ' Все привязанные комплектующие также будут восстановлены.'
+
+  if (!clientId || !window.confirm(`${action[0].toUpperCase()}${action.slice(1)} клиента «${getClientName(client)}»?${componentNote}`)) {
+    return
+  }
+
+  isSaving.value = true
+  resetMessages()
+
+  try {
+    if (archive) {
+      await archiveClient(clientId)
+    } else {
+      await restoreClient(clientId)
+    }
+
+    if (selectedClient.value && getClientId(selectedClient.value) === clientId) {
+      isClientCardOpen.value = false
+      resetForm()
+    }
+
+    successMessage.value = archive
+      ? 'Клиент и его комплектующие перемещены в архив'
+      : 'Клиент и его комплектующие восстановлены'
     await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -1542,9 +1637,7 @@ async function saveSnils() {
       successMessage.value = 'СНИЛС сохранен'
     }
 
-    if (ipraNumber) {
-      await updateClient(clientId, { ipra_code: ipraNumber })
-    }
+    await updateClient(clientId, { ipra_code: ipraNumber || null })
 
     cancelSnilsEdit()
     await refreshSelectedClient(clientId, false)
@@ -1579,6 +1672,53 @@ async function removeSnils(snils: ClientSnils) {
   }
 }
 
+function getGroupTsrDraft(group: ClientTsrGroup) {
+  return groupTsrDrafts[group.key] ?? group.tsrId
+}
+
+function setGroupTsrDraft(group: ClientTsrGroup, event: Event) {
+  groupTsrDrafts[group.key] = (event.target as HTMLSelectElement).value
+}
+
+async function assignTsrToComponents(componentIds: string[], tsrId: string, message: string) {
+  const clientId = selectedClient.value ? getClientId(selectedClient.value) : ''
+
+  if (!clientId || !tsrId || componentIds.length === 0) {
+    error.value = 'Выбери ТСР и хотя бы одну комплектующую.'
+    return
+  }
+
+  isSaving.value = true
+  resetMessages()
+
+  try {
+    await assignClientComponentsTsr(clientId, {
+      component_ids: componentIds,
+      tsr_id: tsrId,
+    })
+    Object.keys(groupTsrDrafts).forEach((key) => delete groupTsrDrafts[key])
+    successMessage.value = message
+    await refreshSelectedClient(clientId, false)
+    await loadClientTabData('modules', true)
+    await loadClients()
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+async function assignTsrToGroup(group: ClientTsrGroup) {
+  const componentIds = group.components
+    .map((component) => String(component.module_id ?? ''))
+    .filter(Boolean)
+  await assignTsrToComponents(
+    componentIds,
+    getGroupTsrDraft(group),
+    'ТСР назначен всей группе комплектующих',
+  )
+}
+
 async function assignModule() {
   if (!selectedModuleId.value) {
     return
@@ -1596,8 +1736,9 @@ async function assignModule() {
 
     await updateModule(selectedModuleId.value, { client_id: clientId })
     selectedModuleId.value = ''
-    successMessage.value = 'Модуль привязан к клиенту'
+    successMessage.value = 'Комплектующая привязана к клиенту'
     await loadClientTabData('modules', true)
+    await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -1610,7 +1751,7 @@ async function unassignModule(moduleItem: ModuleItem) {
     return
   }
 
-  if (!window.confirm(`Вернуть модуль "${getModuleName(moduleItem)}" на склад?`)) {
+  if (!window.confirm(`Вернуть комплектующую "${getModuleName(moduleItem)}" на склад?`)) {
     return
   }
 
@@ -1619,8 +1760,9 @@ async function unassignModule(moduleItem: ModuleItem) {
 
   try {
     await updateModule(moduleItem.module_id, { client_id: null })
-    successMessage.value = 'Модуль отвязан и возвращен на склад'
+    successMessage.value = 'Комплектующая отвязана и возвращена на склад'
     await loadClientTabData('modules', true)
+    await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -1648,15 +1790,16 @@ async function saveClientModule() {
 
     if (editingModuleId.value) {
       await updateModule(editingModuleId.value, payload as ModuleUpdatePayload)
-      successMessage.value = 'Модуль обновлен'
+      successMessage.value = 'Комплектующая обновлена'
     } else {
       await createModule(payload)
-      successMessage.value = 'Модуль создан и привязан к клиенту'
+      successMessage.value = 'Комплектующая создана и привязана к клиенту'
     }
 
     resetModuleForm()
     await refreshSelectedClient(clientId, false)
     await loadClientTabData('modules', true)
+    await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -1665,7 +1808,7 @@ async function saveClientModule() {
 }
 
 async function removeClientModule(moduleItem: ModuleItem) {
-  if (!selectedClient.value || !moduleItem.module_id || !window.confirm(`Удалить модуль "${getModuleName(moduleItem)}"?`)) {
+  if (!selectedClient.value || !moduleItem.module_id || !window.confirm(`Удалить комплектующую "${getModuleName(moduleItem)}"?`)) {
     return
   }
 
@@ -1675,10 +1818,11 @@ async function removeClientModule(moduleItem: ModuleItem) {
   try {
     const clientId = getClientId(selectedClient.value)
     await deleteModule(moduleItem.module_id)
-    successMessage.value = 'Модуль удален'
+    successMessage.value = 'Комплектующая удалена'
     resetModuleForm()
     await refreshSelectedClient(clientId, false)
     await loadClientTabData('modules', true)
+    await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -1755,7 +1899,7 @@ async function generateContract() {
   }
 
   if (showExtendedContractDates.value && selectedContractModuleIds.value.length === 0) {
-    error.value = 'Для договора ООО выбери хотя бы один модуль клиента.'
+    error.value = 'Для договора ООО выбери хотя бы одну комплектующую клиента.'
     return
   }
 
@@ -1837,6 +1981,13 @@ watch(isClientCardOpen, (isOpen) => {
   setBodyModalLock(isOpen)
 })
 
+watch(
+  () => route.query.client_id,
+  (clientId) => {
+    void openClientFromRoute(clientId)
+  },
+)
+
 async function loadContractTemplates() {
   try {
     const templates = await fetchContractTemplates()
@@ -1850,6 +2001,7 @@ async function loadContractTemplates() {
 
 onMounted(async () => {
   await Promise.all([loadClients(), loadReferences(), loadContractTemplates()])
+  await openClientFromRoute(route.query.client_id)
 })
 
 onBeforeUnmount(() => {
@@ -1864,7 +2016,18 @@ onBeforeUnmount(() => {
         <p class="eyebrow">CRM</p>
         <h1>Клиенты</h1>
       </div>
-      <button class="primary-button" type="button" @click="openNewClient">Создать клиента</button>
+      <button v-if="activeClientListMode === 'active'" class="primary-button" type="button" @click="openNewClient">
+        Создать клиента
+      </button>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Разделы клиентов">
+      <button :class="{ active: activeClientListMode === 'active' }" type="button" @click="switchClientListMode('active')">
+        Рабочие клиенты
+      </button>
+      <button :class="{ active: activeClientListMode === 'archive' }" type="button" @click="switchClientListMode('archive')">
+        Архив
+      </button>
     </div>
 
     <form class="toolbar-form clients-toolbar" @submit.prevent="applyClientFilters">
@@ -1906,10 +2069,10 @@ onBeforeUnmount(() => {
       <table>
         <thead>
           <tr>
-            <th>ID</th>
+            <th>№</th>
             <th>ФИО</th>
             <th>Телефон</th>
-            <th>Вид протеза</th>
+            <th>Протезист</th>
             <th>ТСР</th>
             <th>Дата пробития</th>
             <th>Стоимость серт.</th>
@@ -1930,18 +2093,18 @@ onBeforeUnmount(() => {
           </template>
           <template v-else>
             <tr
-              v-for="client in clients"
+              v-for="(client, index) in clients"
               :key="String(client.client_id ?? client.external_id)"
               :class="{ selected: selectedClient && getClientId(selectedClient) === getClientId(client) }"
             >
-              <td>{{ client.external_id ?? client.client_id }}</td>
+              <td>{{ currentSkip + index + 1 }}</td>
               <td>
                 <button class="link-button" type="button" @click="selectClient(client)">
                   {{ getClientName(client) }}
                 </button>
               </td>
               <td>{{ getClientPrimaryPhone(client) }}</td>
-              <td>{{ getClientProsthesisLabel(client) }}</td>
+              <td>{{ client.prosthetist || '—' }}</td>
               <td>{{ getClientTsrLabel(client) }}</td>
               <td>{{ getClientDate(client) }}</td>
               <td>{{ formatMoney(client.certificate_price) }}</td>
@@ -1953,6 +2116,24 @@ onBeforeUnmount(() => {
               <td>{{ formatShortDate(client.updated_at) }}</td>
               <td class="row-actions">
                 <button class="ghost-button" type="button" @click="selectClient(client)">Открыть</button>
+                <button
+                  v-if="activeClientListMode === 'active'"
+                  class="secondary-button"
+                  type="button"
+                  :disabled="isSaving"
+                  @click="changeClientArchiveState(client, true)"
+                >
+                  В архив
+                </button>
+                <button
+                  v-else
+                  class="secondary-button"
+                  type="button"
+                  :disabled="isSaving"
+                  @click="changeClientArchiveState(client, false)"
+                >
+                  Восстановить
+                </button>
                 <button class="danger-button" type="button" :disabled="isSaving" @click="removeClient(client)">
                   Удалить
                 </button>
@@ -1987,7 +2168,24 @@ onBeforeUnmount(() => {
             <h2>{{ isEditing && selectedClient ? getClientName(selectedClient) : 'Создать клиента' }}</h2>
           </div>
           <div class="row-actions">
-            <button class="ghost-button" type="button" :disabled="isSaving" @click="openNewClient">Новый</button>
+            <button
+              v-if="selectedClient && isClientPersisted"
+              class="secondary-button"
+              type="button"
+              :disabled="isSaving"
+              @click="changeClientArchiveState(selectedClient, !selectedClient.is_archived)"
+            >
+              {{ selectedClient.is_archived ? 'Восстановить' : 'В архив' }}
+            </button>
+            <button
+              v-if="activeClientListMode === 'active'"
+              class="ghost-button"
+              type="button"
+              :disabled="isSaving"
+              @click="openNewClient"
+            >
+              Новый
+            </button>
             <button class="ghost-button" type="button" :disabled="isSaving" @click="closeClientCard">Закрыть</button>
           </div>
         </div>
@@ -2003,7 +2201,7 @@ onBeforeUnmount(() => {
             Телефоны
           </button>
           <button :class="{ active: activeTab === 'modules' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('modules')">
-            Модули
+            Комплектующие
           </button>
           <button :class="{ active: activeTab === 'documents' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('documents')">
             Документы
@@ -2018,7 +2216,7 @@ onBeforeUnmount(() => {
 
         <p v-if="!isEditing" class="form-hint">
           Сначала сохрани основную карточку клиента. После создания станут доступны телефоны, документы,
-          модули и история, потому что эти записи привязываются к client_id.
+          комплектующие и история, потому что эти записи привязываются к client_id.
         </p>
 
         <form v-if="activeTab === 'main'" class="side-form flat-form" @submit.prevent="saveClient">
@@ -2036,11 +2234,6 @@ onBeforeUnmount(() => {
               <input v-model="form.middle_name" />
             </label>
           </div>
-
-          <label>
-            Телефон
-            <input v-model="form.phone" />
-          </label>
 
           <div class="form-grid">
             <label>
@@ -2073,30 +2266,41 @@ onBeforeUnmount(() => {
             </select>
           </label>
 
+          <div class="form-grid">
+            <label>
+              Протезист
+              <input v-model="form.prosthetist" />
+            </label>
+            <label>
+              Место проживания
+              <textarea v-model="form.place_of_residence" rows="3" />
+            </label>
+          </div>
+
           <div class="form-heading">
             <div>
               <h2>Сертификат и протезирование</h2>
-              <p class="muted">ТСР назначается каждому модулю и отображается автоматически.</p>
+              <p class="muted">Каждая комплектующая назначается конкретному ТСР клиента.</p>
             </div>
             <button
               v-if="canManageReferences"
               class="secondary-button"
               type="button"
-              @click="openReferenceManager('prosthesis')"
+              @click="openReferenceManager"
             >
-              Справочники
+              Справочник ТСР
             </button>
           </div>
 
           <div class="form-grid">
             <label>
               Вид протеза
-              <input v-model="form.prosthesis_type" list="prosthesis-list" placeholder="Выбери или впиши вручную" />
-              <datalist id="prosthesis-list">
+              <select v-model="form.prosthesis_type">
+                <option value="" disabled hidden></option>
                 <option v-for="option in prosthesisOptions" :key="option.value" :value="option.value">
                   {{ option.label }}
                 </option>
-              </datalist>
+              </select>
             </label>
             <label>
               Дата пробития
@@ -2105,6 +2309,13 @@ onBeforeUnmount(() => {
             <label>
               Стоимость сертификата
               <input v-model="form.certificate_price" inputmode="decimal" placeholder="Например: 250 000" @blur="formatClientMoneyField('certificate_price')" />
+            </label>
+            <label>
+              Налогообложение
+              <select v-model="form.taxation_system">
+                <option value="УСН">УСН</option>
+                <option value="ОСНО">ОСНО</option>
+              </select>
             </label>
           </div>
 
@@ -2115,28 +2326,24 @@ onBeforeUnmount(() => {
 
           <div class="detail-panel tsr-module-panel">
             <p class="eyebrow">ТСР клиента</p>
-            <div v-if="clientTsrRows.length" class="list-stack">
-              <div v-for="row in clientTsrRows" :key="String(row.module.module_id)" class="list-row">
-                <strong>{{ row.tsr }}</strong>
-                <span>{{ getModuleName(row.module) }}</span>
-              </div>
+            <div v-if="clientTsrGroups.length" class="tsr-component-groups">
+              <article v-for="group in clientTsrGroups" :key="group.key" class="tsr-component-group">
+                <header class="tsr-component-header">
+                  <strong>{{ group.tsr }}</strong>
+                  <span>Комплектующих: {{ group.components.length }}</span>
+                </header>
+                <ul class="component-name-list">
+                  <li v-for="component in group.components" :key="String(component.module_id)">
+                    <strong>{{ getModuleName(component) }}</strong>
+                    <span>
+                      {{ component.supplier || 'Поставщик не указан' }}
+                      · {{ component.quantity ?? 1 }} шт.
+                    </span>
+                  </li>
+                </ul>
+              </article>
             </div>
-            <p v-else class="muted">После привязки модулей здесь появятся пары «ТСР — модуль».</p>
-          </div>
-
-          <div class="form-heading">
-            <h2>Финансы и контактные данные</h2>
-          </div>
-
-          <div class="form-grid">
-            <label>
-              Номер ИПРА
-              <input v-model="form.ipra_code" />
-            </label>
-            <label>
-              Место проживания
-              <textarea v-model="form.place_of_residence" rows="3" />
-            </label>
+            <p v-else class="muted">После привязки здесь появятся ТСР и списки относящихся к ним комплектующих.</p>
           </div>
 
           <label>
@@ -2151,8 +2358,8 @@ onBeforeUnmount(() => {
 
         <div v-else-if="activeTab === 'identity'" class="detail-panel">
           <form class="side-form flat-form" @submit.prevent="savePassport">
-            <div>
-              <p class="eyebrow">Паспорт</p>
+            <div class="form-heading">
+              <h2>Паспорт</h2>
             </div>
             <div class="form-grid">
               <label>
@@ -2217,8 +2424,8 @@ onBeforeUnmount(() => {
           </div>
 
           <form class="side-form flat-form" @submit.prevent="saveSnils">
-            <div>
-              <p class="eyebrow">СНИЛС / ИПРА</p>
+            <div class="form-heading">
+              <h2>СНИЛС / ИПРА</h2>
             </div>
             <div class="form-grid">
               <label>
@@ -2274,12 +2481,16 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="activeTab === 'modules'" class="detail-panel">
-          <p v-if="isTabLoading('modules')" class="muted">Загружаем модули...</p>
+          <p v-if="isTabLoading('modules')" class="muted">Загружаем комплектующие...</p>
+          <template v-if="!selectedClient?.is_archived">
+          <div class="form-heading">
+            <h2>Выбрать комплектующую для клиента</h2>
+          </div>
           <form class="toolbar-form compact-toolbar" @submit.prevent="assignModule">
             <select v-model="selectedModuleId">
-              <option value="">Выбери модуль со склада</option>
+              <option value="">Выбери комплектующую со склада</option>
               <option v-for="moduleItem in warehouseModules" :key="String(moduleItem.module_id)" :value="moduleItem.module_id">
-                {{ getModuleName(moduleItem) }}
+                {{ moduleItem.tsr?.full_tsr_code || 'ТСР не выбран' }} — {{ getModuleName(moduleItem) }}
               </option>
             </select>
             <button class="secondary-button" :disabled="isSaving || !selectedModuleId" type="submit">
@@ -2289,7 +2500,7 @@ onBeforeUnmount(() => {
 
           <form class="side-form flat-form" @submit.prevent="saveClientModule">
             <div class="form-heading">
-              <h2>{{ editingModuleId ? 'Редактирование модуля' : 'Создать модуль для клиента' }}</h2>
+              <h2>{{ editingModuleId ? 'Редактирование комплектующей' : 'Создать комплектующую для клиента' }}</h2>
               <button v-if="editingModuleId" class="ghost-button" type="button" @click="resetModuleForm">Отмена</button>
             </div>
 
@@ -2365,13 +2576,6 @@ onBeforeUnmount(() => {
                 Ожидается
                 <input v-model="moduleForm.pending" type="number" min="0" step="1" />
               </label>
-            </div>
-
-            <div class="form-grid">
-              <label>
-                Доп. свойства
-                <input v-model="moduleForm.properties" />
-              </label>
               <label>
                 У протезиста
                 <input v-model="moduleForm.prosthetist_keep" type="number" min="0" step="1" />
@@ -2379,39 +2583,89 @@ onBeforeUnmount(() => {
             </div>
 
             <label>
+              Доп. свойства
+              <input v-model="moduleForm.properties" />
+            </label>
+
+            <label>
               Заметки
               <textarea v-model="moduleForm.notes" rows="3" />
             </label>
 
             <button class="secondary-button" :disabled="isSaving" type="submit">
-              {{ editingModuleId ? 'Сохранить модуль' : 'Создать модуль' }}
+              {{ editingModuleId ? 'Сохранить комплектующую' : 'Создать комплектующую' }}
             </button>
           </form>
+          </template>
+          <p v-else class="form-hint">
+            Комплектующие архивного клиента доступны для просмотра. Чтобы изменять их или назначать ТСР, сначала восстанови клиента.
+          </p>
 
-          <div class="list-stack">
-            <div v-for="moduleItem in clientModules" :key="String(moduleItem.module_id)" class="list-row">
-              <div>
-                <strong>{{ getModuleName(moduleItem) }}</strong>
-                <span>
-                  {{ moduleItem.tsr?.full_tsr_code || 'ТСР не выбран' }} ·
-                  {{ moduleItem.supplier || moduleItem.properties || 'Модуль клиента' }} ·
-                  Кол-во: {{ moduleItem.quantity ?? 1 }} ·
-                  Себест.: {{ formatMoney(moduleItem.cost) }} ·
-                  Цена: {{ formatMoney(moduleItem.price) }}
-                </span>
-              </div>
-              <div class="row-actions">
-                <button class="ghost-button" type="button" @click="fillModuleForm(moduleItem)">Изм.</button>
-                <button class="ghost-button" :disabled="isSaving" type="button" @click="unassignModule(moduleItem)">
-                  На склад
+          <div v-if="clientTsrGroups.length" class="tsr-component-groups">
+            <article v-for="group in clientTsrGroups" :key="group.key" class="tsr-component-group">
+              <header class="tsr-component-header">
+                <div>
+                  <strong>{{ group.tsr }}</strong>
+                  <span>Комплектующих: {{ group.components.length }}</span>
+                </div>
+                <strong>{{ formatMoney(getGroupTotalPrice(group)) }}</strong>
+              </header>
+              <div v-if="!selectedClient?.is_archived" class="tsr-assignment-controls">
+                <label class="tsr-assignment-field">
+                  <span>ТСР всей группы</span>
+                  <select
+                    :value="getGroupTsrDraft(group)"
+                    :aria-label="`ТСР для группы ${group.tsr}`"
+                    @change="setGroupTsrDraft(group, $event)"
+                  >
+                    <option value="">Выбери ТСР</option>
+                    <option v-for="option in tsrOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+                <button
+                  class="secondary-button"
+                  type="button"
+                  :disabled="isSaving || !getGroupTsrDraft(group) || getGroupTsrDraft(group) === group.tsrId"
+                  @click="assignTsrToGroup(group)"
+                >
+                  {{ group.tsrId ? 'Изменить для всей группы' : 'Назначить всей группе' }}
                 </button>
-                <button class="danger-button" :disabled="isSaving" type="button" @click="removeClientModule(moduleItem)">
-                  Удалить
-                </button>
               </div>
-            </div>
-            <p v-if="clientModules.length === 0" class="muted">К клиенту пока не привязаны модули.</p>
+
+              <div class="list-stack">
+                <div v-for="moduleItem in group.components" :key="String(moduleItem.module_id)" class="list-row">
+                  <div>
+                    <strong>{{ getModuleName(moduleItem) }}</strong>
+                    <span>
+                      {{ moduleItem.supplier || moduleItem.properties || 'Комплектующая клиента' }} ·
+                      Кол-во: {{ moduleItem.quantity ?? 1 }} ·
+                      Себест.: {{ formatMoney(moduleItem.cost) }} ·
+                      Цена: {{ formatMoney(moduleItem.price) }}
+                    </span>
+                  </div>
+                  <div v-if="!selectedClient?.is_archived" class="row-actions component-actions">
+                    <button
+                      class="ghost-button"
+                      type="button"
+                      title="Изменить данные или ТСР комплектующей"
+                      @click="fillModuleForm(moduleItem)"
+                    >
+                      Изм.
+                    </button>
+                    <button class="ghost-button" :disabled="isSaving" type="button" @click="unassignModule(moduleItem)">
+                      На склад
+                    </button>
+                    <button class="danger-button" :disabled="isSaving" type="button" @click="removeClientModule(moduleItem)">
+                      Удалить
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </article>
           </div>
+          <p v-else class="muted">К клиенту пока не привязаны комплектующие.</p>
         </div>
 
         <div v-else-if="activeTab === 'documents'" class="detail-panel">
@@ -2450,15 +2704,43 @@ onBeforeUnmount(() => {
             </button>
           </form>
           <div v-if="showExtendedContractDates" class="contract-module-selector">
-            <p class="eyebrow">Модули для договора</p>
-            <label v-for="moduleItem in clientModules" :key="String(moduleItem.module_id)" class="checkbox-label">
-              <input v-model="selectedContractModuleIds" type="checkbox" :value="String(moduleItem.module_id)" />
-              <span>
-                <strong>{{ moduleItem.tsr?.full_tsr_code || 'ТСР не выбран' }}</strong>
-                — {{ getModuleName(moduleItem) }} · {{ formatMoney(moduleItem.price) }}
-              </span>
-            </label>
-            <p v-if="clientModules.length === 0" class="muted">Сначала привяжи к клиенту модуль с ТСР.</p>
+            <p class="eyebrow">ТСР и комплектующие для договора</p>
+            <article v-for="group in clientTsrGroups" :key="group.key" class="contract-tsr-group">
+              <label class="checkbox-label contract-tsr-heading">
+                <input
+                  type="checkbox"
+                  :checked="isContractGroupSelected(group)"
+                  :indeterminate="isContractGroupPartiallySelected(group)"
+                  @change="toggleContractGroup(group, $event)"
+                />
+                <span>
+                  <strong>{{ group.tsr }}</strong>
+                  · {{ group.components.length }} комплектующих
+                  · {{ formatMoney(getGroupTotalPrice(group)) }}
+                </span>
+              </label>
+              <div class="contract-component-list">
+                <label
+                  v-for="component in group.components"
+                  :key="String(component.module_id)"
+                  class="checkbox-label"
+                >
+                  <input
+                    v-model="selectedContractModuleIds"
+                    type="checkbox"
+                    :value="String(component.module_id)"
+                  />
+                  <span>
+                    <strong>{{ getModuleName(component) }}</strong>
+                    · {{ component.quantity ?? 1 }} шт.
+                    · {{ formatMoney(component.price) }}
+                  </span>
+                </label>
+              </div>
+            </article>
+            <p v-if="clientTsrGroups.length === 0" class="muted">
+              Сначала привяжи к клиенту комплектующие и назначь им ТСР.
+            </p>
           </div>
           <form class="upload-form" @submit.prevent="uploadDocument">
             <label>
@@ -2516,22 +2798,13 @@ onBeforeUnmount(() => {
         @click.self="closeReferenceManager"
         @keydown.esc.window="closeReferenceManager"
       >
-        <section class="modal-panel reference-manager-modal" role="dialog" aria-modal="true" aria-label="Справочники ТСР и видов протезов" @click.stop>
+        <section class="modal-panel reference-manager-modal" role="dialog" aria-modal="true" aria-label="Справочник ТСР" @click.stop>
           <div class="modal-header">
             <div>
-              <p class="eyebrow">Справочники</p>
-              <h2>{{ referenceManagerTitle }}</h2>
+              <p class="eyebrow">Справочник</p>
+              <h2>Коды ТСР</h2>
             </div>
             <button class="ghost-button" type="button" :disabled="isReferenceSaving" @click="closeReferenceManager">Закрыть</button>
-          </div>
-
-          <div class="tabs compact-tabs" role="tablist">
-            <button :class="{ active: referenceManagerKind === 'prosthesis' }" type="button" @click="switchReferenceManagerKind('prosthesis')">
-              Виды протезов
-            </button>
-            <button :class="{ active: referenceManagerKind === 'tsr' }" type="button" @click="switchReferenceManagerKind('tsr')">
-              ТСР
-            </button>
           </div>
 
           <p v-if="referenceError" class="form-error">{{ referenceError }}</p>
@@ -2539,12 +2812,8 @@ onBeforeUnmount(() => {
 
           <form class="reference-editor" @submit.prevent="saveManagedReference">
             <label>
-              {{ referenceManagerKind === 'prosthesis' ? 'Название вида протеза' : 'Код ТСР' }}
-              <input
-                v-model="referenceDraft"
-                :placeholder="referenceManagerKind === 'prosthesis' ? 'Например: Бедро модульное' : 'Например: 8-07-01'"
-                required
-              />
+              Код ТСР
+              <input v-model="referenceDraft" placeholder="Например: 8-07-01" required />
             </label>
             <div class="row-actions reference-editor-actions">
               <button class="primary-button" type="submit" :disabled="isReferenceSaving || !referenceDraft.trim()">
@@ -2558,14 +2827,14 @@ onBeforeUnmount(() => {
 
           <div class="reference-search-row">
             <input v-model="referenceSearch" placeholder="Быстрый поиск по справочнику" />
-            <span class="muted">{{ filteredReferenceItems.length }} из {{ activeReferenceItems.length }}</span>
+            <span class="muted">{{ filteredReferenceItems.length }} из {{ tsrReferences.length }}</span>
           </div>
 
           <div class="reference-list" role="list">
-            <article v-for="item in filteredReferenceItems" :key="String(getReferenceId(item) || getReferenceLabel(item))" class="reference-list-item" role="listitem">
+            <article v-for="(item, index) in filteredReferenceItems" :key="String(getReferenceId(item) || getReferenceLabel(item))" class="reference-list-item" role="listitem">
               <div>
                 <strong>{{ getReferenceLabel(item) }}</strong>
-                <span>ID: {{ getReferenceId(item) || '—' }}</span>
+                <span>№ {{ index + 1 }}</span>
               </div>
               <div class="row-actions">
                 <button class="ghost-button" type="button" :disabled="isReferenceSaving" @click="startEditReference(item)">Изм.</button>
@@ -2576,8 +2845,7 @@ onBeforeUnmount(() => {
           </div>
 
           <p class="form-hint">
-            Это не отдельная страница справочников. Окно открывается из карточки клиента и управляет только теми списками,
-            которые используются в полях “Вид протеза” и “ТСР”.
+            Здесь управляются только коды ТСР. Поле «Вид протеза» использует фиксированный список категорий конечностей.
           </p>
         </section>
       </div>

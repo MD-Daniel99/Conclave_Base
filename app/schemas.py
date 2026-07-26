@@ -14,17 +14,30 @@
 Поддерживает значения полей по умолчанию.
 """
 
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Literal
 from uuid import UUID
 from datetime import datetime, date
 
-from pydantic import AliasChoices, BaseModel, Field, constr, model_validator, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, constr, field_validator, model_validator, ConfigDict
 
 # --- типы с базовой валидацией ---
 InnType = constr(pattern=r'^\d{10}(\d{2})?$', strip_whitespace=True)  # 10 или 12 цифр
 OgrnipType = constr(pattern=r'^\d{15}$', strip_whitespace=True)         # 15 цифр
 BicType = constr(pattern=r'^\d{9}$', strip_whitespace=True)            # 9 цифр
 AccountType = constr(min_length=20, max_length=34, pattern=r'^\d+$', strip_whitespace=True)  # 20..34 цифр
+PROSTHESIS_TYPES = frozenset({
+    "Верхних конечностей",
+    "Нижних конечностей",
+    "Верхних и нижних конечностей",
+})
+TaxationSystem = Literal["УСН", "ОСНО"]
+
+
+def validate_prosthesis_type(value: Optional[str]) -> Optional[str]:
+    if value is not None and value not in PROSTHESIS_TYPES:
+        allowed = ", ".join(sorted(PROSTHESIS_TYPES))
+        raise ValueError(f"Некорректный вид протеза. Допустимые значения: {allowed}.")
+    return value
 
 
 
@@ -42,51 +55,6 @@ class TsrSummary(BaseModel):
     full_tsr_code: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
-
-class ModuleComponentBase(BaseModel):
-    component_index: str
-    supplier: str
-    quantity: int = 1
-    cost: float = 0.0
-    price: float = 0.0
-    ordered: str = "0"
-    received: str = "0"
-    pending: str = "0"
-    notes: Optional[str] = None
-
-
-class ModuleComponentCreate(ModuleComponentBase):
-    module_id: Optional[UUID] = None
-
-
-class ModuleComponentUpdate(BaseModel):
-    module_id: Optional[UUID] = None
-    component_index: Optional[str] = None
-    supplier: Optional[str] = None
-    quantity: Optional[int] = None
-    cost: Optional[float] = None
-    price: Optional[float] = None
-    ordered: Optional[str] = None
-    received: Optional[str] = None
-    pending: Optional[str] = None
-    notes: Optional[str] = None
-
-
-class ComponentModuleSummary(BaseModel):
-    module_id: UUID
-    module_name_index: Optional[str] = None
-    client_id: Optional[UUID] = None
-    client: Optional[ClientSummary] = None
-    model_config = ConfigDict(from_attributes=True)
-
-
-class ModuleComponentRead(ModuleComponentBase):
-    component_id: UUID
-    module_id: Optional[UUID] = None
-    module: Optional[ComponentModuleSummary] = None
-    created_at: datetime
-    updated_at: datetime
-    model_config = ConfigDict(from_attributes=True)
 
 # -------------------------
 # Module
@@ -110,19 +78,19 @@ class ModuleBase(BaseModel):
     notes: Optional[str] = None
 
 class ModuleCreate(ModuleBase):
-    # Разрешаем None, чтобы модуль мог быть "ничьим"
+    # Разрешаем None, чтобы комплектующая могла находиться на складе.
     client_id: Optional[UUID] = None
 
     @model_validator(mode="after")
     def _require_tsr(self):
         if self.tsr_id is None:
-            raise ValueError("Для модуля необходимо выбрать ТСР.")
+            raise ValueError("Для комплектующей необходимо выбрать ТСР.")
         return self
     
 
 class ModuleUpdate(BaseModel):
     # Все поля опциональны для PATCH-запросов
-    client_id: Optional[UUID] = None # Разрешаем перепривязку модуля
+    client_id: Optional[UUID] = None # Разрешаем перепривязку комплектующей
     tsr_id: Optional[UUID] = None
     module_name_index: Optional[str] = None
     supplier: Optional[str] = None
@@ -145,8 +113,8 @@ class ModuleRead(ModuleBase):
     client_id: Optional[UUID] = None 
     client: Optional[ClientSummary] = None # информация о клиенте-владельце 
     tsr: Optional[TsrSummary] = None
-    components: List[ModuleComponentRead] = Field(default_factory=list)
-    #module_name: str
+    is_archived: bool = False
+    is_manually_archived: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -275,18 +243,21 @@ class ClientBase(BaseModel):
     prosthesis_type: Optional[str] = None
     ipra_code: Optional[str] = None
     certificate_price: Optional[str] = None
+    taxation_system: TaxationSystem = "УСН"
     place_of_residence: Optional[str] = None
+    prosthetist: Optional[str] = None
     tsr_code: Optional[str] = None
 
     prosthetist_salary: Optional[float] = 0.0
     agent_salary: Optional[float] = 0.0
     support_salary: Optional[float] = 0.0
-    prosthetist_work: Optional[float] = 0.0
-    patient_travel: Optional[float] = 0.0
-    patient_accommodation: Optional[float] = 0.0
-    patient_payment: Optional[float] = 0.0
-    other_expenses: Optional[float] = 0.0
-    agency_expenses: Optional[float] = 0.0
+    prosthetist_work: float = 0.0
+    patient_travel: float = 0.0
+    patient_accommodation: float = 0.0
+    patient_meals: float = 0.0
+    patient_payment: float = 0.0
+    other_expenses: float = 0.0
+    agency_expenses: float = 0.0
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -303,6 +274,11 @@ class ClientBase(BaseModel):
 
 class ClientCreate(ClientBase):
     phones: Optional[List[PhoneCreate]] = Field(default_factory=list)
+
+    @field_validator("prosthesis_type")
+    @classmethod
+    def _validate_prosthesis_type(cls, value: Optional[str]) -> Optional[str]:
+        return validate_prosthesis_type(value)
 
 
 class ClientUpdate(BaseModel):
@@ -321,7 +297,9 @@ class ClientUpdate(BaseModel):
     prosthesis_type: Optional[str] = None
     ipra_code: Optional[str] = None
     certificate_price: Optional[str] = None
+    taxation_system: Optional[TaxationSystem] = None
     place_of_residence: Optional[str] = None
+    prosthetist: Optional[str] = None
     tsr_code: Optional[str] = None
 
     prosthetist_salary: Optional[float] = None
@@ -330,9 +308,15 @@ class ClientUpdate(BaseModel):
     prosthetist_work: Optional[float] = None
     patient_travel: Optional[float] = None
     patient_accommodation: Optional[float] = None
+    patient_meals: Optional[float] = None
     patient_payment: Optional[float] = None
     other_expenses: Optional[float] = None
     agency_expenses: Optional[float] = None
+
+    @field_validator("prosthesis_type")
+    @classmethod
+    def _validate_prosthesis_type(cls, value: Optional[str]) -> Optional[str]:
+        return validate_prosthesis_type(value)
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -363,6 +347,7 @@ class StageSummary(BaseModel):
 class ClientRead(ClientBase):
     client_id: UUID
     external_id: Optional[int] = None
+    is_archived: bool = False
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
@@ -382,6 +367,11 @@ class ClientRead(ClientBase):
 
     model_config = ConfigDict(from_attributes=True)
     
+
+class ClientComponentsTsrUpdate(BaseModel):
+    component_ids: List[UUID] = Field(..., min_length=1)
+    tsr_id: UUID
+
 
 # -------------------------
 # Status / Stage / DocumentType
@@ -564,7 +554,10 @@ class Token(BaseModel):
     user_id: UUID 
 
 class UserSettingsUpdate(BaseModel):
+    # Старый ключ остаётся совместимым с уже собранным frontend.
     tax_percent: Optional[float] = None
+    tax_usn_percent: Optional[float] = Field(default=None, ge=0)
+    tax_osno_percent: Optional[float] = Field(default=None, ge=0)
     acq_percent: Optional[float] = None
 
 # Documents storage
@@ -605,6 +598,7 @@ class ContractAccountingUpdate(BaseModel):
     prosthetist_work: Optional[float] = None
     patient_travel: Optional[float] = None
     patient_accommodation: Optional[float] = None
+    patient_meals: Optional[float] = None
     patient_payment: Optional[float] = None
     other_expenses: Optional[float] = None
     agency_expenses: Optional[float] = None

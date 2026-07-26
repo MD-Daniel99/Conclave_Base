@@ -29,7 +29,6 @@ from app.api import (
     stages,
     status as status_module,
     accounting_report,
-    components,
 )
 
 # Для разработки оставляем create_all, но для production/миграции на Vue лучше перейти на Alembic.
@@ -92,8 +91,10 @@ app.include_router(status_module.router, prefix="/status", tags=["status"])
 app.include_router(passports.router, prefix="/passports", tags=["documents"])
 app.include_router(snils.router, prefix="/snils", tags=["documents"])
 app.include_router(phones.router, prefix="/phones", tags=["clients"])
-app.include_router(modules.router, prefix="/modules", tags=["modules"])
-app.include_router(components.router, prefix="/components", tags=["components"])
+app.include_router(modules.router, prefix="/components", tags=["components"])
+# Скрытый совместимый адрес для старых клиентских сборок. В актуальном UI и
+# OpenAPI бывшие "модули" представлены только как комплектующие.
+app.include_router(modules.router, prefix="/modules", include_in_schema=False)
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(references.router, prefix="/references", tags=["references"])
 app.include_router(accounting.router, prefix="/accounting", tags=["accounting"])

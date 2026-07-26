@@ -79,7 +79,7 @@ onMounted(loadRecentAudit)
         <RouterLink class="quick-action-card" to="/clients">
           <span>👥</span>
           <strong>Клиенты</strong>
-          <small>Карточки клиентов, телефоны, документы, договоры, модули и история изменений.</small>
+          <small>Карточки клиентов, телефоны, документы, договоры, комплектующие и история изменений.</small>
         </RouterLink>
         <RouterLink class="quick-action-card" to="/agents">
           <span>🤝</span>
@@ -89,7 +89,7 @@ onMounted(loadRecentAudit)
         <RouterLink class="quick-action-card" to="/warehouse">
           <span>📦</span>
           <strong>Склад</strong>
-          <small>Учёт модулей, поставщиков, себестоимости и привязки к клиентам.</small>
+          <small>Учёт комплектующих, поставщиков, себестоимости и привязки к клиентам.</small>
         </RouterLink>
         <RouterLink v-if="authStore.isAdmin" class="quick-action-card" to="/accounting">
           <span>₽</span>
@@ -104,7 +104,7 @@ onMounted(loadRecentAudit)
         <RouterLink class="quick-action-card" to="/settings">
           <span>⚙</span>
           <strong>Настройки</strong>
-          <small>Информация о текущем профиле и состоянии учетной записи.</small>
+          <small>Изменение собственного логина и пароля, информация о роли и состоянии учетной записи.</small>
         </RouterLink>
       </div>
     </section>
@@ -127,7 +127,7 @@ onMounted(loadRecentAudit)
         <article v-for="item in recentAudit" :key="item.log_id" class="audit-item">
           <div>
             <strong>{{ formatAuditAction(item) }}</strong>
-            <span>{{ item.entity }} · {{ formatAuditActor(item) }} · {{ formatAuditTime(item.timestamp) }}</span>
+            <span>{{ formatAuditActor(item) }} · {{ formatAuditTime(item.timestamp) }}</span>
           </div>
           <p>{{ summarizeAuditDetails(item) }}</p>
         </article>

@@ -11,6 +11,7 @@ from app.services.accounting_report import (
     build_contract_accounting_report,
     build_contract_coverage,
 )
+from app.services.audit import log_action, snapshot
 
 router = APIRouter(prefix="/accounting", tags=["accounting"])
 
@@ -20,7 +21,9 @@ def get_accounting_report(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     hide_failed: bool = Query(default=True),
-    tax_percent: float = Query(default=6.0, ge=0),
+    tax_percent: float | None = Query(default=None, ge=0),
+    tax_usn_percent: float | None = Query(default=None, ge=0),
+    tax_osno_percent: float = Query(default=20.0, ge=0),
     acquiring_percent: float = Query(default=2.0, ge=0),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
@@ -31,6 +34,8 @@ def get_accounting_report(
         end_date=end_date,
         hide_failed=hide_failed,
         tax_percent=tax_percent,
+        tax_usn_percent=tax_usn_percent,
+        tax_osno_percent=tax_osno_percent,
         acquiring_percent=acquiring_percent,
     )
 
@@ -40,7 +45,9 @@ def get_contract_accounting_report(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     hide_failed: bool = Query(default=True),
-    tax_percent: float = Query(default=6.0, ge=0),
+    tax_percent: float | None = Query(default=None, ge=0),
+    tax_usn_percent: float | None = Query(default=None, ge=0),
+    tax_osno_percent: float = Query(default=20.0, ge=0),
     acquiring_percent: float = Query(default=2.0, ge=0),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
@@ -51,6 +58,8 @@ def get_contract_accounting_report(
         end_date=end_date,
         hide_failed=hide_failed,
         tax_percent=tax_percent,
+        tax_usn_percent=tax_usn_percent,
+        tax_osno_percent=tax_osno_percent,
         acquiring_percent=acquiring_percent,
     )
 
@@ -68,7 +77,7 @@ def update_contract_accounting(
     document_id: str,
     payload: schemas.ContractAccountingUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(require_admin),
+    current_user=Depends(require_admin),
 ):
     try:
         from uuid import UUID
@@ -81,7 +90,24 @@ def update_contract_accounting(
     if not row:
         from fastapi import HTTPException, status
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract accounting row not found")
+    before = snapshot(row)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(row, key, value)
     db.commit()
+    db.refresh(row)
+    document = row.document
+    if document and document.client_id:
+        log_action(
+            db,
+            entity="client",
+            entity_id=document.client_id,
+            action="accounting.contract.update",
+            user=current_user,
+            before=before,
+            after=row,
+            details={
+                "document_name": document.filename,
+                "document_number": document.document_number,
+            },
+        )
     return {"status": "updated"}

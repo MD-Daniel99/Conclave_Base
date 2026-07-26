@@ -9,24 +9,38 @@ from sqlalchemy.orm import Session, selectinload
 from app import models
 
 
+GENERATED_DOCUMENT_TYPES = frozenset({
+    "llc_contract",
+    "dmk_contract",
+    "dmk_instrument",
+    "contract_original",
+    "contract_template",
+    "sdv_contract",
+})
+
+
 def build_accounting_report(
     db: Session,
     *,
     start_date: date | None = None,
     end_date: date | None = None,
     hide_failed: bool = True,
-    tax_percent: float = 6.0,
+    tax_percent: float | None = None,
+    tax_usn_percent: float | None = None,
+    tax_osno_percent: float = 20.0,
     acquiring_percent: float = 2.0,
 ) -> dict[str, Any]:
     """Build the same accounting report that existed in Streamlit.
 
     Revenue is taken from Client.certificate_price, module costs are summed from
-    linked modules, fixed expenses use the same six categories as contract
+    linked modules, fixed expenses use the same seven categories as contract
     accounting, and numeric custom fields are treated as additional expenses.
     """
+    effective_usn_percent = resolve_usn_percent(tax_percent, tax_usn_percent)
 
     clients = (
         db.query(models.Client)
+        .filter(models.Client.is_archived.is_(False))
         .options(
             selectinload(models.Client.agent),
             selectinload(models.Client.modules),
@@ -65,11 +79,16 @@ def build_accounting_report(
 
         custom_values = load_client_custom_values(client)
         revenue = parse_number(client.certificate_price)
-        modules_cost = sum(parse_number(module.cost) for module in (client.modules or []))
+        modules_cost = sum(
+            parse_number(module.cost)
+            for module in (client.modules or [])
+            if not module.is_archived
+        )
         salary = sum(parse_number(value) for value in (
             client.prosthetist_work,
             client.patient_travel,
             client.patient_accommodation,
+            client.patient_meals,
             client.patient_payment,
             client.other_expenses,
             client.agency_expenses,
@@ -92,7 +111,12 @@ def build_accounting_report(
 
             normalized_custom_values[field_id] = value
 
-        tax = revenue * (tax_percent / 100)
+        applied_tax_percent = tax_percent_for_client(
+            client,
+            tax_usn_percent=effective_usn_percent,
+            tax_osno_percent=tax_osno_percent,
+        )
+        tax = revenue * (applied_tax_percent / 100)
         acquiring = revenue * (acquiring_percent / 100)
         has_no_accounting_basis = modules_cost == 0 and client_date is None
         profit = 0.0 if has_no_accounting_basis else revenue - tax - acquiring - modules_cost - salary - custom_expenses
@@ -105,6 +129,7 @@ def build_accounting_report(
                 "salary": salary,
                 "custom_expenses": custom_expenses,
                 "tax": tax,
+                "tax_percent": applied_tax_percent,
                 "acquiring": acquiring,
                 "profit": profit,
             },
@@ -120,7 +145,9 @@ def build_accounting_report(
             "start_date": start_date.isoformat() if start_date else None,
             "end_date": end_date.isoformat() if end_date else None,
             "hide_failed": hide_failed,
-            "tax_percent": tax_percent,
+            "tax_percent": effective_usn_percent,
+            "tax_usn_percent": effective_usn_percent,
+            "tax_osno_percent": tax_osno_percent,
             "acquiring_percent": acquiring_percent,
         },
         "custom_fields": custom_fields,
@@ -135,10 +162,20 @@ def build_contract_accounting_report(
     start_date: date | None = None,
     end_date: date | None = None,
     hide_failed: bool = True,
-    tax_percent: float = 6.0,
+    tax_percent: float | None = None,
+    tax_usn_percent: float | None = None,
+    tax_osno_percent: float = 20.0,
     acquiring_percent: float = 2.0,
 ) -> dict[str, Any]:
-    """Accounting based on generated contract metadata, never on DOCX text parsing."""
+    """Build a per-contract ledger without counting one certificate more than once.
+
+    Contracts of one client share a single certificate balance.  The oldest
+    contract starts with the full certificate, every later contract starts
+    with the balance left after all earlier contract expenses.  Percentage
+    expenses are charged once, on the first contract, rather than once for
+    every generated document.
+    """
+    effective_usn_percent = resolve_usn_percent(tax_percent, tax_usn_percent)
     records = (
         db.query(models.ContractAccounting)
         .options(
@@ -149,29 +186,26 @@ def build_contract_accounting_report(
     )
     custom_fields = load_custom_fields(db)
     numeric_field_ids = {field["key"] for field in custom_fields if field["type"] == "number"}
-    rows: list[dict[str, Any]] = []
+    rows_by_client: dict[str, list[dict[str, Any]]] = {}
 
     for accounting in records:
         document = accounting.document
         if not document or not document.client:
             continue
         client = document.client
+        if client.is_archived:
+            continue
         if hide_failed and is_failed_client(client):
             continue
 
         metadata = document.contract_metadata if isinstance(document.contract_metadata, dict) else {}
         document_date = normalize_date(metadata.get("document_date")) or normalize_date(document.created_at)
-        if start_date and (document_date is None or document_date < start_date):
-            continue
-        if end_date and (document_date is None or document_date > end_date):
-            continue
-
-        certificate = parse_number(document.certificate_amount)
         modules_cost = parse_number(document.contract_total)
         fixed_expenses = {
             "prosthetist_work": parse_number(accounting.prosthetist_work),
             "patient_travel": parse_number(accounting.patient_travel),
             "patient_accommodation": parse_number(accounting.patient_accommodation),
+            "patient_meals": parse_number(accounting.patient_meals),
             "patient_payment": parse_number(accounting.patient_payment),
             "other_expenses": parse_number(accounting.other_expenses),
             "agency_expenses": parse_number(accounting.agency_expenses),
@@ -182,10 +216,13 @@ def build_contract_accounting_report(
             for field_id, value in custom_values.items()
             if field_id in numeric_field_ids
         )
-        tax = certificate * (tax_percent / 100)
-        acquiring = certificate * (acquiring_percent / 100)
-        expenses_total = modules_cost + sum(fixed_expenses.values()) + custom_expenses + tax + acquiring
-        rows.append({
+        applied_tax_percent = tax_percent_for_client(
+            client,
+            tax_usn_percent=effective_usn_percent,
+            tax_osno_percent=tax_osno_percent,
+        )
+        client_id = str(client.client_id)
+        rows_by_client.setdefault(client_id, []).append({
             "document": {
                 "document_id": str(document.document_id),
                 "filename": document.filename,
@@ -200,31 +237,140 @@ def build_contract_accounting_report(
                 "short_name": short_client_name(client),
                 "status": client.status_code,
                 "current_stage": client.current_stage,
+                "taxation_system": normalize_taxation_system(client.taxation_system),
             },
             "amounts": {
-                "certificate": certificate,
                 "modules_cost": modules_cost,
                 **fixed_expenses,
                 "custom_expenses": custom_expenses,
-                "tax": tax,
-                "acquiring": acquiring,
-                "profit": certificate - expenses_total,
+                "tax_percent": applied_tax_percent,
             },
             "custom_values": custom_values,
+            "_certificate_snapshot": parse_number(document.certificate_amount),
+            "_client_certificate": parse_number(client.certificate_price),
+            "_sort_key": (
+                document.created_at.isoformat() if document.created_at else "",
+                document_date.isoformat() if document_date else "",
+                str(document.document_id),
+            ),
         })
+
+    ledger_rows: list[dict[str, Any]] = []
+
+    for client_rows in rows_by_client.values():
+        client_rows.sort(key=lambda row: row["_sort_key"])
+        certificate = next(
+            (
+                row["_certificate_snapshot"]
+                for row in client_rows
+                if row["_certificate_snapshot"] != 0
+            ),
+            client_rows[0]["_client_certificate"],
+        )
+        remaining_certificate = certificate
+        contract_count = len(client_rows)
+
+        for contract_index, row in enumerate(client_rows, start=1):
+            amounts = row["amounts"]
+            percentage_basis = certificate if contract_index == 1 else 0.0
+            tax = percentage_basis * (amounts["tax_percent"] / 100)
+            acquiring = percentage_basis * (acquiring_percent / 100)
+            expenses_total = (
+                amounts["modules_cost"]
+                + sum(amounts[key] for key in (
+                    "prosthetist_work",
+                    "patient_travel",
+                    "patient_accommodation",
+                    "patient_meals",
+                    "patient_payment",
+                    "other_expenses",
+                    "agency_expenses",
+                ))
+                + amounts["custom_expenses"]
+                + tax
+                + acquiring
+            )
+            balance_before = remaining_certificate
+            remaining_certificate = balance_before - expenses_total
+            amounts.update({
+                "certificate": balance_before,
+                "certificate_original": certificate,
+                "certificate_remaining": remaining_certificate,
+                "tax": tax,
+                "acquiring": acquiring,
+                "profit": remaining_certificate,
+                "applies_percentage_expenses": contract_index == 1,
+                "contract_index": contract_index,
+                "contract_count": contract_count,
+            })
+            row.pop("_certificate_snapshot", None)
+            row.pop("_client_certificate", None)
+            row.pop("_sort_key", None)
+            ledger_rows.append(row)
+
+    rows = [
+        row
+        for row in ledger_rows
+        if not (
+            start_date
+            and (
+                normalize_date(row["document"]["date"]) is None
+                or normalize_date(row["document"]["date"]) < start_date
+            )
+        )
+        and not (
+            end_date
+            and (
+                normalize_date(row["document"]["date"]) is None
+                or normalize_date(row["document"]["date"]) > end_date
+            )
+        )
+    ]
+    rows.sort(
+        key=lambda row: (
+            row["document"]["created_at"] or "",
+            row["document"]["date"] or "",
+            row["document"]["document_id"],
+        ),
+        reverse=True,
+    )
 
     amount_keys = [
         "certificate", "modules_cost", "prosthetist_work", "patient_travel",
-        "patient_accommodation", "patient_payment", "other_expenses",
+        "patient_accommodation", "patient_meals", "patient_payment", "other_expenses",
         "agency_expenses", "custom_expenses", "tax", "acquiring", "profit",
     ]
-    totals = {key: sum(row["amounts"][key] for row in rows) for key in amount_keys}
+    totals = {
+        key: sum(row["amounts"][key] for row in rows)
+        for key in amount_keys
+        if key not in {"certificate", "profit"}
+    }
+    visible_rows_by_client: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        visible_rows_by_client.setdefault(row["client"]["client_id"], []).append(row)
+    totals["certificate"] = sum(
+        min(
+            client_rows,
+            key=lambda row: row["amounts"]["contract_index"],
+        )["amounts"]["certificate"]
+        for client_rows in visible_rows_by_client.values()
+    )
+    totals["profit"] = sum(
+        max(
+            client_rows,
+            key=lambda row: row["amounts"]["contract_index"],
+        )["amounts"]["profit"]
+        for client_rows in visible_rows_by_client.values()
+    )
+    totals = {key: totals.get(key, 0.0) for key in amount_keys}
     return {
         "filters": {
             "start_date": start_date.isoformat() if start_date else None,
             "end_date": end_date.isoformat() if end_date else None,
             "hide_failed": hide_failed,
-            "tax_percent": tax_percent,
+            "tax_percent": effective_usn_percent,
+            "tax_usn_percent": effective_usn_percent,
+            "tax_osno_percent": tax_osno_percent,
             "acquiring_percent": acquiring_percent,
         },
         "custom_fields": custom_fields,
@@ -237,6 +383,7 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
     """Return whether every current client module is covered by generated contracts."""
     clients = (
         db.query(models.Client)
+        .filter(models.Client.is_archived.is_(False))
         .options(
             selectinload(models.Client.modules),
             selectinload(models.Client.documents),
@@ -246,7 +393,11 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
 
     for client in clients:
-        modules = list(client.modules or [])
+        modules = [
+            module
+            for module in (client.modules or [])
+            if not module.is_archived
+        ]
         module_ids = {str(module.module_id) for module in modules}
         module_names = {
             str(module.module_id): (module.module_name_index or module.properties or str(module.module_id))
@@ -257,11 +408,10 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
         contract_dates: list[date] = []
 
         for document in client.documents or []:
-            if document.document_type == "dmk_instrument":
-                continue
             metadata = document.contract_metadata if isinstance(document.contract_metadata, dict) else {}
             selected_modules = metadata.get("selected_modules")
-            is_contract = document.document_type in {"llc_contract", "dmk_contract"}
+            document_type = str(document.document_type or "").strip().lower()
+            is_contract = document_type in GENERATED_DOCUMENT_TYPES
             if is_contract:
                 contract_count += 1
                 contract_date = normalize_date(metadata.get("document_date")) or normalize_date(document.created_at)
@@ -277,7 +427,7 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
         working = is_working_client(client)
         # Наличие договора не зависит от текущего этапа клиента: завершённая или
         # приостановленная карточка без договора всё равно требует документа.
-        requires_contract = contract_count == 0 or bool(uncovered_ids)
+        requires_contract = contract_count == 0
         result.append({
             "client_id": str(client.client_id),
             "is_working": working,
@@ -358,7 +508,35 @@ def serialize_client(client: models.Client, client_date: date | None) -> dict[st
         "agent_id": str(client.agent_id) if client.agent_id else None,
         "agent_name": agent_name,
         "date": client_date.isoformat() if client_date else None,
+        "taxation_system": normalize_taxation_system(client.taxation_system),
     }
+
+
+def normalize_taxation_system(value: Any) -> str:
+    normalized = str(value or "").strip().upper()
+    return "ОСНО" if normalized == "ОСНО" else "УСН"
+
+
+def resolve_usn_percent(
+    legacy_tax_percent: float | None,
+    tax_usn_percent: float | None,
+) -> float:
+    if tax_usn_percent is not None:
+        return float(tax_usn_percent)
+    if legacy_tax_percent is not None:
+        return float(legacy_tax_percent)
+    return 6.0
+
+
+def tax_percent_for_client(
+    client: models.Client,
+    *,
+    tax_usn_percent: float,
+    tax_osno_percent: float,
+) -> float:
+    if normalize_taxation_system(client.taxation_system) == "ОСНО":
+        return float(tax_osno_percent)
+    return float(tax_usn_percent)
 
 
 def is_failed_client(client: models.Client) -> bool:

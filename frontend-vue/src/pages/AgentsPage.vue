@@ -11,7 +11,7 @@ import {
   updateAgent,
   deleteAgent,
 } from '@/shared/api/agents'
-
+  
 import {
   formatAuditAction,
   formatAuditActor,
@@ -471,7 +471,6 @@ onMounted(loadAgents)
         <thead>
           <tr>
             <th>№</th>
-            <th>ID</th>
             <th>ФИО</th>
             <th>ИНН</th>
             <th>ОГРНИП</th>
@@ -483,7 +482,7 @@ onMounted(loadAgents)
 
         <tbody>
           <tr v-if="isLoading">
-            <td colspan="8">Загружаем агентов...</td>
+            <td colspan="7">Загружаем агентов...</td>
           </tr>
 
           <tr
@@ -493,7 +492,6 @@ onMounted(loadAgents)
             :class="{ selected: selectedAgent && getAgentId(selectedAgent) === getAgentId(agent) }"
           >
             <td>{{ skip + index + 1 }}</td>
-            <td>{{ agent.external_id ?? agent.agent_id }}</td>
 
             <td>
               <button class="link-button" type="button" @click="selectAgent(agent)">
@@ -523,7 +521,7 @@ onMounted(loadAgents)
           </tr>
 
           <tr v-if="!isLoading && agents.length === 0">
-            <td colspan="8">Агенты не найдены.</td>
+            <td colspan="7">Агенты не найдены.</td>
           </tr>
         </tbody>
       </table>
