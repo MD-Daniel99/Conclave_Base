@@ -1,8 +1,31 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import {
+  Archive,
+  Eye,
+  File,
+  FileImage,
+  Files,
+  FileText,
+  History,
+  IdCard,
+  PackageOpen,
+  Phone,
+  Plus,
+  RotateCcw,
+  Save,
+  Search,
+  Trash2,
+  UserRound,
+  X,
+} from '@lucide/vue'
 import { useAuthStore } from '@/app/stores/auth'
 import DateInput from '@/shared/ui/DateInput.vue'
+import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
+import EmptyState from '@/shared/ui/EmptyState.vue'
+import StatusPill from '@/shared/ui/StatusPill.vue'
+import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
 import { fetchAgents } from '@/shared/api/agents'
 import { fetchEntityAudit } from '@/shared/api/audit'
@@ -258,6 +281,7 @@ const loadedDetailTabs = reactive<Record<DetailTab, boolean>>({
 const isSaving = ref(false)
 const error = ref('')
 const successMessage = ref('')
+const lastSavedClientState = ref('')
 const isReferenceManagerOpen = ref(false)
 const referenceSearch = ref('')
 const referenceDraft = ref('')
@@ -266,10 +290,25 @@ const referenceError = ref('')
 const referenceSuccess = ref('')
 const isReferenceSaving = ref(false)
 const groupTsrDrafts = reactive<Record<string, string>>({})
+let clientFilterTimer: ReturnType<typeof setTimeout> | undefined
 
 const isEditing = computed(() => Boolean(selectedClient.value?.client_id))
 const isClientPersisted = computed(() => Boolean(selectedClient.value && getClientId(selectedClient.value)))
 const modalMessageId = computed(() => (error.value ? 'client-modal-error' : successMessage.value ? 'client-modal-success' : undefined))
+const activeClientFilterCount = computed(() => [
+  query.value.trim(),
+  statusFilter.value,
+  stageFilter.value,
+  agentFilter.value,
+].filter(Boolean).length)
+const hasUnsavedClientChanges = computed(() => (
+  isClientCardOpen.value
+  && activeTab.value === 'main'
+  && JSON.stringify(form) !== lastSavedClientState.value
+))
+const confirmAction = useAppConfirm()
+useSuccessToast(successMessage, 'Клиенты')
+useSuccessToast(referenceSuccess, 'Справочник ТСР')
 
 const canManageReferences = computed(() => authStore.isAdmin)
 const filteredReferenceItems = computed(() => {
@@ -529,7 +568,10 @@ async function removeManagedReference(item: ReferenceItem) {
     return
   }
 
-  if (!window.confirm(`Удалить запись «${label}»?`)) {
+  if (!(await confirmAction({
+    message: `Удалить запись «${label}» из справочника ТСР?`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -579,6 +621,39 @@ function getClientId(client: Client) {
 
 function getClientName(client: Client) {
   return [client.last_name, client.first_name, client.middle_name].filter(Boolean).join(' ') || 'Без имени'
+}
+
+function getClientInitials(client: Client) {
+  return [client.last_name, client.first_name]
+    .filter(Boolean)
+    .map((part) => String(part).slice(0, 1))
+    .join('')
+    .toUpperCase() || 'КЛ'
+}
+
+function getClientActions(client: Client): ActionMenuItem[] {
+  const isArchived = activeClientListMode.value === 'archive'
+
+  return [
+    {
+      label: 'Открыть карточку',
+      icon: Eye,
+      action: () => selectClient(client),
+    },
+    {
+      label: isArchived ? 'Восстановить' : 'Переместить в архив',
+      icon: isArchived ? RotateCcw : Archive,
+      disabled: isSaving.value,
+      action: () => changeClientArchiveState(client, !isArchived),
+    },
+    {
+      label: 'Удалить',
+      icon: Trash2,
+      danger: true,
+      disabled: isSaving.value,
+      action: () => removeClient(client),
+    },
+  ]
 }
 
 function getClientStatusLabel(client: Client) {
@@ -769,18 +844,18 @@ function getDocumentIcon(document: ClientDocument) {
   const contentType = String(document.content_type ?? '').toLowerCase()
 
   if (contentType.includes('pdf')) {
-    return '📕'
+    return FileText
   }
 
   if (contentType.includes('image')) {
-    return '🖼️'
+    return FileImage
   }
 
   if (contentType.includes('wordprocessingml')) {
-    return '📝'
+    return Files
   }
 
-  return '📄'
+  return File
 }
 
 function getDateModel(value?: string | null) {
@@ -917,6 +992,10 @@ function resetDetailState() {
   Object.keys(groupTsrDrafts).forEach((key) => delete groupTsrDrafts[key])
 }
 
+function rememberClientFormState() {
+  lastSavedClientState.value = JSON.stringify(form)
+}
+
 function resetForm() {
   Object.assign(form, emptyForm)
   Object.assign(passportForm, {
@@ -946,31 +1025,56 @@ function resetForm() {
   isReferenceManagerOpen.value = false
   resetReferenceManagerForm()
   resetMessages()
+  rememberClientFormState()
 }
 
 function setBodyModalLock(locked: boolean) {
   window.document.body.classList.toggle('modal-open', locked)
 }
 
-function openNewClient() {
+async function openNewClient() {
+  if (hasUnsavedClientChanges.value) {
+    const shouldContinue = await confirmAction({
+      header: 'Несохранённые изменения',
+      message: 'Начать новую карточку? Изменения в текущей карточке будут потеряны.',
+      acceptLabel: 'Начать новую',
+    })
+
+    if (!shouldContinue) {
+      return
+    }
+  }
+
   resetForm()
   isClientCardOpen.value = true
 }
 
-function closeClientCard() {
+async function closeClientCard() {
   if (isSaving.value) {
     return
+  }
+
+  if (hasUnsavedClientChanges.value) {
+    const shouldClose = await confirmAction({
+      header: 'Есть несохранённые изменения',
+      message: 'Закрыть карточку без сохранения внесённых изменений?',
+      acceptLabel: 'Закрыть без сохранения',
+    })
+
+    if (!shouldClose) {
+      return
+    }
   }
 
   isClientCardOpen.value = false
 }
 
-function handleClientModalEscape() {
+async function handleClientModalEscape() {
   if (isReferenceManagerOpen.value) {
     return
   }
 
-  closeClientCard()
+  await closeClientCard()
 }
 
 function openClientTab(tab: ClientTab) {
@@ -1022,6 +1126,7 @@ function fillForm(client: Client) {
   passportForm.department_code = String(firstPassport?.department_code ?? '')
   passportForm.expiry_date = String(firstPassport?.expiry_date ?? '').slice(0, 10)
   passportForm.registration_address = String(firstPassport?.registration_address ?? '')
+  rememberClientFormState()
 }
 
 function buildCreatePayload(): ClientCreatePayload {
@@ -1139,6 +1244,14 @@ async function loadClients() {
 function applyClientFilters() {
   currentPage.value = 1
   void loadClients()
+}
+
+function resetClientFilters() {
+  query.value = ''
+  statusFilter.value = ''
+  stageFilter.value = ''
+  agentFilter.value = ''
+  applyClientFilters()
 }
 
 function switchClientListMode(mode: ClientListMode) {
@@ -1336,7 +1449,14 @@ async function saveClient() {
 async function removeClient(client: Client) {
   const clientId = getClientId(client)
 
-  if (!clientId || !window.confirm(`Удалить клиента "${getClientName(client)}"?`)) {
+  if (!clientId) {
+    return
+  }
+
+  if (!(await confirmAction({
+    message: `Удалить клиента «${getClientName(client)}»? Это действие нельзя отменить.`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -1366,7 +1486,15 @@ async function changeClientArchiveState(client: Client, archive: boolean) {
     ? ' Все привязанные комплектующие также будут перемещены в архив.'
     : ' Все привязанные комплектующие также будут восстановлены.'
 
-  if (!clientId || !window.confirm(`${action[0].toUpperCase()}${action.slice(1)} клиента «${getClientName(client)}»?${componentNote}`)) {
+  if (!clientId) {
+    return
+  }
+
+  if (!(await confirmAction({
+    header: archive ? 'Перемещение в архив' : 'Восстановление клиента',
+    message: `${action[0].toUpperCase()}${action.slice(1)} клиента «${getClientName(client)}»?${componentNote}`,
+    acceptLabel: archive ? 'В архив' : 'Восстановить',
+  }))) {
     return
   }
 
@@ -1448,7 +1576,14 @@ async function addPhone() {
 }
 
 async function removePhone(phone: ClientPhone) {
-  if (!selectedClient.value || !phone.phone_id || !window.confirm(`Удалить телефон "${getPhoneValue(phone)}"?`)) {
+  if (!selectedClient.value || !phone.phone_id) {
+    return
+  }
+
+  if (!(await confirmAction({
+    message: `Удалить телефон «${getPhoneValue(phone)}»?`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -1563,7 +1698,14 @@ async function savePassport() {
 }
 
 async function removePassport(passport: ClientPassport) {
-  if (!selectedClient.value || !passport.passport_id || !window.confirm(`Удалить паспорт "${passport.series_number}"?`)) {
+  if (!selectedClient.value || !passport.passport_id) {
+    return
+  }
+
+  if (!(await confirmAction({
+    message: `Удалить паспорт «${passport.series_number}»?`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -1651,7 +1793,14 @@ async function saveSnils() {
 }
 
 async function removeSnils(snils: ClientSnils) {
-  if (!selectedClient.value || !snils.snils_id || !window.confirm(`Удалить СНИЛС "${snils.number}"?`)) {
+  if (!selectedClient.value || !snils.snils_id) {
+    return
+  }
+
+  if (!(await confirmAction({
+    message: `Удалить СНИЛС «${snils.number}»?`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -1751,7 +1900,11 @@ async function unassignModule(moduleItem: ModuleItem) {
     return
   }
 
-  if (!window.confirm(`Вернуть комплектующую "${getModuleName(moduleItem)}" на склад?`)) {
+  if (!(await confirmAction({
+    header: 'Вернуть на склад',
+    message: `Отвязать комплектующую «${getModuleName(moduleItem)}» от клиента и вернуть на склад?`,
+    acceptLabel: 'Вернуть на склад',
+  }))) {
     return
   }
 
@@ -1808,7 +1961,14 @@ async function saveClientModule() {
 }
 
 async function removeClientModule(moduleItem: ModuleItem) {
-  if (!selectedClient.value || !moduleItem.module_id || !window.confirm(`Удалить комплектующую "${getModuleName(moduleItem)}"?`)) {
+  if (!selectedClient.value || !moduleItem.module_id) {
+    return
+  }
+
+  if (!(await confirmAction({
+    message: `Удалить комплектующую «${getModuleName(moduleItem)}»?`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -1939,7 +2099,14 @@ async function generateContract() {
 }
 
 async function removeDocument(document: ClientDocument) {
-  if (!selectedClient.value || !document.document_id || !window.confirm(`Удалить документ "${getDocumentName(document)}"?`)) {
+  if (!selectedClient.value || !document.document_id) {
+    return
+  }
+
+  if (!(await confirmAction({
+    message: `Удалить документ «${getDocumentName(document)}»?`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -1981,6 +2148,11 @@ watch(isClientCardOpen, (isOpen) => {
   setBodyModalLock(isOpen)
 })
 
+watch(query, () => {
+  window.clearTimeout(clientFilterTimer)
+  clientFilterTimer = window.setTimeout(applyClientFilters, 380)
+})
+
 watch(
   () => route.query.client_id,
   (clientId) => {
@@ -2005,25 +2177,35 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.clearTimeout(clientFilterTimer)
   setBodyModalLock(false)
 })
 </script>
 
 <template>
-  <section class="page-section">
+  <section class="page-section entity-workspace-page clients-page">
     <div class="page-heading">
       <div>
-        <p class="eyebrow">CRM</p>
+        <p class="eyebrow">Клиентская база</p>
         <h1>Клиенты</h1>
+        <p class="muted page-subtitle">
+          Контролируйте текущий этап, документы, сроки и комплектующие в одной карточке.
+        </p>
       </div>
-      <button v-if="activeClientListMode === 'active'" class="primary-button" type="button" @click="openNewClient">
+      <button
+        v-if="activeClientListMode === 'active'"
+        class="primary-button"
+        type="button"
+        @click="openNewClient"
+      >
+        <Plus :size="16" aria-hidden="true" />
         Создать клиента
       </button>
     </div>
 
     <div class="tabs" role="tablist" aria-label="Разделы клиентов">
       <button :class="{ active: activeClientListMode === 'active' }" type="button" @click="switchClientListMode('active')">
-        Рабочие клиенты
+        Рабочие
       </button>
       <button :class="{ active: activeClientListMode === 'archive' }" type="button" @click="switchClientListMode('archive')">
         Архив
@@ -2031,27 +2213,39 @@ onBeforeUnmount(() => {
     </div>
 
     <form class="toolbar-form clients-toolbar" @submit.prevent="applyClientFilters">
-      <input v-model="query" placeholder="Поиск клиента" />
-      <select v-model="statusFilter">
-        <option value="">Все статусы</option>
-        <option v-for="option in statusOptions" :key="option.value" :value="option.value">
-          {{ option.label }}
-        </option>
-      </select>
-      <select v-model="stageFilter">
-        <option value="">Все этапы</option>
-        <option v-for="option in stageOptions" :key="option.value" :value="option.value">
-          {{ option.label }}
-        </option>
-      </select>
-      <select v-model="agentFilter">
-        <option value="">Все агенты</option>
-        <option v-for="agent in agents" :key="String(agent.agent_id)" :value="agent.agent_id">
-          {{ getAgentName(agent) }}
-        </option>
-      </select>
-      <label class="compact-field">
-        На странице
+      <div class="toolbar-search-wrap">
+        <Search :size="17" aria-hidden="true" />
+        <input v-model="query" aria-label="Поиск клиента" placeholder="ФИО, телефон или данные клиента" />
+      </div>
+      <label class="filter-label">
+        <span>Статус</span>
+        <select v-model="statusFilter" @change="applyClientFilters">
+          <option value="">Все статусы</option>
+          <option v-for="option in statusOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <label class="filter-label">
+        <span>Этап</span>
+        <select v-model="stageFilter" @change="applyClientFilters">
+          <option value="">Все этапы</option>
+          <option v-for="option in stageOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <label class="filter-label">
+        <span>Агент</span>
+        <select v-model="agentFilter" @change="applyClientFilters">
+          <option value="">Все агенты</option>
+          <option v-for="agent in agents" :key="String(agent.agent_id)" :value="agent.agent_id">
+            {{ getAgentName(agent) }}
+          </option>
+        </select>
+      </label>
+      <label class="filter-label">
+        <span>На странице</span>
         <select v-model.number="pageLimit" @change="applyClientFilters">
           <option :value="25">25</option>
           <option :value="50">50</option>
@@ -2059,93 +2253,120 @@ onBeforeUnmount(() => {
           <option :value="200">200</option>
         </select>
       </label>
-      <button class="secondary-button" type="submit">Найти</button>
+      <div class="filter-actions">
+        <button class="secondary-button" type="submit" :disabled="isLoading">
+          <Search :size="15" aria-hidden="true" />
+          Применить
+        </button>
+        <button
+          v-if="activeClientFilterCount"
+          class="ghost-button"
+          type="button"
+          @click="resetClientFilters"
+        >
+          <X :size="15" aria-hidden="true" />
+          Сбросить
+        </button>
+        <span v-if="activeClientFilterCount" class="filter-count">
+          {{ activeClientFilterCount }}
+        </span>
+      </div>
     </form>
 
     <p v-if="error && !isClientCardOpen" class="form-error">{{ error }}</p>
     <p v-if="successMessage && !isClientCardOpen" class="form-success">{{ successMessage }}</p>
 
-    <div class="table-wrap">
+    <div class="table-wrap desktop-entity-table">
       <table>
         <thead>
           <tr>
             <th>№</th>
-            <th>ФИО</th>
-            <th>Телефон</th>
-            <th>Протезист</th>
+            <th>Клиент</th>
+            <th class="client-col-prosthetist">Протезист</th>
             <th>ТСР</th>
-            <th>Дата пробития</th>
-            <th>Стоимость серт.</th>
+            <th class="client-col-check-date">Дата пробития</th>
+            <th>Сертификат</th>
             <th>Статус</th>
             <th>Этап</th>
             <th>Агент</th>
             <th>Повторное</th>
-            <th>Создан</th>
-            <th>Обновлен</th>
-            <th></th>
+            <th aria-label="Действия"></th>
           </tr>
         </thead>
         <tbody>
-          <template v-if="isLoading">
-            <tr>
-              <td colspan="14">Загружаем клиентов...</td>
-            </tr>
-          </template>
-          <template v-else>
-            <tr
-              v-for="(client, index) in clients"
-              :key="String(client.client_id ?? client.external_id)"
-              :class="{ selected: selectedClient && getClientId(selectedClient) === getClientId(client) }"
-            >
-              <td>{{ currentSkip + index + 1 }}</td>
-              <td>
-                <button class="link-button" type="button" @click="selectClient(client)">
-                  {{ getClientName(client) }}
-                </button>
-              </td>
-              <td>{{ getClientPrimaryPhone(client) }}</td>
-              <td>{{ client.prosthetist || '—' }}</td>
-              <td>{{ getClientTsrLabel(client) }}</td>
-              <td>{{ getClientDate(client) }}</td>
-              <td>{{ formatMoney(client.certificate_price) }}</td>
-              <td>{{ getClientStatusLabel(client) }}</td>
-              <td>{{ getClientStageLabel(client) }}</td>
-              <td>{{ getAgentLabel(client.agent_id) }}</td>
-              <td>{{ getClientDeadline(client) }}</td>
-              <td>{{ formatShortDate(client.created_at) }}</td>
-              <td>{{ formatShortDate(client.updated_at) }}</td>
-              <td class="row-actions">
-                <button class="ghost-button" type="button" @click="selectClient(client)">Открыть</button>
-                <button
-                  v-if="activeClientListMode === 'active'"
-                  class="secondary-button"
-                  type="button"
-                  :disabled="isSaving"
-                  @click="changeClientArchiveState(client, true)"
-                >
-                  В архив
-                </button>
-                <button
-                  v-else
-                  class="secondary-button"
-                  type="button"
-                  :disabled="isSaving"
-                  @click="changeClientArchiveState(client, false)"
-                >
-                  Восстановить
-                </button>
-                <button class="danger-button" type="button" :disabled="isSaving" @click="removeClient(client)">
-                  Удалить
-                </button>
-              </td>
-            </tr>
-          </template>
-          <tr v-if="!isLoading && clients.length === 0">
-            <td colspan="14">Клиенты не найдены.</td>
+          <tr v-if="isLoading" class="no-row-action">
+            <td colspan="11">Загружаем клиентов...</td>
+          </tr>
+          <tr
+            v-for="(client, index) in clients"
+            v-else
+            :key="String(client.client_id ?? client.external_id)"
+            :class="{ selected: selectedClient && getClientId(selectedClient) === getClientId(client) }"
+            tabindex="0"
+            @click="selectClient(client)"
+            @keydown.enter="selectClient(client)"
+          >
+            <td>{{ currentSkip + index + 1 }}</td>
+            <td class="entity-cell">
+              <div class="entity-primary">
+                <span class="entity-avatar">{{ getClientInitials(client) }}</span>
+                <span class="entity-copy">
+                  <strong>{{ getClientName(client) }}</strong>
+                  <span>{{ getClientPrimaryPhone(client) }} · ID {{ client.external_id || '—' }}</span>
+                </span>
+              </div>
+            </td>
+            <td class="client-col-prosthetist">{{ client.prosthetist || '—' }}</td>
+            <td class="table-tsr">{{ getClientTsrLabel(client) }}</td>
+            <td class="client-col-check-date">{{ getClientDate(client) }}</td>
+            <td class="table-money">{{ formatMoney(client.certificate_price) }}</td>
+            <td><StatusPill :label="getClientStatusLabel(client)" kind="status" /></td>
+            <td><StatusPill :label="getClientStageLabel(client)" kind="stage" /></td>
+            <td>{{ getAgentLabel(client.agent_id) }}</td>
+            <td>{{ getClientDeadline(client) }}</td>
+            <td class="table-actions-cell">
+              <ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" />
+            </td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <div v-if="!isLoading" class="mobile-entity-list">
+      <article
+        v-for="client in clients"
+        :key="String(client.client_id ?? client.external_id)"
+        class="mobile-entity-card"
+        @click="selectClient(client)"
+      >
+        <div class="mobile-entity-card-header">
+          <div class="entity-primary">
+            <span class="entity-avatar">{{ getClientInitials(client) }}</span>
+            <span class="entity-copy">
+              <strong>{{ getClientName(client) }}</strong>
+              <span>{{ getClientPrimaryPhone(client) }}</span>
+            </span>
+          </div>
+          <ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" />
+        </div>
+        <div class="mobile-entity-card-details">
+          <span>Статус <strong><StatusPill :label="getClientStatusLabel(client)" kind="status" /></strong></span>
+          <span>Этап <strong><StatusPill :label="getClientStageLabel(client)" kind="stage" /></strong></span>
+          <span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span>
+          <span>Повторное <strong>{{ getClientDeadline(client) }}</strong></span>
+        </div>
+      </article>
+    </div>
+
+    <EmptyState
+      v-if="!isLoading && clients.length === 0"
+      title="Клиенты не найдены"
+      :description="activeClientFilterCount ? 'Измените или сбросьте фильтры.' : 'Создайте первую карточку клиента.'"
+    >
+      <button v-if="activeClientFilterCount" class="secondary-button" type="button" @click="resetClientFilters">
+        Сбросить фильтры
+      </button>
+    </EmptyState>
 
     <div class="pagination-bar" aria-label="Пагинация клиентов">
       <span>Страница {{ currentPage }} · показано {{ clients.length }} · записи {{ currentSkip + 1 }}–{{ currentSkip + clients.length }}</span>
@@ -2161,65 +2382,85 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <div v-if="isClientCardOpen" class="modal-backdrop client-card-backdrop" @click.self="closeClientCard" @keydown.esc.window="handleClientModalEscape">
-        <section class="modal-panel client-modal client-modal-panel" role="dialog" aria-modal="true" aria-label="Карточка клиента" :aria-describedby="modalMessageId" :aria-busy="isSaving" @click.stop>
-        <div class="modal-header">
-          <div>
-            <p class="eyebrow">{{ isEditing ? 'Карточка клиента' : 'Новый клиент' }}</p>
-            <h2>{{ isEditing && selectedClient ? getClientName(selectedClient) : 'Создать клиента' }}</h2>
+        <section v-focus-trap class="modal-panel client-modal client-modal-panel entity-modal client-profile-modal" role="dialog" aria-modal="true" aria-label="Карточка клиента" :aria-describedby="modalMessageId" :aria-busy="isSaving" @click.stop>
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">{{ isEditing ? 'Карточка клиента' : 'Новый клиент' }}</p>
+              <h2>{{ isEditing && selectedClient ? getClientName(selectedClient) : 'Создать клиента' }}</h2>
+            </div>
+            <div class="row-actions">
+              <button
+                v-if="selectedClient && isClientPersisted"
+                class="secondary-button"
+                type="button"
+                :disabled="isSaving"
+                @click="changeClientArchiveState(selectedClient, !selectedClient.is_archived)"
+              >
+                <RotateCcw v-if="selectedClient.is_archived" :size="15" aria-hidden="true" />
+                <Archive v-else :size="15" aria-hidden="true" />
+                {{ selectedClient.is_archived ? 'Восстановить' : 'В архив' }}
+              </button>
+              <button
+                v-if="activeClientListMode === 'active'"
+                class="ghost-button"
+                type="button"
+                :disabled="isSaving"
+                @click="openNewClient"
+              >
+                <Plus :size="15" aria-hidden="true" />
+                Новый
+              </button>
+              <button
+                class="icon-button"
+                type="button"
+                :disabled="isSaving"
+                aria-label="Закрыть карточку"
+                title="Закрыть"
+                @click="closeClientCard"
+              >
+                <X :size="18" aria-hidden="true" />
+              </button>
+            </div>
           </div>
-          <div class="row-actions">
-            <button
-              v-if="selectedClient && isClientPersisted"
-              class="secondary-button"
-              type="button"
-              :disabled="isSaving"
-              @click="changeClientArchiveState(selectedClient, !selectedClient.is_archived)"
-            >
-              {{ selectedClient.is_archived ? 'Восстановить' : 'В архив' }}
-            </button>
-            <button
-              v-if="activeClientListMode === 'active'"
-              class="ghost-button"
-              type="button"
-              :disabled="isSaving"
-              @click="openNewClient"
-            >
-              Новый
-            </button>
-            <button class="ghost-button" type="button" :disabled="isSaving" @click="closeClientCard">Закрыть</button>
-          </div>
-        </div>
 
-        <div class="tabs" role="tablist">
-          <button :class="{ active: activeTab === 'main' }" type="button" @click="openClientTab('main')">
-            Основное
-          </button>
-          <button :class="{ active: activeTab === 'identity' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('identity')">
-            Документы личности
-          </button>
-          <button :class="{ active: activeTab === 'phones' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('phones')">
-            Телефоны
-          </button>
-          <button :class="{ active: activeTab === 'modules' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('modules')">
-            Комплектующие
-          </button>
-          <button :class="{ active: activeTab === 'documents' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('documents')">
-            Документы
-          </button>
-          <button :class="{ active: activeTab === 'history' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('history')">
-            История
-          </button>
-        </div>
+          <div class="client-modal-body">
+            <nav class="client-modal-nav" role="tablist" aria-label="Разделы карточки клиента">
+              <button :class="{ active: activeTab === 'main' }" type="button" @click="openClientTab('main')">
+                <UserRound :size="17" aria-hidden="true" />
+                Основное
+              </button>
+              <button :class="{ active: activeTab === 'identity' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('identity')">
+                <IdCard :size="17" aria-hidden="true" />
+                Личные документы
+              </button>
+              <button :class="{ active: activeTab === 'phones' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('phones')">
+                <Phone :size="17" aria-hidden="true" />
+                Телефоны
+              </button>
+              <button :class="{ active: activeTab === 'modules' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('modules')">
+                <PackageOpen :size="17" aria-hidden="true" />
+                Комплектующие
+              </button>
+              <button :class="{ active: activeTab === 'documents' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('documents')">
+                <Files :size="17" aria-hidden="true" />
+                Документы
+              </button>
+              <button :class="{ active: activeTab === 'history' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('history')">
+                <History :size="17" aria-hidden="true" />
+                История
+              </button>
+            </nav>
 
-        <p v-if="error" id="client-modal-error" class="form-error">{{ error }}</p>
-        <p v-if="successMessage" id="client-modal-success" class="form-success">{{ successMessage }}</p>
+            <div class="client-modal-content">
+              <p v-if="error" id="client-modal-error" class="form-error">{{ error }}</p>
+              <p v-if="successMessage" id="client-modal-success" class="form-success">{{ successMessage }}</p>
 
-        <p v-if="!isEditing" class="form-hint">
-          Сначала сохрани основную карточку клиента. После создания станут доступны телефоны, документы,
-          комплектующие и история, потому что эти записи привязываются к client_id.
-        </p>
+              <p v-if="!isEditing" class="form-hint">
+                Сначала сохраните основные данные. После создания станут доступны телефоны,
+                документы, комплектующие и история.
+              </p>
 
-        <form v-if="activeTab === 'main'" class="side-form flat-form" @submit.prevent="saveClient">
+              <form id="client-main-form" v-if="activeTab === 'main'" class="side-form flat-form" @submit.prevent="saveClient">
           <div class="form-grid">
             <label>
               Фамилия
@@ -2350,10 +2591,6 @@ onBeforeUnmount(() => {
             Заметки
             <textarea v-model="form.notes" rows="4" />
           </label>
-
-          <button class="primary-button" type="submit" :disabled="isSaving">
-            {{ isSaving ? 'Сохраняем...' : isEditing ? 'Сохранить изменения' : 'Создать клиента' }}
-          </button>
         </form>
 
         <div v-else-if="activeTab === 'identity'" class="detail-panel">
@@ -2758,7 +2995,10 @@ onBeforeUnmount(() => {
           <div class="list-stack">
             <div v-for="document in documents" :key="String(document.document_id)" class="list-row">
               <div>
-                <strong>{{ getDocumentIcon(document) }} {{ getDocumentName(document) }}</strong>
+                <strong class="document-title">
+                  <component :is="getDocumentIcon(document)" :size="17" aria-hidden="true" />
+                  {{ getDocumentName(document) }}
+                </strong>
                 <span>{{ document.content_type || 'тип не указан' }} · {{ formatFileSize(document.size) }} · {{ formatDate(document.created_at) }}</span>
               </div>
               <div class="row-actions">
@@ -2787,6 +3027,23 @@ onBeforeUnmount(() => {
           </div>
           <p v-else class="muted">История пока пустая.</p>
         </div>
+            </div>
+          </div>
+
+          <div v-if="activeTab === 'main'" class="client-save-bar">
+            <span>
+              {{ hasUnsavedClientChanges ? 'Есть несохранённые изменения' : 'Все изменения сохранены' }}
+            </span>
+            <button
+              class="primary-button"
+              type="submit"
+              form="client-main-form"
+              :disabled="isSaving || !hasUnsavedClientChanges"
+            >
+              <Save :size="16" aria-hidden="true" />
+              {{ isSaving ? 'Сохраняем...' : isEditing ? 'Сохранить изменения' : 'Создать клиента' }}
+            </button>
+          </div>
         </section>
       </div>
     </Teleport>
@@ -2798,7 +3055,7 @@ onBeforeUnmount(() => {
         @click.self="closeReferenceManager"
         @keydown.esc.window="closeReferenceManager"
       >
-        <section class="modal-panel reference-manager-modal" role="dialog" aria-modal="true" aria-label="Справочник ТСР" @click.stop>
+        <section v-focus-trap class="modal-panel reference-manager-modal" role="dialog" aria-modal="true" aria-label="Справочник ТСР" @click.stop>
           <div class="modal-header">
             <div>
               <p class="eyebrow">Справочник</p>

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/app/stores/auth'
 import { createUser, deleteUser, fetchUsers, updateUser } from '@/shared/api/auth'
 import { fetchEntityAudit } from '@/shared/api/audit'
 import { getApiErrorMessage } from '@/shared/api/http'
+import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import {
   formatAuditAction,
   formatAuditActor,
@@ -30,6 +31,8 @@ const isAuditLoading = ref(false)
 const auditError = ref('')
 const error = ref('')
 const successMessage = ref('')
+const confirmAction = useAppConfirm()
+useSuccessToast(successMessage, 'Пользователи')
 
 const newUser = reactive({
   username: '',
@@ -266,7 +269,10 @@ async function removeUser(user: User) {
     return
   }
 
-  if (!window.confirm(`Удалить пользователя "${user.username}"?`)) {
+  if (!(await confirmAction({
+    message: `Удалить пользователя «${user.username}»? Это действие нельзя отменить.`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -293,7 +299,7 @@ onMounted(loadUsers)
 </script>
 
 <template>
-  <section class="page-section">
+  <section class="page-section users-page">
     <div class="page-heading">
       <div>
         <p class="eyebrow">Администрирование</p>

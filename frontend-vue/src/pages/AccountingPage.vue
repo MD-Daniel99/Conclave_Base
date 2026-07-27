@@ -16,6 +16,7 @@ import {
 import { fetchUserSettings, updateUserSettings } from '@/shared/api/auth'
 import { fetchClients, updateClient } from '@/shared/api/clients'
 import { getApiErrorMessage } from '@/shared/api/http'
+import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import type {
   AccountingCustomField,
   Client,
@@ -85,6 +86,8 @@ const isSettingsReady = ref(false)
 let percentSaveTimeout: number | undefined
 const error = ref('')
 const successMessage = ref('')
+const confirmAction = useAppConfirm()
+useSuccessToast(successMessage, 'Бухгалтерия')
 
 const numericCustomFields = computed(() =>
   customFields.value.filter((field) => getFieldType(field) === 'number'),
@@ -537,7 +540,14 @@ async function addCustomField() {
 async function removeCustomField(field: AccountingCustomField) {
   const fieldId = getFieldId(field)
 
-  if (!fieldId || !window.confirm(`Удалить поле «${getFieldName(field)}» из обеих бухгалтерий?`)) {
+  if (!fieldId) {
+    return
+  }
+
+  if (!(await confirmAction({
+    message: `Удалить поле «${getFieldName(field)}» из обеих бухгалтерий?`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -569,7 +579,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="page-section">
+  <section class="page-section accounting-page">
     <div class="page-heading">
       <div>
         <p class="eyebrow">Admin</p>

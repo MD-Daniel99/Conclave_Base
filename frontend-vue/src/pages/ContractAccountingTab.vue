@@ -10,6 +10,7 @@ import {
   updateContractAccounting,
 } from '@/shared/api/accounting'
 import { getApiErrorMessage } from '@/shared/api/http'
+import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import type { AccountingReportField, ContractAccountingRow } from '@/shared/types/entities'
 
 const props = defineProps<{
@@ -71,6 +72,8 @@ const isLoading = ref(false)
 const isSaving = ref(false)
 const error = ref('')
 const success = ref('')
+const confirmAction = useAppConfirm()
+useSuccessToast(success, 'Договорная бухгалтерия')
 
 const availableColumns = computed(() => [
   ...leadingColumns,
@@ -433,7 +436,10 @@ async function addField() {
 }
 
 async function removeField(field: AccountingReportField) {
-  if (!window.confirm(`Удалить поле «${field.label}» из обеих бухгалтерий?`)) {
+  if (!(await confirmAction({
+    message: `Удалить поле «${field.label}» из обеих бухгалтерий?`,
+    danger: true,
+  }))) {
     return
   }
 

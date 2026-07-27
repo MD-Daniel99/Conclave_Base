@@ -4,11 +4,13 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useAuthStore } from '@/app/stores/auth'
 import { updateUser } from '@/shared/api/auth'
 import { getApiErrorMessage } from '@/shared/api/http'
+import { useSuccessToast } from '@/shared/composables/useAppFeedback'
 
 const authStore = useAuthStore()
 const isSaving = ref(false)
 const error = ref('')
 const successMessage = ref('')
+useSuccessToast(successMessage, 'Настройки')
 const accountForm = reactive({
   username: '',
   password: '',
@@ -86,7 +88,7 @@ watch(
 </script>
 
 <template>
-  <section class="page-section">
+  <section class="page-section settings-page">
     <div class="page-heading">
       <div>
         <p class="eyebrow">Профиль</p>

@@ -1227,11 +1227,11 @@ td:has(strong) {
 
 .date-input {
   display: flex;
-  flex: 1 1 252px;
+  flex: 1 1 0;
   align-items: center;
   gap: 4px;
   width: 100%;
-  min-width: 244px;
+  min-width: 0;
   max-width: 270px;
   font-variant-numeric: tabular-nums;
 }

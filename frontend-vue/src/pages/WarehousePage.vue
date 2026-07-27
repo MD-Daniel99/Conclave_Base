@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { Archive, Eye, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
 import { fetchClients } from '@/shared/api/clients'
 import {
   archiveComponent,
@@ -11,7 +12,11 @@ import {
 } from '@/shared/api/components'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { fetchNameIndexReferences, fetchTsrReferences } from '@/shared/api/references'
+import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import { formatMoney, formatMoneyInput } from '@/shared/lib/money'
+import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
+import EmptyState from '@/shared/ui/EmptyState.vue'
+import StatusPill from '@/shared/ui/StatusPill.vue'
 import type {
   Client,
   ComponentCreatePayload,
@@ -81,6 +86,7 @@ const isLoading = ref(false)
 const isSaving = ref(false)
 const error = ref('')
 const successMessage = ref('')
+let warehouseFilterTimer: ReturnType<typeof setTimeout> | undefined
 
 const isEditingComponent = computed(() => Boolean(selectedComponent.value?.module_id))
 const currentSkip = computed(() => (currentPage.value - 1) * pageLimit.value)
@@ -99,10 +105,59 @@ const tsrOptions = computed(() => tsrReferences.value
     label: String(item.full_tsr_code ?? ''),
   }))
   .filter((item) => item.value && item.label))
+const activeWarehouseFilterCount = computed(() => [
+  query.value.trim(),
+  supplierQuery.value.trim(),
+  ownerFilter.value,
+].filter(Boolean).length)
+const confirmAction = useAppConfirm()
+useSuccessToast(successMessage, 'Склад')
 
 function resetMessages() {
   error.value = ''
   successMessage.value = ''
+}
+
+function getComponentActions(item: ComponentItem): ActionMenuItem[] {
+  if (activeWarehouseListMode.value === 'active') {
+    return [
+      {
+        label: 'Открыть карточку',
+        icon: Eye,
+        action: () => selectComponent(item),
+      },
+      {
+        label: 'Переместить в архив',
+        icon: Archive,
+        disabled: isSaving.value,
+        action: () => changeComponentArchiveState(item, true),
+      },
+      {
+        label: 'Удалить',
+        icon: Trash2,
+        danger: true,
+        disabled: isSaving.value,
+        action: () => removeComponent(item),
+      },
+    ]
+  }
+
+  if (item.is_manually_archived && !isComponentOwnerArchived(item)) {
+    return [
+      {
+        label: 'Восстановить',
+        icon: RotateCcw,
+        disabled: isSaving.value,
+        action: () => changeComponentArchiveState(item, false),
+      },
+    ]
+  }
+
+  return [{
+    label: 'В архиве вместе с клиентом',
+    disabled: true,
+    action: () => undefined,
+  }]
 }
 
 function toNumber(value: CountInput, fallback = 0) {
@@ -266,6 +321,13 @@ function applyFilters() {
   void loadData()
 }
 
+function resetFilters() {
+  query.value = ''
+  supplierQuery.value = ''
+  ownerFilter.value = ''
+  applyFilters()
+}
+
 function switchWarehouseListMode(mode: WarehouseListMode) {
   if (activeWarehouseListMode.value === mode) {
     return
@@ -312,7 +374,10 @@ async function saveComponent() {
 }
 
 async function removeComponent(item: ComponentItem) {
-  if (!window.confirm(`Удалить комплектующую «${getComponentName(item)}»?`)) {
+  if (!(await confirmAction({
+    message: `Удалить комплектующую «${getComponentName(item)}»? Это действие нельзя отменить.`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -335,9 +400,15 @@ async function changeComponentArchiveState(item: ComponentItem, archive: boolean
   const componentId = getComponentId(item)
   const action = archive ? 'переместить в архив' : 'восстановить из архива'
 
-  if (!componentId || !window.confirm(
-    `${action[0].toUpperCase()}${action.slice(1)} комплектующую «${getComponentName(item)}»?`,
-  )) {
+  if (!componentId) {
+    return
+  }
+
+  if (!(await confirmAction({
+    header: archive ? 'Перемещение в архив' : 'Восстановление',
+    message: `${action[0].toUpperCase()}${action.slice(1)} комплектующую «${getComponentName(item)}»?`,
+    acceptLabel: archive ? 'В архив' : 'Восстановить',
+  }))) {
     return
   }
 
@@ -385,6 +456,11 @@ function goToNextPage() {
   void loadData()
 }
 
+watch([query, supplierQuery], () => {
+  window.clearTimeout(warehouseFilterTimer)
+  warehouseFilterTimer = window.setTimeout(applyFilters, 380)
+})
+
 onMounted(async () => {
   const [activeClientResult, archivedClientResult, nameResult, tsrResult] = await Promise.allSettled([
     fetchClients({ limit: 100000, archived: false }),
@@ -400,16 +476,24 @@ onMounted(async () => {
   tsrReferences.value = tsrResult.status === 'fulfilled' ? tsrResult.value : []
   await loadData()
 })
+
+onBeforeUnmount(() => {
+  window.clearTimeout(warehouseFilterTimer)
+})
 </script>
 
 <template>
-  <section class="page-section">
+  <section class="page-section entity-workspace-page components-page">
     <div class="page-heading">
       <div>
-        <p class="eyebrow">Склад</p>
+        <p class="eyebrow">Материальный учёт</p>
         <h1>Комплектующие</h1>
+        <p class="muted page-subtitle">
+          Остатки, закупки, себестоимость и распределение по клиентам.
+        </p>
       </div>
       <button v-if="activeWarehouseListMode === 'active'" class="primary-button" type="button" @click="openNewComponent">
+        <Plus :size="16" aria-hidden="true" />
         Добавить комплектующую
       </button>
     </div>
@@ -424,17 +508,26 @@ onMounted(async () => {
     </div>
 
     <form class="toolbar-form warehouse-toolbar" @submit.prevent="applyFilters">
-      <input v-model="query" placeholder="Индекс или название" />
-      <input v-model="supplierQuery" placeholder="Поставщик" />
-      <select v-model="ownerFilter">
-        <option value="">Все владельцы</option>
-        <option v-if="activeWarehouseListMode === 'active'" value="__stock__">На складе</option>
-        <option v-for="client in visibleOwnerClients" :key="String(client.client_id)" :value="client.client_id">
-          {{ getClientName(client) }}
-        </option>
-      </select>
-      <label class="compact-field">
-        На странице
+      <div class="toolbar-search-wrap">
+        <Search :size="17" aria-hidden="true" />
+        <input v-model="query" aria-label="Поиск комплектующей" placeholder="Индекс или название" />
+      </div>
+      <label class="filter-label">
+        <span>Поставщик</span>
+        <input v-model="supplierQuery" placeholder="Все поставщики" />
+      </label>
+      <label class="filter-label">
+        <span>Владелец</span>
+        <select v-model="ownerFilter" @change="applyFilters">
+          <option value="">Все владельцы</option>
+          <option v-if="activeWarehouseListMode === 'active'" value="__stock__">На складе</option>
+          <option v-for="client in visibleOwnerClients" :key="String(client.client_id)" :value="client.client_id">
+            {{ getClientName(client) }}
+          </option>
+        </select>
+      </label>
+      <label class="filter-label">
+        <span>На странице</span>
         <select v-model.number="pageLimit" @change="applyFilters">
           <option :value="25">25</option>
           <option :value="50">50</option>
@@ -442,87 +535,118 @@ onMounted(async () => {
           <option :value="200">200</option>
         </select>
       </label>
-      <button class="secondary-button" type="submit">Найти</button>
+      <div class="filter-actions">
+        <button class="secondary-button" type="submit" :disabled="isLoading">
+          <Search :size="15" aria-hidden="true" />
+          Применить
+        </button>
+        <button v-if="activeWarehouseFilterCount" class="ghost-button" type="button" @click="resetFilters">
+          <X :size="15" aria-hidden="true" />
+          Сбросить
+        </button>
+        <span v-if="activeWarehouseFilterCount" class="filter-count">{{ activeWarehouseFilterCount }}</span>
+      </div>
     </form>
 
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="successMessage" class="form-success">{{ successMessage }}</p>
 
-    <div class="table-wrap">
+    <div class="table-wrap desktop-entity-table">
       <table>
         <thead>
           <tr>
             <th>№</th>
-            <th>Индекс / название</th>
-            <th>ТСР</th>
+            <th>Комплектующая</th>
             <th>Поставщик</th>
             <th>Кол-во</th>
             <th>Себестоимость</th>
             <th>Цена</th>
-            <th>Заказано</th>
-            <th>Получено</th>
-            <th>Ожидается</th>
+            <th>Заказ</th>
             <th>Владелец</th>
-            <th></th>
+            <th aria-label="Действия"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="isLoading">
-            <td colspan="12">Загружаем комплектующие...</td>
+          <tr v-if="isLoading" class="no-row-action">
+            <td colspan="9">Загружаем комплектующие...</td>
           </tr>
-          <tr v-for="(item, index) in components" v-else :key="item.module_id">
+          <tr
+            v-for="(item, index) in components"
+            v-else
+            :key="item.module_id"
+            :tabindex="activeWarehouseListMode === 'active' ? 0 : undefined"
+            :class="{ 'no-row-action': activeWarehouseListMode !== 'active' }"
+            @click="activeWarehouseListMode === 'active' && selectComponent(item)"
+            @keydown.enter="activeWarehouseListMode === 'active' && selectComponent(item)"
+          >
             <td>{{ currentSkip + index + 1 }}</td>
-            <td>
-              <button
-                v-if="activeWarehouseListMode === 'active'"
-                class="link-button"
-                type="button"
-                @click="selectComponent(item)"
-              >
-                {{ getComponentName(item) }}
-              </button>
-              <span v-else>{{ getComponentName(item) }}</span>
+            <td class="entity-cell">
+              <div class="entity-primary">
+                <span class="entity-avatar">ТС</span>
+                <span class="entity-copy">
+                  <strong>{{ getComponentName(item) }}</strong>
+                  <span>{{ item.tsr?.full_tsr_code || 'ТСР не указан' }}</span>
+                </span>
+              </div>
             </td>
-            <td>{{ item.tsr?.full_tsr_code || '—' }}</td>
             <td>{{ item.supplier }}</td>
             <td>{{ item.quantity }}</td>
             <td class="table-money">{{ formatMoney(item.cost) }}</td>
             <td class="table-money">{{ formatMoney(item.price) }}</td>
-            <td>{{ item.ordered }}</td>
-            <td>{{ item.recd }}</td>
-            <td>{{ item.pending }}</td>
-            <td>{{ getClientLabel(item.client_id) }}</td>
-            <td class="row-actions">
-              <template v-if="activeWarehouseListMode === 'active'">
-                <button class="ghost-button" type="button" @click="selectComponent(item)">Открыть</button>
-                <button
-                  class="secondary-button"
-                  type="button"
-                  :disabled="isSaving"
-                  @click="changeComponentArchiveState(item, true)"
-                >
-                  В архив
-                </button>
-                <button class="danger-button" type="button" @click="removeComponent(item)">Удалить</button>
-              </template>
-              <button
-                v-else-if="item.is_manually_archived && !isComponentOwnerArchived(item)"
-                class="secondary-button"
-                type="button"
-                :disabled="isSaving"
-                @click="changeComponentArchiveState(item, false)"
-              >
-                Восстановить
-              </button>
-              <span v-else class="muted">В архиве вместе с клиентом</span>
+            <td class="order-status-cell">
+              <span>Заказано <strong>{{ item.ordered }}</strong></span>
+              <span>Получено <strong>{{ item.recd }}</strong></span>
+              <StatusPill
+                v-if="Number(item.pending || 0) > 0"
+                :label="`Ожидается: ${item.pending}`"
+                kind="status"
+              />
             </td>
-          </tr>
-          <tr v-if="!isLoading && components.length === 0">
-            <td colspan="12">Комплектующие не найдены.</td>
+            <td>
+              <StatusPill
+                :label="item.client_id ? getClientLabel(item.client_id) : 'На складе'"
+                :kind="item.client_id ? 'neutral' : 'status'"
+              />
+            </td>
+            <td class="table-actions-cell">
+              <ActionMenu :items="getComponentActions(item)" :label="`Действия: ${getComponentName(item)}`" />
+            </td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <div v-if="!isLoading" class="mobile-entity-list">
+      <article
+        v-for="item in components"
+        :key="item.module_id"
+        class="mobile-entity-card"
+        @click="activeWarehouseListMode === 'active' && selectComponent(item)"
+      >
+        <div class="mobile-entity-card-header">
+          <div class="entity-primary">
+            <span class="entity-avatar">ТС</span>
+            <span class="entity-copy">
+              <strong>{{ getComponentName(item) }}</strong>
+              <span>{{ item.tsr?.full_tsr_code || 'ТСР не указан' }} · {{ item.supplier }}</span>
+            </span>
+          </div>
+          <ActionMenu :items="getComponentActions(item)" :label="`Действия: ${getComponentName(item)}`" />
+        </div>
+        <div class="mobile-entity-card-details">
+          <span>Количество <strong>{{ item.quantity }}</strong></span>
+          <span>Стоимость <strong>{{ formatMoney(item.cost) }}</strong></span>
+          <span>Ожидается <strong>{{ item.pending || 0 }}</strong></span>
+          <span>Владелец <strong>{{ getClientLabel(item.client_id) }}</strong></span>
+        </div>
+      </article>
+    </div>
+
+    <EmptyState
+      v-if="!isLoading && components.length === 0"
+      title="Комплектующие не найдены"
+      :description="activeWarehouseFilterCount ? 'Измените или сбросьте фильтры.' : 'Добавьте первую комплектующую на склад.'"
+    />
 
     <div class="pagination-bar">
       <span>Страница {{ currentPage }}</span>
@@ -537,7 +661,7 @@ onMounted(async () => {
     </div>
 
     <div v-if="isComponentCardOpen" class="modal-backdrop" @click.self="closeComponentCard">
-      <section class="modal-panel">
+      <section v-focus-trap class="modal-panel entity-modal component-profile-modal" role="dialog" aria-modal="true" aria-label="Карточка комплектующей">
         <div class="modal-header">
           <div>
             <p class="eyebrow">{{ isEditingComponent ? 'Редактирование' : 'Новая комплектующая' }}</p>

@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { Eye, Plus, Search, Trash2, X } from '@lucide/vue'
 
 import { fetchClients } from '@/shared/api/clients'
 import { fetchEntityAudit } from '@/shared/api/audit'
 import { getApiErrorMessage } from '@/shared/api/http'
+import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
+import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
+import EmptyState from '@/shared/ui/EmptyState.vue'
 
 import {
   fetchAgents,
@@ -75,12 +79,15 @@ const error = ref('')
 const successMessage = ref('')
 const clientsError = ref('')
 const auditError = ref('')
+let agentSearchTimer: ReturnType<typeof setTimeout> | undefined
 
 const isEditing = computed(() => Boolean(selectedAgent.value?.agent_id))
 const isAgentPersisted = computed(() => Boolean(selectedAgent.value && getAgentId(selectedAgent.value)))
 const skip = computed(() => (page.value - 1) * pageSize.value)
 const canGoBack = computed(() => page.value > 1 && !isLoading.value)
 const canGoForward = computed(() => agents.value.length === pageSize.value && !isLoading.value)
+const confirmAction = useAppConfirm()
+useSuccessToast(successMessage, 'Агенты')
 
 function getAgentId(agent: Agent) {
   return agent.agent_id ? String(agent.agent_id) : ''
@@ -90,6 +97,31 @@ function getAgentName(agent: Agent) {
   return [agent.last_name, agent.first_name, agent.middle_name]
     .filter(Boolean)
     .join(' ') || 'Без имени'
+}
+
+function getAgentInitials(agent: Agent) {
+  return [agent.last_name, agent.first_name]
+    .filter(Boolean)
+    .map((part) => String(part).slice(0, 1))
+    .join('')
+    .toUpperCase() || 'АГ'
+}
+
+function getAgentActions(agent: Agent): ActionMenuItem[] {
+  return [
+    {
+      label: 'Открыть карточку',
+      icon: Eye,
+      action: () => selectAgent(agent),
+    },
+    {
+      label: 'Удалить',
+      icon: Trash2,
+      danger: true,
+      disabled: isSaving.value,
+      action: () => removeAgent(agent),
+    },
+  ]
 }
 
 function getClientName(client: Client) {
@@ -279,6 +311,12 @@ async function searchAgents() {
   await loadAgents()
 }
 
+async function resetAgentSearch() {
+  query.value = ''
+  page.value = 1
+  await loadAgents()
+}
+
 async function changePageSize() {
   page.value = 1
   await loadAgents()
@@ -416,9 +454,10 @@ async function removeAgent(agent: Agent) {
     return
   }
 
-  const confirmed = window.confirm(`Удалить агента "${getAgentName(agent)}"?`)
-
-  if (!confirmed) {
+  if (!(await confirmAction({
+    message: `Удалить агента «${getAgentName(agent)}»? Это действие нельзя отменить.`,
+    danger: true,
+  }))) {
     return
   }
 
@@ -441,47 +480,72 @@ async function removeAgent(agent: Agent) {
   }
 }
 
+watch(query, () => {
+  window.clearTimeout(agentSearchTimer)
+  agentSearchTimer = window.setTimeout(() => {
+    void searchAgents()
+  }, 380)
+})
+
 onMounted(loadAgents)
+
+onBeforeUnmount(() => {
+  window.clearTimeout(agentSearchTimer)
+})
 </script>
 
 <template>
-  <section class="page-section">
+  <section class="page-section entity-workspace-page agents-page">
     <div class="page-heading">
       <div>
-        <p class="eyebrow">Исполнители и партнеры</p>
+        <p class="eyebrow">Партнёрская сеть</p>
         <h1>Агенты</h1>
+        <p class="muted page-subtitle">
+          Реквизиты партнёров, связанные клиенты и история взаимодействия.
+        </p>
       </div>
       <button class="primary-button" type="button" @click="openNewAgent">
+        <Plus :size="16" aria-hidden="true" />
         Создать агента
       </button>
     </div>
 
     <form class="toolbar-form agents-toolbar" @submit.prevent="searchAgents">
-      <input v-model="query" placeholder="Поиск по ФИО агента или клиента" />
-      <button class="secondary-button" type="submit" :disabled="isLoading">
-        Найти
-      </button>
+      <div class="toolbar-search-wrap">
+        <Search :size="17" aria-hidden="true" />
+        <input v-model="query" aria-label="Поиск агента" placeholder="ФИО агента или связанного клиента" />
+      </div>
+      <div class="filter-actions">
+        <button class="secondary-button" type="submit" :disabled="isLoading">
+          <Search :size="15" aria-hidden="true" />
+          Найти
+        </button>
+        <button v-if="query" class="ghost-button" type="button" @click="resetAgentSearch">
+          <X :size="15" aria-hidden="true" />
+          Сбросить
+        </button>
+      </div>
     </form>
 
     <p v-if="error && !isAgentCardOpen" class="form-error">{{ error }}</p>
     <p v-if="successMessage && !isAgentCardOpen" class="form-success">{{ successMessage }}</p>
 
-    <div class="table-wrap">
+    <div class="table-wrap desktop-entity-table">
       <table>
         <thead>
           <tr>
             <th>№</th>
-            <th>ФИО</th>
+            <th>Агент</th>
             <th>ИНН</th>
             <th>ОГРНИП</th>
             <th>БИК</th>
             <th>Расчетный счет</th>
-            <th></th>
+            <th aria-label="Действия"></th>
           </tr>
         </thead>
 
         <tbody>
-          <tr v-if="isLoading">
+          <tr v-if="isLoading" class="no-row-action">
             <td colspan="7">Загружаем агентов...</td>
           </tr>
 
@@ -490,13 +554,20 @@ onMounted(loadAgents)
             v-else
             :key="getAgentId(agent)"
             :class="{ selected: selectedAgent && getAgentId(selectedAgent) === getAgentId(agent) }"
+            tabindex="0"
+            @click="selectAgent(agent)"
+            @keydown.enter="selectAgent(agent)"
           >
             <td>{{ skip + index + 1 }}</td>
 
-            <td>
-              <button class="link-button" type="button" @click="selectAgent(agent)">
-                {{ getAgentName(agent) }}
-              </button>
+            <td class="entity-cell">
+              <div class="entity-primary">
+                <span class="entity-avatar">{{ getAgentInitials(agent) }}</span>
+                <span class="entity-copy">
+                  <strong>{{ getAgentName(agent) }}</strong>
+                  <span>Партнёр</span>
+                </span>
+              </div>
             </td>
 
             <td>{{ agent.inn || '-' }}</td>
@@ -504,28 +575,44 @@ onMounted(loadAgents)
             <td>{{ agent.bic || '-' }}</td>
             <td>{{ agent.account_number || '-' }}</td>
 
-            <td class="row-actions">
-              <button class="ghost-button" type="button" @click="selectAgent(agent)">
-                Открыть
-              </button>
-
-              <button
-                class="danger-button"
-                type="button"
-                :disabled="isSaving"
-                @click="removeAgent(agent)"
-              >
-                Удалить
-              </button>
+            <td class="table-actions-cell">
+              <ActionMenu :items="getAgentActions(agent)" :label="`Действия: ${getAgentName(agent)}`" />
             </td>
-          </tr>
-
-          <tr v-if="!isLoading && agents.length === 0">
-            <td colspan="7">Агенты не найдены.</td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <div v-if="!isLoading" class="mobile-entity-list">
+      <article
+        v-for="agent in agents"
+        :key="getAgentId(agent)"
+        class="mobile-entity-card"
+        @click="selectAgent(agent)"
+      >
+        <div class="mobile-entity-card-header">
+          <div class="entity-primary">
+            <span class="entity-avatar">{{ getAgentInitials(agent) }}</span>
+            <span class="entity-copy">
+              <strong>{{ getAgentName(agent) }}</strong>
+              <span>ИНН {{ agent.inn || 'не указан' }}</span>
+            </span>
+          </div>
+          <ActionMenu :items="getAgentActions(agent)" :label="`Действия: ${getAgentName(agent)}`" />
+        </div>
+        <div class="mobile-entity-card-details">
+          <span>ОГРНИП <strong>{{ agent.ogrnip || '—' }}</strong></span>
+          <span>БИК <strong>{{ agent.bic || '—' }}</strong></span>
+          <span>Расчётный счёт <strong>{{ agent.account_number || '—' }}</strong></span>
+        </div>
+      </article>
+    </div>
+
+    <EmptyState
+      v-if="!isLoading && agents.length === 0"
+      title="Агенты не найдены"
+      :description="query ? 'Измените поисковый запрос или сбросьте его.' : 'Создайте первую карточку агента.'"
+    />
 
     <div class="pagination-bar" aria-label="Пагинация агентов">
       <span>
@@ -555,7 +642,7 @@ onMounted(loadAgents)
 
     <Teleport to="body">
       <div v-if="isAgentCardOpen" class="modal-backdrop client-card-backdrop" @click.self="closeAgentCard" @keydown.esc.window="closeAgentCard">
-        <section class="modal-panel client-modal client-modal-panel" role="dialog" aria-modal="true" aria-label="Карточка агента" :aria-busy="isSaving" @click.stop>
+        <section v-focus-trap class="modal-panel client-modal client-modal-panel entity-modal agent-profile-modal" role="dialog" aria-modal="true" aria-label="Карточка агента" :aria-busy="isSaving" @click.stop>
           <div class="modal-header">
             <div>
               <p class="eyebrow">{{ isEditing ? 'Карточка агента' : 'Новый агент' }}</p>

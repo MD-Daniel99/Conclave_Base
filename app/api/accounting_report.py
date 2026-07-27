@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
+from app.api.deps import get_current_user, require_admin
 from app.db import get_db
 from app import models, schemas
 from app.services.accounting_report import (
@@ -67,7 +67,7 @@ def get_contract_accounting_report(
 @router.get("/contract-coverage")
 def get_contract_coverage(
     db: Session = Depends(get_db),
-    _current_user=Depends(require_admin),
+    _current_user=Depends(get_current_user),
 ):
     return build_contract_coverage(db)
 

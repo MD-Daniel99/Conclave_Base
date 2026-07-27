@@ -1,15 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { useAuthStore } from '@/app/stores/auth'
-import AppLayout from '@/widgets/layout/AppLayout.vue'
 import LoginPage from '@/pages/LoginPage.vue'
-import DashboardPage from '@/pages/DashboardPage.vue'
-import ClientsPage from '@/pages/ClientsPage.vue'
-import AgentsPage from '@/pages/AgentsPage.vue'
-import WarehousePage from '@/pages/WarehousePage.vue'
-import AccountingPage from '@/pages/AccountingPage.vue'
-import AdminUsersPage from '@/pages/AdminUsersPage.vue'
-import SettingsPage from '@/pages/SettingsPage.vue'
+
+const AppLayout = () => import('@/widgets/layout/AppLayout.vue')
+const DashboardPage = () => import('@/pages/DashboardPage.vue')
+const ClientsPage = () => import('@/pages/ClientsPage.vue')
+const AgentsPage = () => import('@/pages/AgentsPage.vue')
+const WarehousePage = () => import('@/pages/WarehousePage.vue')
+const AccountingPage = () => import('@/pages/AccountingPage.vue')
+const AdminUsersPage = () => import('@/pages/AdminUsersPage.vue')
+const SettingsPage = () => import('@/pages/SettingsPage.vue')
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
