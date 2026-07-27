@@ -456,6 +456,10 @@ function goToNextPage() {
   void loadData()
 }
 
+watch(isComponentCardOpen, (isOpen) => {
+  window.document.body.classList.toggle('modal-open', isOpen)
+})
+
 watch([query, supplierQuery], () => {
   window.clearTimeout(warehouseFilterTimer)
   warehouseFilterTimer = window.setTimeout(applyFilters, 380)
@@ -479,6 +483,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(warehouseFilterTimer)
+  window.document.body.classList.remove('modal-open')
 })
 </script>
 

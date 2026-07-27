@@ -480,6 +480,10 @@ async function removeAgent(agent: Agent) {
   }
 }
 
+watch(isAgentCardOpen, (isOpen) => {
+  window.document.body.classList.toggle('modal-open', isOpen)
+})
+
 watch(query, () => {
   window.clearTimeout(agentSearchTimer)
   agentSearchTimer = window.setTimeout(() => {
@@ -491,6 +495,7 @@ onMounted(loadAgents)
 
 onBeforeUnmount(() => {
   window.clearTimeout(agentSearchTimer)
+  window.document.body.classList.remove('modal-open')
 })
 </script>
 

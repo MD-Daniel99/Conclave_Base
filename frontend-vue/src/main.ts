@@ -12,6 +12,7 @@ import { focusTrap } from './shared/directives/focusTrap'
 import './assets/styles.css'
 import './assets/design-system.css'
 import './assets/aurora-theme.css'
+import './assets/light-refresh.css'
 
 const app = createApp(App)
 
