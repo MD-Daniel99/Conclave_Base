@@ -10,5 +10,6 @@ export interface UserSettings {
   tax_usn_percent?: number | null
   tax_osno_percent?: number | null
   acq_percent?: number | null
+  vat_percent?: number | null
   [key: string]: unknown
 }

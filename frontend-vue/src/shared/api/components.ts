@@ -16,6 +16,11 @@ export async function fetchComponents(params: ListComponentsParams = {}) {
   return data
 }
 
+export async function fetchStockComponentCount() {
+  const { data } = await api.get<number>('/components/stock/count')
+  return data
+}
+
 export async function createComponent(payload: ComponentCreatePayload) {
   const { data } = await api.post<ComponentItem>('/components/', payload)
   return data

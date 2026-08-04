@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import {
   Archive,
   Eye,
@@ -10,8 +10,8 @@ import {
   FileText,
   History,
   IdCard,
+  Mail,
   PackageOpen,
-  Phone,
   Plus,
   RotateCcw,
   Save,
@@ -31,7 +31,7 @@ import { fetchAgents } from '@/shared/api/agents'
 import { fetchEntityAudit } from '@/shared/api/audit'
 import {
   archiveClient,
-  assignClientComponentsTsr,
+  attachClientTsr,
   createClient,
   createClientPassport,
   createClientPhone,
@@ -40,6 +40,7 @@ import {
   deleteClientPassport,
   deleteClientPhone,
   deleteClientSnils,
+  detachClientTsr,
   fetchClient,
   fetchClientPhones,
   fetchClients,
@@ -48,12 +49,14 @@ import {
   updateClientPassport,
   updateClientPhone,
   updateClientSnils,
+  updateClientTsr,
 } from '@/shared/api/clients'
 import {
   deleteDocument,
   downloadDocumentBlob,
   fetchClientDocuments,
   fetchContractTemplates,
+  fetchNextContractNumber,
   generateClientContract,
   uploadClientDocument,
 } from '@/shared/api/documents'
@@ -116,13 +119,6 @@ const contractTemplateOptions = ref<ContractTemplateOption[]>([
   { value: 'dmk_instrument', label: 'ИП ДМК · Акт' },
 ])
 
-const prosthesisOptions = [
-  { value: 'Верхних конечностей', label: 'Верхних конечностей' },
-  { value: 'Нижних конечностей', label: 'Нижних конечностей' },
-  { value: 'Верхних и нижних конечностей', label: 'Верхних и нижних конечностей' },
-] as const
-const prosthesisOptionValues = new Set<string>(prosthesisOptions.map((option) => option.value))
-
 type ClientForm = {
   last_name: string
   first_name: string
@@ -130,13 +126,8 @@ type ClientForm = {
   status: string
   current_stage: string
   agent_id: string
-  deadline: string
-  check_date: string
   prosthesis_type: string
-  certificate_price: string
   taxation_system: 'УСН' | 'ОСНО'
-  place_of_residence: string
-  prosthetist: string
   notes: string
 }
 
@@ -144,9 +135,11 @@ type ClientTab = 'main' | 'identity' | 'phones' | 'modules' | 'documents' | 'his
 type DetailTab = Exclude<ClientTab, 'main'>
 type ClientListMode = 'active' | 'archive'
 type CountInput = string | number
+type ComponentEntryMode = 'new' | 'warehouse'
 
 type ClientModuleForm = {
   tsr_id: string
+  client_tsr_id: string
   module_name_index: string
   supplier: string
   quantity: string
@@ -166,10 +159,34 @@ type ClientModuleForm = {
 
 type ClientTsrGroup = {
   key: string
+  clientTsrId: string
   tsrId: string
   tsr: string
+  checkDate: string
+  certificatePrice: string
+  prosthetist: '' | 'Дмитрий' | 'Никита'
+  placeOfResidence: string
+  repeatVisitDate: string
   components: ModuleItem[]
 }
+
+type ClientTsrDraft = {
+  checkDate: string
+  certificatePrice: string
+  prosthetist: '' | 'Дмитрий' | 'Никита'
+  repeatVisitDate: string
+}
+
+const PROSTHETIST_ADDRESSES: Record<'Дмитрий' | 'Никита', string> = {
+  Дмитрий: 'Ивана Сусанина, д. 3',
+  Никита: 'Большая Почтовая, д. 18/20',
+}
+
+const DIAGNOSIS_OPTIONS = [
+  { value: 'Верхних конечностей', label: 'Верхних конечностей' },
+  { value: 'Нижних конечностей', label: 'Нижних конечностей' },
+  { value: 'Верхних и нижних конечностей', label: 'Верхних и нижних конечностей' },
+]
 
 const emptyForm: ClientForm = {
   last_name: '',
@@ -178,13 +195,8 @@ const emptyForm: ClientForm = {
   status: '',
   current_stage: '',
   agent_id: '',
-  deadline: '',
-  check_date: '',
   prosthesis_type: '',
-  certificate_price: '',
   taxation_system: 'УСН',
-  place_of_residence: '',
-  prosthetist: '',
   notes: '',
 }
 
@@ -193,6 +205,7 @@ const route = useRoute()
 
 const emptyModuleForm: ClientModuleForm = {
   tsr_id: '',
+  client_tsr_id: '',
   module_name_index: '',
   supplier: '',
   quantity: '1',
@@ -235,6 +248,7 @@ const activeTab = ref<ClientTab>('main')
 const form = reactive<ClientForm>({ ...emptyForm })
 const moduleForm = reactive<ClientModuleForm>({ ...emptyModuleForm })
 const newPhone = reactive({ phone: '', comment: '' })
+const emailDraft = ref('')
 const editingPhoneId = ref<string | number | null>(null)
 const editingPassportId = ref<string | null>(null)
 const editingSnilsId = ref<string | null>(null)
@@ -246,7 +260,6 @@ const passportForm = reactive({
   issued_by: '',
   issue_date: '', 
   department_code: '',
-  expiry_date: '',
   registration_address: '',
 })
 const snilsForm = reactive({
@@ -255,16 +268,12 @@ const snilsForm = reactive({
   ipra_date: '',
 })
 const selectedModuleId = ref('')
+const selectedContractClientTsrIds = ref<string[]>([])
 const selectedContractModuleIds = ref<string[]>([])
 const editingModuleId = ref<string | null>(null)
 const contractType = ref('llc_contract')
-const defaultContractSuffix = new Intl.DateTimeFormat('ru-RU', {
-  day: '2-digit',
-  month: '2-digit',
-  year: '2-digit',
-}).format(new Date()).replace(/\D/g, '')
 const contractNumberPrefix = ref('СД')
-const contractNumberSuffix = ref(defaultContractSuffix)
+const contractNumberSuffix = ref('001')
 const contractDate = ref(new Date().toISOString().slice(0, 10))
 const contractPlanDate = ref(new Date().toISOString().slice(0, 10))
 const contractAppendixDate = ref(new Date().toISOString().slice(0, 10))
@@ -282,6 +291,15 @@ const isSaving = ref(false)
 const error = ref('')
 const successMessage = ref('')
 const lastSavedClientState = ref('')
+const lastSavedDetailStates = reactive<Record<DetailTab, string>>({
+  identity: '',
+  phones: '',
+  modules: '',
+  documents: '',
+  history: '',
+})
+const lastSavedIdentityStates = reactive({ passport: '', snils: '' })
+const lastSavedContactStates = reactive({ email: '', phone: '' })
 const isReferenceManagerOpen = ref(false)
 const referenceSearch = ref('')
 const referenceDraft = ref('')
@@ -289,7 +307,11 @@ const referenceEditingId = ref<string | number | null>(null)
 const referenceError = ref('')
 const referenceSuccess = ref('')
 const isReferenceSaving = ref(false)
-const groupTsrDrafts = reactive<Record<string, string>>({})
+const clientTsrDrafts = reactive<Record<string, ClientTsrDraft>>({})
+const passportFormExpanded = ref(false)
+const snilsFormExpanded = ref(false)
+const componentFormExpanded = ref(false)
+const componentEntryMode = ref<ComponentEntryMode>('new')
 let clientFilterTimer: ReturnType<typeof setTimeout> | undefined
 
 const isEditing = computed(() => Boolean(selectedClient.value?.client_id))
@@ -301,13 +323,141 @@ const activeClientFilterCount = computed(() => [
   stageFilter.value,
   agentFilter.value,
 ].filter(Boolean).length)
+const CLIENT_TAB_LABELS: Record<ClientTab, string> = {
+  main: 'Основное',
+  identity: 'Личные документы',
+  phones: 'Контакты',
+  modules: 'Комплектующие',
+  documents: 'Документы',
+  history: 'История',
+}
+
+function getPassportDraftState() {
+  return JSON.stringify(passportForm)
+}
+
+function getSnilsDraftState() {
+  return JSON.stringify(snilsForm)
+}
+
+function getEmailDraftState() {
+  return emailDraft.value
+}
+
+function getPhoneDraftState() {
+  return JSON.stringify({ phone: newPhone.phone, comment: newPhone.comment })
+}
+
+function getDetailTabDraftState(tab: DetailTab) {
+  if (tab === 'identity') {
+    return JSON.stringify({ passport: getPassportDraftState(), snils: getSnilsDraftState() })
+  }
+
+  if (tab === 'phones') {
+    return JSON.stringify({ email: getEmailDraftState(), phone: getPhoneDraftState() })
+  }
+
+  if (tab === 'modules') {
+    return JSON.stringify({
+      form: moduleForm,
+      selectedWarehouseModuleId: selectedModuleId.value,
+      mode: componentEntryMode.value,
+    })
+  }
+
+  if (tab === 'documents') {
+    return JSON.stringify({
+      contractType: contractType.value,
+      contractNumberPrefix: contractNumberPrefix.value,
+      contractNumberSuffix: contractNumberSuffix.value,
+      contractDate: contractDate.value,
+      contractPlanDate: contractPlanDate.value,
+      contractAppendixDate: contractAppendixDate.value,
+      selectedClientTsrIds: selectedContractClientTsrIds.value,
+      selectedModuleIds: selectedContractModuleIds.value,
+      file: selectedFile.value
+        ? {
+            name: selectedFile.value.name,
+            size: selectedFile.value.size,
+            lastModified: selectedFile.value.lastModified,
+          }
+        : null,
+    })
+  }
+
+  return ''
+}
+
+function rememberPassportDraftState() {
+  lastSavedIdentityStates.passport = getPassportDraftState()
+}
+
+function rememberSnilsDraftState() {
+  lastSavedIdentityStates.snils = getSnilsDraftState()
+}
+
+function rememberEmailDraftState() {
+  lastSavedContactStates.email = getEmailDraftState()
+}
+
+function rememberPhoneDraftState() {
+  lastSavedContactStates.phone = getPhoneDraftState()
+}
+
+function rememberDetailTabState(tab: DetailTab) {
+  if (tab === 'identity') {
+    rememberPassportDraftState()
+    rememberSnilsDraftState()
+  } else if (tab === 'phones') {
+    rememberEmailDraftState()
+    rememberPhoneDraftState()
+  }
+
+  lastSavedDetailStates[tab] = getDetailTabDraftState(tab)
+}
+
+function hasUnsavedClientTsrDrafts() {
+  return Object.entries(clientTsrDrafts).some(([clientTsrId, draft]) => {
+    const group = clientTsrGroups.value.find((item) => item.clientTsrId === clientTsrId)
+    if (!group) {
+      return true
+    }
+
+    const draftPrice = parseMoneyInput(draft.certificatePrice)
+    const savedPrice = parseMoneyInput(group.certificatePrice)
+    return draft.checkDate !== group.checkDate
+      || draftPrice !== savedPrice
+      || draft.prosthetist !== group.prosthetist
+      || draft.repeatVisitDate !== group.repeatVisitDate
+  })
+}
+
+function hasUnsavedChangesForTab(tab: ClientTab) {
+  if (tab === 'main') {
+    return JSON.stringify(form) !== lastSavedClientState.value || hasUnsavedClientTsrDrafts()
+  }
+
+  if (tab === 'identity') {
+    return getPassportDraftState() !== lastSavedIdentityStates.passport
+      || getSnilsDraftState() !== lastSavedIdentityStates.snils
+  }
+
+  if (tab === 'phones') {
+    return getEmailDraftState() !== lastSavedContactStates.email
+      || getPhoneDraftState() !== lastSavedContactStates.phone
+  }
+
+  return getDetailTabDraftState(tab) !== lastSavedDetailStates[tab]
+}
+
+const dirtyClientTabs = computed(() => (
+  (Object.keys(CLIENT_TAB_LABELS) as ClientTab[]).filter(hasUnsavedChangesForTab)
+))
 const hasUnsavedClientChanges = computed(() => (
-  isClientCardOpen.value
-  && activeTab.value === 'main'
-  && JSON.stringify(form) !== lastSavedClientState.value
+  isClientCardOpen.value && dirtyClientTabs.value.length > 0
 ))
 const confirmAction = useAppConfirm()
-useSuccessToast(successMessage, 'Клиенты')
+useSuccessToast(successMessage, 'Пациенты')
 useSuccessToast(referenceSuccess, 'Справочник ТСР')
 
 const canManageReferences = computed(() => authStore.isAdmin)
@@ -324,61 +474,142 @@ const isEditingReference = computed(() => referenceEditingId.value !== null)
 
 const statusOptions = computed(() => statuses.value.map(normalizeReferenceOption))
 const stageOptions = computed(() => stages.value.map(normalizeReferenceOption))
-const tsrOptions = computed(() => tsrReferences.value.map((item) => ({
-  value: String(getReferenceId(item)),
-  label: getReferenceLabel(item),
-})))
+const prosthesisOptions = computed(() => DIAGNOSIS_OPTIONS)
 const nameIndexOptions = computed(() => nameIndexReferences.value.map(normalizeReferenceOption))
-const passportItems = computed(() => selectedClient.value?.passports ?? [])
-const snilsItems = computed(() => selectedClient.value?.snils ?? [])
+const passportItems = computed(() => latestSingleItem(selectedClient.value?.passports ?? []))
+const snilsItems = computed(() => latestSingleItem(selectedClient.value?.snils ?? []))
 const hasPreviousPage = computed(() => currentPage.value > 1)
 const hasNextPage = computed(() => hasMoreClients.value)
 const currentSkip = computed(() => (currentPage.value - 1) * pageLimit.value)
+const attachedTsrOptions = computed(() => {
+  const items = [...(selectedClient.value?.tsr_items ?? [])].sort((left, right) => {
+    const createdCompare = String(left.created_at ?? '').localeCompare(String(right.created_at ?? ''))
+    return createdCompare || String(left.client_tsr_id ?? '').localeCompare(String(right.client_tsr_id ?? ''))
+  })
+  return items.map((item) => {
+    const tsrId = String(item.tsr_id || item.tsr?.tsr_id || item.tsr?.id || '')
+    const value = String(item.client_tsr_id || '')
+    const code = String(item.tsr?.full_tsr_code || 'ТСР без кода')
+    return {
+      value,
+      tsrId,
+      label: code,
+    }
+  }).filter((item) => item.value && item.tsrId)
+})
+
+const attachedTsrCounts = computed(() => attachedTsrOptions.value.reduce((result, item) => {
+  result.set(item.tsrId, (result.get(item.tsrId) ?? 0) + 1)
+  return result
+}, new Map<string, number>()))
+
+const selectedWarehouseModule = computed(() => warehouseModules.value.find(
+  (item) => String(item.module_id ?? '') === selectedModuleId.value,
+) ?? null)
+
+const selectedWarehouseTargetMismatch = computed(() => {
+  const warehouseModule = selectedWarehouseModule.value
+  const target = selectedComponentTsrGroup.value
+  if (!warehouseModule || !target) return false
+
+  const warehouseTsrId = String(warehouseModule.tsr_id ?? warehouseModule.tsr?.id ?? '')
+  return Boolean(warehouseTsrId && warehouseTsrId !== target.tsrId)
+})
+
 const clientTsrGroups = computed<ClientTsrGroup[]>(() => {
   const source = clientModules.value.length ? clientModules.value : (selectedClient.value?.modules ?? [])
   const groups = new Map<string, ClientTsrGroup>()
+  const firstAssignmentByTsr = new Map<string, string>()
+
+  for (const item of selectedClient.value?.tsr_items ?? []) {
+    const clientTsrId = String(item.client_tsr_id || '')
+    const tsrId = String(item.tsr_id || item.tsr?.tsr_id || item.tsr?.id || '')
+    if (!clientTsrId || !tsrId) continue
+    firstAssignmentByTsr.set(tsrId, firstAssignmentByTsr.get(tsrId) ?? clientTsrId)
+    groups.set(clientTsrId, {
+      key: clientTsrId,
+      clientTsrId,
+      tsrId,
+      tsr: String(item.tsr?.full_tsr_code || 'ТСР без кода'),
+      checkDate: String(item.check_date || '').slice(0, 10),
+      certificatePrice: item.certificate_price == null ? '' : formatMoneyInput(item.certificate_price),
+      prosthetist: item.prosthetist === 'Дмитрий' || item.prosthetist === 'Никита' ? item.prosthetist : '',
+      placeOfResidence: String(item.place_of_residence || ''),
+      repeatVisitDate: String(item.repeat_visit_date || '').slice(0, 10),
+      components: [],
+    })
+  }
 
   for (const component of source) {
     const tsrId = String(component.tsr_id ?? component.tsr?.id ?? '')
-    const tsr = component.tsr?.full_tsr_code || 'ТСР не выбран'
-    const key = tsrId || '__unassigned__'
+    const explicitAssignmentId = String(component.client_tsr_id ?? '')
+    const key = explicitAssignmentId || firstAssignmentByTsr.get(tsrId) || (tsrId ? `legacy:${tsrId}` : '__unassigned__')
     const group = groups.get(key)
-
     if (group) {
       group.components.push(component)
     } else {
-      groups.set(key, { key, tsrId, tsr, components: [component] })
+      groups.set(key, {
+        key,
+        clientTsrId: explicitAssignmentId,
+        tsrId,
+        tsr: component.tsr?.full_tsr_code || 'ТСР не выбран',
+        checkDate: '',
+        certificatePrice: '',
+        prosthetist: '',
+        placeOfResidence: '',
+        repeatVisitDate: '',
+        components: [component],
+      })
     }
   }
 
-  return [...groups.values()].sort((left, right) => left.tsr.localeCompare(right.tsr, 'ru'))
+  return [...groups.values()].sort((left, right) => {
+    if (left.key === '__unassigned__') return 1
+    if (right.key === '__unassigned__') return -1
+    return left.tsr.localeCompare(right.tsr, 'ru')
+  })
 })
+
+const selectedComponentTsrGroup = computed(() => clientTsrGroups.value.find(
+  (group) => group.clientTsrId && group.clientTsrId === moduleForm.client_tsr_id,
+) ?? null)
+
+const contractTsrGroups = computed(() => clientTsrGroups.value.filter(
+  (group) => Boolean(group.clientTsrId && group.tsrId),
+))
 
 const statusFallbackLabels: Record<string, string> = {
   new: 'Новый',
   work: 'В работе',
+  success: 'Успешно завершен',
+  fail: 'Отказ',
+  hold: 'Отложен',
+  // Совместимость с историческими кодами.
   inwork: 'В работе',
   active: 'Активный',
-  done: 'Завершен',
-  completed: 'Завершен',
-  fail: 'Отказ',
+  completed: 'Успешно завершен',
   failed: 'Отказ',
   postponed: 'Отложен',
 }
 
 const stageFallbackLabels: Record<string, string> = {
-  new: 'Новый',
+  contact: 'Первичный контакт',
+  meeting: 'Встреча/Переговоры',
+  contract: 'Договор',
+  prepay: 'Оплата',
+  production: 'Протезирование',
+  done: 'Закрытие актов',
+  shipping: 'Выполнено',
+  // Совместимость с историческими кодами.
   documents: 'Документы',
   measurement: 'Замер',
-  production: 'Производство',
   fitting: 'Примерка',
-  contract: 'Договор',
   contractsign: 'Подписание договора',
   delivery: 'Выдача',
   payment: 'Оплата',
-  done: 'Завершено',
-  completed: 'Завершено',
+  completed: 'Закрытие актов',
 }
+
 
 function parseMaybeJson(value: unknown): unknown {
   if (typeof value !== 'string') {
@@ -396,6 +627,13 @@ function parseMaybeJson(value: unknown): unknown {
   } catch {
     return value
   }
+}
+
+function latestSingleItem<T extends { created_at?: string | null }>(items: T[]): T[] {
+  const [latest] = [...items].sort((left, right) => (
+    String(right.created_at ?? '').localeCompare(String(left.created_at ?? ''))
+  ))
+  return latest ? [latest] : []
 }
 
 function getReferenceValue(item: ReferenceItem | Record<string, unknown> | string | number | null | undefined) {
@@ -641,7 +879,7 @@ function getClientActions(client: Client): ActionMenuItem[] {
       action: () => selectClient(client),
     },
     {
-      label: isArchived ? 'Восстановить' : 'Переместить в архив',
+      label: isArchived ? 'Восстановить' : 'Переместить в Выполненные',
       icon: isArchived ? RotateCcw : Archive,
       disabled: isSaving.value,
       action: () => changeClientArchiveState(client, !isArchived),
@@ -664,11 +902,33 @@ function getClientStageLabel(client: Client) {
   return client.stage?.description ?? getOptionLabel(stageOptions.value, client.current_stage, stageFallbackLabels)
 }
 
+function getCountedLabels(values: string[]) {
+  const counts = new Map<string, number>()
+  for (const rawValue of values) {
+    const value = rawValue.trim()
+    if (!value) continue
+    counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([value, count]) => count > 1 ? `${value} (x${count})` : value)
+    .join('; ')
+}
+
 function getClientTsrLabel(client: Client) {
-  const values = (client.modules ?? [])
-    .map((moduleItem) => moduleItem.tsr?.full_tsr_code)
-    .filter((value): value is string => Boolean(value))
-  return values.length ? [...new Set(values)].join('; ') : '-'
+  const values = (client.tsr_items ?? [])
+    .map((item) => String(item.tsr?.full_tsr_code || ''))
+    .filter(Boolean)
+  return getCountedLabels(values) || '-'
+}
+
+function getClientProsthetistLabel(client: Client) {
+  const values = (client.tsr_items ?? [])
+    .map((item) => String(item.prosthetist || ''))
+    .filter(Boolean)
+  if ((client.tsr_items ?? []).length) {
+    return getCountedLabels(values) || '—'
+  }
+  return String(client.prosthetist || '—')
 }
 
 function getClientPrimaryPhone(client: Client) {
@@ -676,11 +936,29 @@ function getClientPrimaryPhone(client: Client) {
 }
 
 function getClientDate(client: Client) {
-  return formatShortDate(String(client.check_date ?? client.created_at ?? ''))
+  const tsrDates = (client.tsr_items ?? [])
+    .map((item) => String(item.check_date || '').slice(0, 10))
+    .filter(Boolean)
+    .sort()
+  return formatShortDate(tsrDates[tsrDates.length - 1] || String(client.check_date ?? client.created_at ?? ''))
 }
 
 function getClientDeadline(client: Client) {
+  const values = (client.tsr_items ?? [])
+    .map((item) => String(item.repeat_visit_date || '').slice(0, 10))
+    .filter(Boolean)
+    .map(formatShortDate)
+  if ((client.tsr_items ?? []).length) {
+    return getCountedLabels(values) || '—'
+  }
   return formatShortDate(String(client.deadline ?? ''))
+}
+
+function getProsthetistAddress(prosthetist: string, fallback = '') {
+  if (prosthetist === 'Дмитрий' || prosthetist === 'Никита') {
+    return PROSTHETIST_ADDRESSES[prosthetist]
+  }
+  return fallback || 'Адрес появится после выбора протезиста'
 }
 
 function getAgentName(agent: Agent) {
@@ -727,6 +1005,57 @@ function getGroupTotalPrice(group: ClientTsrGroup) {
   return group.components.reduce((sum, component) => sum + parseMoney(component.price), 0)
 }
 
+function getGroupCertificatePrice(group: ClientTsrGroup) {
+  // The contract is generated from persisted server data. Do not display an
+  // unsaved draft here, otherwise the previewed price could differ from DOCX.
+  return parseMoney(group.certificatePrice)
+}
+
+function getClientTsrDraft(group: ClientTsrGroup): ClientTsrDraft {
+  if (!group.clientTsrId) {
+    return {
+      checkDate: group.checkDate,
+      certificatePrice: group.certificatePrice,
+      prosthetist: group.prosthetist,
+      repeatVisitDate: group.repeatVisitDate,
+    }
+  }
+  return clientTsrDrafts[group.clientTsrId] ?? {
+    checkDate: group.checkDate,
+    certificatePrice: group.certificatePrice,
+    prosthetist: group.prosthetist,
+    repeatVisitDate: group.repeatVisitDate,
+  }
+}
+
+function setClientTsrDraft(
+  group: ClientTsrGroup,
+  field: keyof ClientTsrDraft,
+  value: string | null | undefined,
+) {
+  if (!group.clientTsrId) return
+  const current = getClientTsrDraft(group)
+  const normalizedValue = String(value ?? '')
+  const prosthetist = normalizedValue === 'Дмитрий' || normalizedValue === 'Никита'
+    ? normalizedValue
+    : ''
+
+  clientTsrDrafts[group.clientTsrId] = {
+    checkDate: field === 'checkDate' ? normalizedValue : current.checkDate,
+    certificatePrice: field === 'certificatePrice' ? normalizedValue : current.certificatePrice,
+    prosthetist: field === 'prosthetist' ? prosthetist : current.prosthetist,
+    repeatVisitDate: field === 'repeatVisitDate' ? normalizedValue : current.repeatVisitDate,
+  }
+}
+
+function setClientTsrDraftFromEvent(
+  group: ClientTsrGroup,
+  field: keyof ClientTsrDraft,
+  event: Event,
+) {
+  setClientTsrDraft(group, field, (event.target as HTMLInputElement).value)
+}
+
 function getContractGroupIds(group: ClientTsrGroup) {
   return group.components
     .map((component) => String(component.module_id ?? ''))
@@ -734,20 +1063,27 @@ function getContractGroupIds(group: ClientTsrGroup) {
 }
 
 function isContractGroupSelected(group: ClientTsrGroup) {
-  const ids = getContractGroupIds(group)
-  return ids.length > 0 && ids.every((id) => selectedContractModuleIds.value.includes(id))
+  return Boolean(group.clientTsrId) && selectedContractClientTsrIds.value.includes(group.clientTsrId)
 }
 
 function isContractGroupPartiallySelected(group: ClientTsrGroup) {
+  if (!isContractGroupSelected(group)) return false
   const ids = getContractGroupIds(group)
+  if (ids.length === 0) return false
   const selectedCount = ids.filter((id) => selectedContractModuleIds.value.includes(id)).length
-  return selectedCount > 0 && selectedCount < ids.length
+  return selectedCount < ids.length
 }
 
 function toggleContractGroup(group: ClientTsrGroup, event: Event) {
   const checked = (event.target as HTMLInputElement).checked
   const groupIds = getContractGroupIds(group)
+  const selectedTsr = new Set(selectedContractClientTsrIds.value)
   const selected = new Set(selectedContractModuleIds.value)
+
+  if (group.clientTsrId) {
+    if (checked) selectedTsr.add(group.clientTsrId)
+    else selectedTsr.delete(group.clientTsrId)
+  }
 
   for (const id of groupIds) {
     if (checked) {
@@ -757,6 +1093,23 @@ function toggleContractGroup(group: ClientTsrGroup, event: Event) {
     }
   }
 
+  selectedContractClientTsrIds.value = [...selectedTsr]
+  selectedContractModuleIds.value = [...selected]
+}
+
+function toggleContractComponent(group: ClientTsrGroup, componentId: string, event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  const selectedTsr = new Set(selectedContractClientTsrIds.value)
+  const selected = new Set(selectedContractModuleIds.value)
+
+  if (checked) {
+    selected.add(componentId)
+    if (group.clientTsrId) selectedTsr.add(group.clientTsrId)
+  } else {
+    selected.delete(componentId)
+  }
+
+  selectedContractClientTsrIds.value = [...selectedTsr]
   selectedContractModuleIds.value = [...selected]
 }
 
@@ -858,14 +1211,6 @@ function getDocumentIcon(document: ClientDocument) {
   return File
 }
 
-function getDateModel(value?: string | null) {
-  return value ? String(value).slice(0, 10) : ''
-}
-
-function buildDeadline(value: string) {
-  return value ? `${value}T00:00:00Z` : null
-}
-
 function parseMoneyInput(value: string) {
   if (!value.trim()) {
     return null
@@ -873,10 +1218,6 @@ function parseMoneyInput(value: string) {
 
   const parsed = parseMoney(value)
   return Number.isFinite(parsed) ? parsed : null
-}
-
-function formatClientMoneyField(field: 'certificate_price') {
-  form[field] = formatMoneyInput(form[field])
 }
 
 function formatModuleMoneyField(field: 'unit_cost' | 'unit_price') {
@@ -893,9 +1234,95 @@ function parseNonNegativeInteger(value: CountInput | null | undefined) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
 }
 
-function resetModuleForm() {
+function resetModuleForm(preserveTarget = true) {
+  const target = preserveTarget ? selectedComponentTsrGroup.value : null
   Object.assign(moduleForm, emptyModuleForm)
+  if (target) {
+    moduleForm.tsr_id = target.tsrId
+    moduleForm.client_tsr_id = target.clientTsrId
+  }
+  selectedModuleId.value = ''
   editingModuleId.value = null
+  rememberDetailTabState('modules')
+}
+
+function prepareNewComponentForTsr(group: ClientTsrGroup) {
+  Object.assign(moduleForm, emptyModuleForm)
+  moduleForm.tsr_id = group.tsrId
+  moduleForm.client_tsr_id = group.clientTsrId
+  editingModuleId.value = null
+  selectedModuleId.value = ''
+  componentEntryMode.value = 'new'
+  componentFormExpanded.value = true
+  resetMessages()
+  rememberDetailTabState('modules')
+}
+
+function getComponentTsrOptionLabel(group: ClientTsrGroup) {
+  const details = [
+    group.checkDate ? `дата ${formatShortDate(group.checkDate)}` : '',
+    getGroupCertificatePrice(group) > 0 ? `сертификат ${formatMoney(getGroupCertificatePrice(group))}` : '',
+  ].filter(Boolean)
+
+  return details.length ? `${group.tsr} · ${details.join(' · ')}` : group.tsr
+}
+
+function handleComponentTargetChange() {
+  const target = selectedComponentTsrGroup.value
+  moduleForm.tsr_id = target?.tsrId ?? ''
+
+  const warehouseModule = selectedWarehouseModule.value
+  const warehouseTsrId = String(warehouseModule?.tsr_id ?? warehouseModule?.tsr?.id ?? '')
+  if (warehouseModule && target && warehouseTsrId !== target.tsrId) {
+    selectedModuleId.value = ''
+  }
+
+  resetMessages()
+}
+
+function setComponentEntryMode(mode: ComponentEntryMode) {
+  if (componentEntryMode.value === mode && !editingModuleId.value) {
+    componentFormExpanded.value = true
+    return
+  }
+
+  const target = selectedComponentTsrGroup.value
+  Object.assign(moduleForm, emptyModuleForm)
+  if (target) {
+    moduleForm.tsr_id = target.tsrId
+    moduleForm.client_tsr_id = target.clientTsrId
+  }
+  selectedModuleId.value = ''
+  editingModuleId.value = null
+  componentEntryMode.value = mode
+  componentFormExpanded.value = true
+  resetMessages()
+  rememberDetailTabState('modules')
+}
+
+function handleWarehouseModuleChange() {
+  const warehouseModule = selectedWarehouseModule.value
+  if (!warehouseModule) return
+
+  const warehouseTsrId = String(warehouseModule.tsr_id ?? warehouseModule.tsr?.id ?? '')
+  const matchingTargets = clientTsrGroups.value.filter(
+    (group) => group.clientTsrId && group.tsrId === warehouseTsrId,
+  )
+  const currentTarget = selectedComponentTsrGroup.value
+
+  if (matchingTargets.length === 1 && currentTarget?.tsrId !== warehouseTsrId) {
+    moduleForm.client_tsr_id = matchingTargets[0].clientTsrId
+    moduleForm.tsr_id = matchingTargets[0].tsrId
+  }
+}
+
+async function submitComponentForm() {
+  if (componentEntryMode.value === 'warehouse' && !editingModuleId.value) {
+    await assignModule()
+    return
+  }
+
+  await saveClientModule()
 }
 
 function fillModuleForm(moduleItem: ModuleItem) {
@@ -904,7 +1331,13 @@ function fillModuleForm(moduleItem: ModuleItem) {
   const price = Number(moduleItem.price ?? 0)
 
   editingModuleId.value = moduleItem.module_id ? String(moduleItem.module_id) : null
-  moduleForm.tsr_id = String(moduleItem.tsr_id ?? moduleItem.tsr?.id ?? '')
+  componentEntryMode.value = 'new'
+  componentFormExpanded.value = true
+  const group = clientTsrGroups.value.find((item) => item.components.some(
+    (component) => String(component.module_id) === String(moduleItem.module_id),
+  ))
+  moduleForm.tsr_id = String(moduleItem.tsr_id ?? moduleItem.tsr?.id ?? group?.tsrId ?? '')
+  moduleForm.client_tsr_id = String(moduleItem.client_tsr_id ?? group?.clientTsrId ?? '')
   moduleForm.module_name_index = moduleItem.module_name_index ?? ''
   moduleForm.supplier = moduleItem.supplier ?? ''
   moduleForm.quantity = String(quantity)
@@ -921,6 +1354,7 @@ function fillModuleForm(moduleItem: ModuleItem) {
   moduleForm.properties = moduleItem.properties ?? '-'
   moduleForm.notes = moduleItem.notes ?? ''
   resetMessages()
+  rememberDetailTabState('modules')
 }
 
 function buildModulePayload(clientId: string): ModuleCreatePayload {
@@ -931,6 +1365,9 @@ function buildModulePayload(clientId: string): ModuleCreatePayload {
   return {
     client_id: clientId,
     tsr_id: moduleForm.tsr_id,
+    client_tsr_id: moduleForm.client_tsr_id && moduleForm.client_tsr_id !== '__new__'
+      ? moduleForm.client_tsr_id
+      : null,
     module_name_index: moduleForm.module_name_index.trim(),
     supplier: moduleForm.supplier.trim(),
     quantity,
@@ -950,8 +1387,8 @@ function buildModulePayload(clientId: string): ModuleCreatePayload {
 }
 
 function validateModuleForm() {
-  if (!moduleForm.tsr_id) {
-    error.value = 'Для комплектующей нужно выбрать ТСР.'
+  if (!moduleForm.tsr_id || !moduleForm.client_tsr_id) {
+    error.value = 'Сначала выберите ТСР пациента, для которого добавляется комплектующая.'
     return false
   }
   if (!moduleForm.module_name_index.trim()) {
@@ -966,7 +1403,6 @@ function validateModuleForm() {
 
   return true
 }
-
 function resetMessages() {
   successMessage.value = ''
   error.value = ''
@@ -989,11 +1425,18 @@ function resetDetailState() {
   clientModules.value = []
   warehouseModules.value = []
   auditItems.value = []
-  Object.keys(groupTsrDrafts).forEach((key) => delete groupTsrDrafts[key])
+  selectedContractClientTsrIds.value = []
+  selectedContractModuleIds.value = []
+  Object.keys(clientTsrDrafts).forEach((key) => delete clientTsrDrafts[key])
 }
 
 function rememberClientFormState() {
   lastSavedClientState.value = JSON.stringify(form)
+}
+
+function rememberAllDetailTabStates() {
+  const tabs: DetailTab[] = ['identity', 'phones', 'modules', 'documents', 'history']
+  tabs.forEach(rememberDetailTabState)
 }
 
 function resetForm() {
@@ -1006,7 +1449,6 @@ function resetForm() {
     issued_by: '',
     issue_date: '',
     department_code: '',
-    expiry_date: '',
     registration_address: '',
   })
   Object.assign(snilsForm, {
@@ -1018,14 +1460,20 @@ function resetForm() {
   activeTab.value = 'main'
   resetDetailState()
   selectedModuleId.value = ''
-  resetModuleForm()
+  emailDraft.value = ''
+  resetModuleForm(false)
   editingPhoneId.value = null
   editingPassportId.value = null
   editingSnilsId.value = null
+  passportFormExpanded.value = false
+  snilsFormExpanded.value = false
+  componentFormExpanded.value = false
+  componentEntryMode.value = 'new'
   isReferenceManagerOpen.value = false
   resetReferenceManagerForm()
   resetMessages()
   rememberClientFormState()
+  rememberAllDetailTabStates()
 }
 
 function setBodyModalLock(locked: boolean) {
@@ -1057,7 +1505,7 @@ async function closeClientCard() {
   if (hasUnsavedClientChanges.value) {
     const shouldClose = await confirmAction({
       header: 'Есть несохранённые изменения',
-      message: 'Закрыть карточку без сохранения внесённых изменений?',
+      message: `Закрыть карточку без сохранения изменений в разделах: ${dirtyClientTabs.value.map((tab) => CLIENT_TAB_LABELS[tab]).join(', ')}?`,
       acceptLabel: 'Закрыть без сохранения',
     })
 
@@ -1077,18 +1525,37 @@ async function handleClientModalEscape() {
   await closeClientCard()
 }
 
-function openClientTab(tab: ClientTab) {
+async function openClientTab(tab: ClientTab) {
+  if (tab === activeTab.value) {
+    return true
+  }
+
   if (tab !== 'main' && !isClientPersisted.value) {
-    error.value = 'Сначала сохрани основную карточку клиента.'
+    error.value = 'Сначала сохрани основную карточку пациента.'
     activeTab.value = 'main'
-    return
+    return false
+  }
+
+  const currentTab = activeTab.value
+  if (hasUnsavedChangesForTab(currentTab)) {
+    const shouldSwitch = await confirmAction({
+      header: 'Есть несохранённые изменения',
+      message: `Перейти из раздела «${CLIENT_TAB_LABELS[currentTab]}» без сохранения изменений?`,
+      acceptLabel: 'Перейти без сохранения',
+    })
+
+    if (!shouldSwitch) {
+      return false
+    }
   }
 
   activeTab.value = tab
 
   if (tab !== 'main') {
-    void loadClientTabData(tab)
+    await loadClientTabData(tab)
   }
+
+  return true
 }
 
 function isTabLoading(tab: DetailTab) {
@@ -1106,15 +1573,11 @@ function fillForm(client: Client) {
   form.status = getReferenceValue(client.status_code)
   form.current_stage = getReferenceValue(client.current_stage)
   form.agent_id = String(client.agent_id ?? '')
-  form.deadline = getDateModel(client.deadline)
-  form.check_date = getDateModel(client.check_date)
-  const prosthesisType = String(client.prosthesis_type ?? '')
-  form.prosthesis_type = prosthesisOptionValues.has(prosthesisType) ? prosthesisType : ''
-  form.certificate_price = client.certificate_price == null ? '' : formatMoneyInput(client.certificate_price)
+  const diagnosis = String(client.prosthesis_type ?? '')
+  form.prosthesis_type = DIAGNOSIS_OPTIONS.some((option) => option.value === diagnosis) ? diagnosis : ''
   form.taxation_system = client.taxation_system === 'ОСНО' ? 'ОСНО' : 'УСН'
-  form.place_of_residence = String(client.place_of_residence ?? '')
-  form.prosthetist = String(client.prosthetist ?? '')
   form.notes = String(client.notes ?? '')
+  emailDraft.value = String(client.email ?? '')
   snilsForm.ipra_number = String(client.ipra_code ?? '')
 
   passportForm.series = seriesNumberParts[0] ?? ''
@@ -1124,7 +1587,6 @@ function fillForm(client: Client) {
   passportForm.issued_by = String(firstPassport?.issued_by ?? '')
   passportForm.issue_date = String(firstPassport?.issue_date ?? '').slice(0, 10)
   passportForm.department_code = String(firstPassport?.department_code ?? '')
-  passportForm.expiry_date = String(firstPassport?.expiry_date ?? '').slice(0, 10)
   passportForm.registration_address = String(firstPassport?.registration_address ?? '')
   rememberClientFormState()
 }
@@ -1137,13 +1599,8 @@ function buildCreatePayload(): ClientCreatePayload {
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
     agent_id: form.agent_id,
-    deadline: buildDeadline(form.deadline),
-    check_date: form.check_date || null,
     prosthesis_type: optionalString(form.prosthesis_type),
-    certificate_price: optionalString(form.certificate_price),
     taxation_system: form.taxation_system,
-    place_of_residence: optionalString(form.place_of_residence),
-    prosthetist: optionalString(form.prosthetist),
     notes: optionalString(form.notes),
     phones: [],
   }
@@ -1157,13 +1614,8 @@ function buildUpdatePayload(): ClientUpdatePayload {
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
     agent_id: form.agent_id,
-    deadline: buildDeadline(form.deadline),
-    check_date: form.check_date || null,
     prosthesis_type: optionalString(form.prosthesis_type),
-    certificate_price: optionalString(form.certificate_price),
     taxation_system: form.taxation_system,
-    place_of_residence: optionalString(form.place_of_residence),
-    prosthetist: optionalString(form.prosthetist),
     notes: optionalString(form.notes),
   }
 }
@@ -1194,22 +1646,22 @@ async function ensureClientExists() {
 
 function validateClientForm() {
   if (!form.last_name.trim() || !form.first_name.trim()) {
-    error.value = 'Заполни минимум фамилию и имя клиента.'
+    error.value = 'Заполни минимум фамилию и имя пациента.'
     return false
   }
 
   if (!form.status.trim()) {
-    error.value = 'Выбери статус клиента.'
+    error.value = 'Выбери статус пациента.'
     return false
   }
 
   if (!form.current_stage.trim()) {
-    error.value = 'Выбери этап клиента.'
+    error.value = 'Выбери этап пациента.'
     return false
   }
 
   if (!form.agent_id) {
-    error.value = 'Выбери агента. По backend-схеме agent_id обязателен для клиента.'
+    error.value = 'Выбери агента. По backend-схеме agent_id обязателен для пациента.'
     return false
   }
 
@@ -1326,22 +1778,27 @@ async function loadClientTabData(tab: DetailTab, force = false) {
       clientModules.value = clientModuleResponse
       warehouseModules.value = warehouseModuleResponse
     } else if (tab === 'documents') {
-      const [documentResponse, moduleResponse] = await Promise.all([
+      const [documentResponse, moduleResponse, nextNumber] = await Promise.all([
         fetchClientDocuments(clientId),
         fetchModules({
           limit: 1000,
           client_id: clientId,
           archived: Boolean(selectedClient.value?.is_archived),
         }),
+        fetchNextContractNumber(),
       ])
       documents.value = documentResponse
+      contractNumberSuffix.value = nextNumber
       clientModules.value = moduleResponse
       const available = new Set(moduleResponse.map((item) => String(item.module_id)))
+      const availableTsr = new Set((selectedClient.value?.tsr_items ?? []).map((item) => String(item.client_tsr_id)))
+      selectedContractClientTsrIds.value = selectedContractClientTsrIds.value.filter((id) => availableTsr.has(id))
       selectedContractModuleIds.value = selectedContractModuleIds.value.filter((id) => available.has(id))
     } else if (tab === 'history') {
       auditItems.value = await fetchEntityAudit('client', clientId)
     }
 
+    rememberDetailTabState(tab)
     loadedDetailTabs[tab] = true
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -1361,6 +1818,7 @@ async function reloadActiveDetailTab() {
 async function refreshSelectedClient(clientId: string, syncForm = true) {
   const freshClient = await fetchClient(clientId)
   selectedClient.value = freshClient
+  emailDraft.value = String(freshClient.email ?? '')
 
   if (syncForm) {
     fillForm(freshClient)
@@ -1368,14 +1826,29 @@ async function refreshSelectedClient(clientId: string, syncForm = true) {
 }
 
 async function selectClient(client: Client) {
-  resetMessages()
-  resetDetailState()
-  activeTab.value = 'main'
+  const nextClientId = getClientId(client)
+  const currentClientId = selectedClient.value ? getClientId(selectedClient.value) : ''
+
+  if (isClientCardOpen.value && currentClientId !== nextClientId && hasUnsavedClientChanges.value) {
+    const shouldSwitch = await confirmAction({
+      header: 'Есть несохранённые изменения',
+      message: 'Открыть другую карточку без сохранения изменений в текущей?',
+      acceptLabel: 'Открыть другую карточку',
+    })
+
+    if (!shouldSwitch) {
+      return
+    }
+  }
+
+  resetForm()
   selectedClient.value = client
   isClientCardOpen.value = true
   fillForm(client)
+  rememberDetailTabState('identity')
+  rememberDetailTabState('phones')
 
-  const clientId = getClientId(client)
+  const clientId = nextClientId
 
   if (!clientId) {
     return
@@ -1406,8 +1879,18 @@ async function openClientFromRoute(rawClientId: unknown) {
 
     await selectClient(client)
   } catch (caughtError) {
-    error.value = `Не удалось открыть карточку клиента: ${getApiErrorMessage(caughtError)}`
+    error.value = `Не удалось открыть карточку пациента: ${getApiErrorMessage(caughtError)}`
   }
+}
+
+async function finishAutomaticArchive(client: Client) {
+  const clientName = getClientName(client)
+  activeClientListMode.value = 'archive'
+  currentPage.value = 1
+  isClientCardOpen.value = false
+  resetForm()
+  successMessage.value = `Пациент «${clientName}» и все его комплектующие автоматически перемещены в Выполненные: статус «Успешно завершен», этап «Выполнено».`
+  await loadClients()
 }
 
 async function saveClient() {
@@ -1422,20 +1905,33 @@ async function saveClient() {
   try {
     if (isEditing.value && selectedClient.value) {
       const clientId = getClientId(selectedClient.value)
+      const wasArchived = Boolean(selectedClient.value.is_archived)
       const updatedClient = await updateClient(clientId, buildUpdatePayload())
+
+      if (!wasArchived && updatedClient.is_archived) {
+        await finishAutomaticArchive(updatedClient)
+        return
+      }
+
       selectedClient.value = updatedClient
       fillForm(updatedClient)
       await refreshSelectedClient(clientId)
       await reloadActiveDetailTab()
-      successMessage.value = 'Клиент обновлен'
+      successMessage.value = 'Пациент обновлен'
     } else {
       const createdClient = await createClient(buildCreatePayload())
+
+      if (createdClient.is_archived) {
+        await finishAutomaticArchive(createdClient)
+        return
+      }
+
       const clientId = getClientId(createdClient)
       selectedClient.value = createdClient
       fillForm(createdClient)
       await refreshSelectedClient(clientId)
       await reloadActiveDetailTab()
-      successMessage.value = 'Клиент создан'
+      successMessage.value = 'Пациент создан'
     }
 
     await loadClients()
@@ -1454,7 +1950,7 @@ async function removeClient(client: Client) {
   }
 
   if (!(await confirmAction({
-    message: `Удалить клиента «${getClientName(client)}»? Это действие нельзя отменить.`,
+    message: `Удалить пациента «${getClientName(client)}»? Это действие нельзя отменить.`,
     danger: true,
   }))) {
     return
@@ -1465,7 +1961,7 @@ async function removeClient(client: Client) {
 
   try {
     await deleteClient(clientId)
-    successMessage.value = 'Клиент удален'
+    successMessage.value = 'Пациент удален'
 
     if (selectedClient.value && getClientId(selectedClient.value) === clientId) {
       resetForm()
@@ -1481,9 +1977,9 @@ async function removeClient(client: Client) {
 
 async function changeClientArchiveState(client: Client, archive: boolean) {
   const clientId = getClientId(client)
-  const action = archive ? 'переместить в архив' : 'восстановить'
+  const action = archive ? 'переместить в Выполненные' : 'восстановить'
   const componentNote = archive
-    ? ' Все привязанные комплектующие также будут перемещены в архив.'
+    ? ' Все привязанные комплектующие также будут перемещены в Выполненные.'
     : ' Все привязанные комплектующие также будут восстановлены.'
 
   if (!clientId) {
@@ -1491,9 +1987,9 @@ async function changeClientArchiveState(client: Client, archive: boolean) {
   }
 
   if (!(await confirmAction({
-    header: archive ? 'Перемещение в архив' : 'Восстановление клиента',
-    message: `${action[0].toUpperCase()}${action.slice(1)} клиента «${getClientName(client)}»?${componentNote}`,
-    acceptLabel: archive ? 'В архив' : 'Восстановить',
+    header: archive ? 'Перемещение в Выполненные' : 'Восстановление пациента',
+    message: `${action[0].toUpperCase()}${action.slice(1)} пациента «${getClientName(client)}»?${componentNote}`,
+    acceptLabel: archive ? 'В Выполненные' : 'Восстановить',
   }))) {
     return
   }
@@ -1514,8 +2010,8 @@ async function changeClientArchiveState(client: Client, archive: boolean) {
     }
 
     successMessage.value = archive
-      ? 'Клиент и его комплектующие перемещены в архив'
-      : 'Клиент и его комплектующие восстановлены'
+      ? 'Пациент и его комплектующие перемещены в Выполненные'
+      : 'Пациент и его комплектующие восстановлены'
     await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -1533,12 +2029,14 @@ function startEditPhone(phone: ClientPhone) {
   newPhone.phone = getPhoneValue(phone)
   newPhone.comment = ''
   resetMessages()
+  rememberPhoneDraftState()
 }
 
 function cancelPhoneEdit() {
   editingPhoneId.value = null
   newPhone.phone = ''
   newPhone.comment = ''
+  rememberPhoneDraftState()
 }
 
 async function addPhone() {
@@ -1605,6 +2103,40 @@ async function removePhone(phone: ClientPhone) {
   }
 }
 
+async function saveEmail() {
+  const value = emailDraft.value.trim()
+  if (value.length > 64) {
+    error.value = 'Адрес электронной почты не должен превышать 64 символа.'
+    return
+  }
+  if (value && !/^\S+@\S+\.\S+$/.test(value)) {
+    error.value = 'Укажите корректный адрес электронной почты.'
+    return
+  }
+  isSaving.value = true
+  resetMessages()
+  try {
+    const clientId = await ensureClientExists()
+    if (!clientId) return
+    await updateClient(clientId, { email: value || null })
+    await refreshSelectedClient(clientId, false)
+    await loadClients()
+    rememberEmailDraftState()
+    successMessage.value = value ? 'Электронная почта сохранена' : 'Электронная почта удалена'
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+async function removeEmail() {
+  if (!selectedClient.value?.email) return
+  if (!(await confirmAction({ message: `Удалить электронную почту «${selectedClient.value.email}»?`, danger: true }))) return
+  emailDraft.value = ''
+  await saveEmail()
+}
+
 
 function startEditPassport(passport: ClientPassport) {
   if (!passport.passport_id) {
@@ -1620,9 +2152,10 @@ function startEditPassport(passport: ClientPassport) {
   passportForm.issued_by = passport.issued_by ?? ''
   passportForm.issue_date = String(passport.issue_date ?? '').slice(0, 10)
   passportForm.department_code = passport.department_code ?? ''
-  passportForm.expiry_date = String(passport.expiry_date ?? '').slice(0, 10)
   passportForm.registration_address = passport.registration_address ?? ''
+  passportFormExpanded.value = true
   resetMessages()
+  rememberPassportDraftState()
 }
 
 function cancelPassportEdit() {
@@ -1635,9 +2168,9 @@ function cancelPassportEdit() {
     issued_by: '',
     issue_date: '',
     department_code: '',
-    expiry_date: '',
     registration_address: '',
   })
+  rememberPassportDraftState()
 }
 
 async function savePassport() {
@@ -1648,6 +2181,10 @@ async function savePassport() {
     const clientId = await ensureClientExists()
 
     if (!clientId) {
+      return
+    }
+    if (!editingPassportId.value && passportItems.value.length > 0) {
+      error.value = 'У пациента уже есть паспорт. Измените существующий документ.'
       return
     }
 
@@ -1675,7 +2212,6 @@ async function savePassport() {
       issued_by: issuedBy,
       issue_date: issueDate,
       department_code: departmentCode || null,
-      expiry_date: passportForm.expiry_date || null,
       registration_address: registrationAddress,
     }
 
@@ -1735,7 +2271,9 @@ function startEditSnils(snils: ClientSnils) {
   snilsForm.number = snils.number ?? ''
   snilsForm.ipra_number = selectedClient.value?.ipra_code ?? ''
   snilsForm.ipra_date = String(snils.issued_date ?? '').slice(0, 10)
+  snilsFormExpanded.value = true
   resetMessages()
+  rememberSnilsDraftState()
 }
 
 function cancelSnilsEdit() {
@@ -1745,6 +2283,7 @@ function cancelSnilsEdit() {
     ipra_number: '',
     ipra_date: '',
   })
+  rememberSnilsDraftState()
 }
 
 async function saveSnils() {
@@ -1755,6 +2294,10 @@ async function saveSnils() {
     const clientId = await ensureClientExists()
 
     if (!clientId) {
+      return
+    }
+    if (!editingSnilsId.value && snilsItems.value.length > 0) {
+      error.value = 'У пациента уже есть СНИЛС / ИПРА. Измените существующий документ.'
       return
     }
 
@@ -1810,7 +2353,7 @@ async function removeSnils(snils: ClientSnils) {
   try {
     const clientId = getClientId(selectedClient.value)
     await deleteClientSnils(snils.snils_id)
-    successMessage.value = 'СНИЛС удален'
+    successMessage.value = 'СНИЛС / ИПРА удалены'
     cancelSnilsEdit()
     await refreshSelectedClient(clientId, false)
     await loadClientTabData('identity', true)
@@ -1821,34 +2364,48 @@ async function removeSnils(snils: ClientSnils) {
   }
 }
 
-function getGroupTsrDraft(group: ClientTsrGroup) {
-  return groupTsrDrafts[group.key] ?? group.tsrId
-}
-
-function setGroupTsrDraft(group: ClientTsrGroup, event: Event) {
-  groupTsrDrafts[group.key] = (event.target as HTMLSelectElement).value
-}
-
-async function assignTsrToComponents(componentIds: string[], tsrId: string, message: string) {
+async function attachManagedReference(item: ReferenceItem) {
   const clientId = selectedClient.value ? getClientId(selectedClient.value) : ''
-
-  if (!clientId || !tsrId || componentIds.length === 0) {
-    error.value = 'Выбери ТСР и хотя бы одну комплектующую.'
+  const tsrId = String(getReferenceId(item) || '')
+  if (!clientId) {
+    referenceError.value = 'Сначала сохрани карточку пациента.'
     return
   }
+  if (!tsrId) return
 
+  isReferenceSaving.value = true
+  resetReferenceManagerMessages()
+  try {
+    await attachClientTsr(clientId, { tsr_id: tsrId })
+    referenceSuccess.value = attachedTsrCounts.value.has(tsrId)
+      ? 'Такой ТСР добавлен пациенту ещё раз.'
+      : 'ТСР прикреплён к пациенту.'
+    await refreshSelectedClient(clientId, false)
+    if (loadedDetailTabs.modules) await loadClientTabData('modules', true)
+    await loadClients()
+  } catch (caughtError) {
+    referenceError.value = getApiErrorMessage(caughtError)
+  } finally {
+    isReferenceSaving.value = false
+  }
+}
+
+async function saveClientTsrDetails(group: ClientTsrGroup) {
+  const clientId = selectedClient.value ? getClientId(selectedClient.value) : ''
+  if (!clientId || !group.clientTsrId) return
+  const draft = getClientTsrDraft(group)
   isSaving.value = true
   resetMessages()
-
   try {
-    await assignClientComponentsTsr(clientId, {
-      component_ids: componentIds,
-      tsr_id: tsrId,
+    await updateClientTsr(clientId, group.clientTsrId, {
+      check_date: draft.checkDate || null,
+      certificate_price: draft.certificatePrice.trim() || null,
+      prosthetist: draft.prosthetist || null,
+      repeat_visit_date: draft.repeatVisitDate || null,
     })
-    Object.keys(groupTsrDrafts).forEach((key) => delete groupTsrDrafts[key])
-    successMessage.value = message
+    delete clientTsrDrafts[group.clientTsrId]
+    successMessage.value = 'Данные ТСР сохранены.'
     await refreshSelectedClient(clientId, false)
-    await loadClientTabData('modules', true)
     await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -1857,15 +2414,31 @@ async function assignTsrToComponents(componentIds: string[], tsrId: string, mess
   }
 }
 
-async function assignTsrToGroup(group: ClientTsrGroup) {
-  const componentIds = group.components
-    .map((component) => String(component.module_id ?? ''))
-    .filter(Boolean)
-  await assignTsrToComponents(
-    componentIds,
-    getGroupTsrDraft(group),
-    'ТСР назначен всей группе комплектующих',
-  )
+async function removeClientTsrLink(group: ClientTsrGroup) {
+  const clientId = selectedClient.value ? getClientId(selectedClient.value) : ''
+  if (!clientId || !group.clientTsrId) return
+  if (!(await confirmAction({
+    header: 'Открепить ТСР',
+    message: `Открепить «${group.tsr}» от пациента? ТСР с закреплёнными комплектующими удалить нельзя.`,
+    acceptLabel: 'Открепить',
+    danger: true,
+  }))) return
+
+  isSaving.value = true
+  resetMessages()
+  try {
+    await detachClientTsr(clientId, group.clientTsrId)
+    delete clientTsrDrafts[group.clientTsrId]
+    selectedContractClientTsrIds.value = selectedContractClientTsrIds.value.filter((id) => id !== group.clientTsrId)
+    successMessage.value = 'ТСР откреплён от пациента.'
+    await refreshSelectedClient(clientId, false)
+    if (loadedDetailTabs.modules) await loadClientTabData('modules', true)
+    await loadClients()
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    isSaving.value = false
+  }
 }
 
 async function assignModule() {
@@ -1883,9 +2456,25 @@ async function assignModule() {
       return
     }
 
-    await updateModule(selectedModuleId.value, { client_id: clientId })
+    const warehouseModule = selectedWarehouseModule.value
+    const targetGroup = selectedComponentTsrGroup.value
+    const tsrId = String(warehouseModule?.tsr_id ?? warehouseModule?.tsr?.id ?? '')
+    if (!targetGroup) {
+      throw new Error('Сначала выберите ТСР пациента.')
+    }
+    if (!warehouseModule || !tsrId) {
+      throw new Error('У складской комплектующей не выбран ТСР.')
+    }
+    if (tsrId !== targetGroup.tsrId) {
+      throw new Error('Выбранная складская комплектующая относится к другому ТСР.')
+    }
+    await updateModule(selectedModuleId.value, {
+      client_id: clientId,
+      tsr_id: targetGroup.tsrId,
+      client_tsr_id: targetGroup.clientTsrId,
+    })
     selectedModuleId.value = ''
-    successMessage.value = 'Комплектующая привязана к клиенту'
+    successMessage.value = 'Комплектующая привязана к пациенту'
     await loadClientTabData('modules', true)
     await loadClients()
   } catch (caughtError) {
@@ -1902,7 +2491,7 @@ async function unassignModule(moduleItem: ModuleItem) {
 
   if (!(await confirmAction({
     header: 'Вернуть на склад',
-    message: `Отвязать комплектующую «${getModuleName(moduleItem)}» от клиента и вернуть на склад?`,
+    message: `Отвязать комплектующую «${getModuleName(moduleItem)}» от пациента и вернуть на склад?`,
     acceptLabel: 'Вернуть на склад',
   }))) {
     return
@@ -1946,7 +2535,7 @@ async function saveClientModule() {
       successMessage.value = 'Комплектующая обновлена'
     } else {
       await createModule(payload)
-      successMessage.value = 'Комплектующая создана и привязана к клиенту'
+      successMessage.value = 'Комплектующая создана и привязана к пациенту'
     }
 
     resetModuleForm()
@@ -1958,6 +2547,28 @@ async function saveClientModule() {
   } finally {
     isSaving.value = false
   }
+}
+
+async function openComponentFromMain(moduleItem: ModuleItem) {
+  if (!(await openClientTab('modules'))) {
+    return
+  }
+  const current = clientModules.value.find((item) => String(item.module_id) === String(moduleItem.module_id)) ?? moduleItem
+  fillModuleForm(current)
+  requestAnimationFrame(() => {
+    document.getElementById('client-component-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
+async function openNewComponentFromTsr(group: ClientTsrGroup) {
+  if (!(await openClientTab('modules'))) {
+    return
+  }
+  const refreshedGroup = clientTsrGroups.value.find((item) => item.clientTsrId === group.clientTsrId) ?? group
+  prepareNewComponentForTsr(refreshedGroup)
+  requestAnimationFrame(() => {
+    document.getElementById('client-component-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
 }
 
 async function removeClientModule(moduleItem: ModuleItem) {
@@ -2049,7 +2660,7 @@ async function generateContract() {
   const suffix = contractNumberSuffix.value.trim()
 
   if (!contractType.value.trim() || !prefix || !suffix || !contractDate.value.trim()) {
-    error.value = 'Для формирования договора выбери тип, буквенную часть номера, числовую часть номера и дату.'
+    error.value = 'Для формирования договора выбери тип, буквенную часть номера и дату.'
     return
   }
 
@@ -2058,8 +2669,8 @@ async function generateContract() {
     return
   }
 
-  if (showExtendedContractDates.value && selectedContractModuleIds.value.length === 0) {
-    error.value = 'Для договора ООО выбери хотя бы одну комплектующую клиента.'
+  if (showExtendedContractDates.value && selectedContractClientTsrIds.value.length === 0) {
+    error.value = 'Для договора ООО выбери хотя бы один ТСР пациента.'
     return
   }
 
@@ -2074,7 +2685,7 @@ async function generateContract() {
 
     const payload: ContractGenerationPayload = {
       template_type: contractType.value.trim(),
-      document_number: `${prefix}${suffix}`,
+      document_number: `${prefix}/${suffix}`,
       document_number_prefix: prefix,
       document_number_suffix: suffix,
       document_date: formatContractDate(contractDate.value.trim()),
@@ -2085,6 +2696,12 @@ async function generateContract() {
       appendix_date: showExtendedContractDates.value && contractAppendixDate.value.trim()
         ? formatContractDate(contractAppendixDate.value.trim())
         : formatContractDate(contractDate.value.trim()),
+      selected_client_tsr_ids: showExtendedContractDates.value ? selectedContractClientTsrIds.value : [],
+      selected_tsr_ids: showExtendedContractDates.value
+        ? [...new Set(contractTsrGroups.value
+          .filter((group) => selectedContractClientTsrIds.value.includes(group.clientTsrId))
+          .map((group) => group.tsrId))]
+        : [],
       selected_module_ids: showExtendedContractDates.value ? selectedContractModuleIds.value : [],
     }
 
@@ -2171,13 +2788,36 @@ async function loadContractTemplates() {
   }
 }
 
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasUnsavedClientChanges.value) {
+    return
+  }
+
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onBeforeRouteLeave(async () => {
+  if (!hasUnsavedClientChanges.value) {
+    return true
+  }
+
+  return confirmAction({
+    header: 'Есть несохранённые изменения',
+    message: `Покинуть страницу без сохранения изменений в разделах: ${dirtyClientTabs.value.map((tab) => CLIENT_TAB_LABELS[tab]).join(', ')}?`,
+    acceptLabel: 'Покинуть без сохранения',
+  })
+})
+
 onMounted(async () => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
   await Promise.all([loadClients(), loadReferences(), loadContractTemplates()])
   await openClientFromRoute(route.query.client_id)
 })
 
 onBeforeUnmount(() => {
   window.clearTimeout(clientFilterTimer)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   setBodyModalLock(false)
 })
 </script>
@@ -2186,8 +2826,8 @@ onBeforeUnmount(() => {
   <section class="page-section entity-workspace-page clients-page">
     <div class="page-heading">
       <div>
-        <p class="eyebrow">Клиентская база</p>
-        <h1>Клиенты</h1>
+        <p class="eyebrow">база пациентов</p>
+        <h1>Пациенты</h1>
         <p class="muted page-subtitle">
           Контролируйте текущий этап, документы, сроки и комплектующие в одной карточке.
         </p>
@@ -2199,23 +2839,23 @@ onBeforeUnmount(() => {
         @click="openNewClient"
       >
         <Plus :size="16" aria-hidden="true" />
-        Создать клиента
+        Создать пациента
       </button>
     </div>
 
-    <div class="tabs" role="tablist" aria-label="Разделы клиентов">
+    <div class="tabs" role="tablist" aria-label="Разделы пациентов">
       <button :class="{ active: activeClientListMode === 'active' }" type="button" @click="switchClientListMode('active')">
-        Рабочие
+        В работе
       </button>
       <button :class="{ active: activeClientListMode === 'archive' }" type="button" @click="switchClientListMode('archive')">
-        Архив
+        Выполненные
       </button>
     </div>
 
     <form class="toolbar-form clients-toolbar" @submit.prevent="applyClientFilters">
       <div class="toolbar-search-wrap">
         <Search :size="17" aria-hidden="true" />
-        <input v-model="query" aria-label="Поиск клиента" placeholder="ФИО, телефон или данные клиента" />
+        <input v-model="query" aria-label="Поиск пациента" placeholder="ФИО, телефон или данные пациента" />
       </div>
       <label class="filter-label">
         <span>Статус</span>
@@ -2281,7 +2921,7 @@ onBeforeUnmount(() => {
         <thead>
           <tr>
             <th>№</th>
-            <th>Клиент</th>
+            <th>Пациент</th>
             <th class="client-col-prosthetist">Протезист</th>
             <th>ТСР</th>
             <th class="client-col-check-date">Дата пробития</th>
@@ -2295,7 +2935,7 @@ onBeforeUnmount(() => {
         </thead>
         <tbody>
           <tr v-if="isLoading" class="no-row-action">
-            <td colspan="11">Загружаем клиентов...</td>
+            <td colspan="11">Загружаем пациентов...</td>
           </tr>
           <tr
             v-for="(client, index) in clients"
@@ -2316,7 +2956,7 @@ onBeforeUnmount(() => {
                 </span>
               </div>
             </td>
-            <td class="client-col-prosthetist">{{ client.prosthetist || '—' }}</td>
+            <td class="client-col-prosthetist">{{ getClientProsthetistLabel(client) }}</td>
             <td class="table-tsr">{{ getClientTsrLabel(client) }}</td>
             <td class="client-col-check-date">{{ getClientDate(client) }}</td>
             <td class="table-money">{{ formatMoney(client.certificate_price) }}</td>
@@ -2360,15 +3000,15 @@ onBeforeUnmount(() => {
 
     <EmptyState
       v-if="!isLoading && clients.length === 0"
-      title="Клиенты не найдены"
-      :description="activeClientFilterCount ? 'Измените или сбросьте фильтры.' : 'Создайте первую карточку клиента.'"
+      title="Пациенты не найдены"
+      :description="activeClientFilterCount ? 'Измените или сбросьте фильтры.' : 'Создайте первую карточку пациента.'"
     >
       <button v-if="activeClientFilterCount" class="secondary-button" type="button" @click="resetClientFilters">
         Сбросить фильтры
       </button>
     </EmptyState>
 
-    <div class="pagination-bar" aria-label="Пагинация клиентов">
+    <div class="pagination-bar" aria-label="Пагинация пациентов">
       <span>Страница {{ currentPage }} · показано {{ clients.length }} · записи {{ currentSkip + 1 }}–{{ currentSkip + clients.length }}</span>
       <div class="row-actions">
         <button class="secondary-button" type="button" :disabled="isLoading || !hasPreviousPage" @click="goToPreviousClientsPage">
@@ -2385,8 +3025,8 @@ onBeforeUnmount(() => {
         <section v-focus-trap class="modal-panel client-modal client-modal-panel entity-modal client-profile-modal" role="dialog" aria-modal="true" aria-label="Карточка клиента" :aria-describedby="modalMessageId" :aria-busy="isSaving" @click.stop>
           <div class="modal-header">
             <div>
-              <p class="eyebrow">{{ isEditing ? 'Карточка клиента' : 'Новый клиент' }}</p>
-              <h2>{{ isEditing && selectedClient ? getClientName(selectedClient) : 'Создать клиента' }}</h2>
+              <p class="eyebrow">{{ isEditing ? 'Карточка пациента' : 'Новый пациент' }}</p>
+              <h2>{{ isEditing && selectedClient ? getClientName(selectedClient) : 'Создать пациента' }}</h2>
             </div>
             <div class="row-actions">
               <button
@@ -2398,7 +3038,7 @@ onBeforeUnmount(() => {
               >
                 <RotateCcw v-if="selectedClient.is_archived" :size="15" aria-hidden="true" />
                 <Archive v-else :size="15" aria-hidden="true" />
-                {{ selectedClient.is_archived ? 'Восстановить' : 'В архив' }}
+                {{ selectedClient.is_archived ? 'Восстановить' : 'В Выполненные' }}
               </button>
               <button
                 v-if="activeClientListMode === 'active'"
@@ -2424,7 +3064,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="client-modal-body">
-            <nav class="client-modal-nav" role="tablist" aria-label="Разделы карточки клиента">
+            <nav class="client-modal-nav" role="tablist" aria-label="Разделы карточки пациента">
               <button :class="{ active: activeTab === 'main' }" type="button" @click="openClientTab('main')">
                 <UserRound :size="17" aria-hidden="true" />
                 Основное
@@ -2434,8 +3074,8 @@ onBeforeUnmount(() => {
                 Личные документы
               </button>
               <button :class="{ active: activeTab === 'phones' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('phones')">
-                <Phone :size="17" aria-hidden="true" />
-                Телефоны
+                <Mail :size="17" aria-hidden="true" />
+                Контакты
               </button>
               <button :class="{ active: activeTab === 'modules' }" type="button" :disabled="!isClientPersisted" @click="openClientTab('modules')">
                 <PackageOpen :size="17" aria-hidden="true" />
@@ -2495,96 +3135,145 @@ onBeforeUnmount(() => {
                 </option>
               </select>
             </label>
+            <label>
+              Диагноз
+              <select v-model="form.prosthesis_type">
+                <option value="">Выбери диагноз</option>
+                <option v-for="option in prosthesisOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
           </div>
 
-          <label>
-            Агент
-            <select v-model="form.agent_id">
-              <option value="">Не выбран</option>
-              <option v-for="agent in agents" :key="String(agent.agent_id)" :value="agent.agent_id">
-                {{ getAgentName(agent) }}
-              </option>
-            </select>
-          </label>
-
-          <div class="form-grid">
+          <div class="form-grid client-main-assignment-grid">
             <label>
-              Протезист
-              <input v-model="form.prosthetist" />
+              Агент
+              <select v-model="form.agent_id">
+                <option value="">Не выбран</option>
+                <option v-for="agent in agents" :key="String(agent.agent_id)" :value="agent.agent_id">
+                  {{ getAgentName(agent) }}
+                </option>
+              </select>
             </label>
             <label>
-              Место проживания
-              <textarea v-model="form.place_of_residence" rows="3" />
+              Налогообложение
+              <select v-model="form.taxation_system">
+                <option value="УСН">6%</option>
+                <option value="ОСНО">15%</option>
+              </select>
             </label>
           </div>
 
           <div class="form-heading">
             <div>
-              <h2>Сертификат и протезирование</h2>
-              <p class="muted">Каждая комплектующая назначается конкретному ТСР клиента.</p>
+              <h2>ТСР пациента</h2>
+              <p class="muted">Один и тот же ТСР можно добавить пациенту несколько раз. Дата пробития, сертификат и комплектующие хранятся отдельно для каждой добавленной карточки.</p>
             </div>
             <button
-              v-if="canManageReferences"
               class="secondary-button"
               type="button"
+              :disabled="!isClientPersisted"
               @click="openReferenceManager"
             >
               Справочник ТСР
             </button>
           </div>
 
-          <div class="form-grid">
-            <label>
-              Вид протеза
-              <select v-model="form.prosthesis_type">
-                <option value="" disabled hidden></option>
-                <option v-for="option in prosthesisOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-            <label>
-              Дата пробития
-              <DateInput v-model="form.check_date" aria-label="Дата чека" />
-            </label>
-            <label>
-              Стоимость сертификата
-              <input v-model="form.certificate_price" inputmode="decimal" placeholder="Например: 250 000" @blur="formatClientMoneyField('certificate_price')" />
-            </label>
-            <label>
-              Налогообложение
-              <select v-model="form.taxation_system">
-                <option value="УСН">УСН</option>
-                <option value="ОСНО">ОСНО</option>
-              </select>
-            </label>
-          </div>
-
-          <label>
-            Повторное обращение
-            <DateInput v-model="form.deadline" aria-label="Дедлайн" />
-          </label>
-
           <div class="detail-panel tsr-module-panel">
-            <p class="eyebrow">ТСР клиента</p>
-            <div v-if="clientTsrGroups.length" class="tsr-component-groups">
-              <article v-for="group in clientTsrGroups" :key="group.key" class="tsr-component-group">
+            <div v-if="clientTsrGroups.some((group) => group.clientTsrId)" class="tsr-component-groups">
+              <article
+                v-for="group in clientTsrGroups.filter((item) => item.clientTsrId)"
+                :key="group.key"
+                class="tsr-component-group"
+              >
                 <header class="tsr-component-header">
-                  <strong>{{ group.tsr }}</strong>
-                  <span>Комплектующих: {{ group.components.length }}</span>
+                  <div>
+                    <button class="link-button tsr-title-link" type="button" @click="openNewComponentFromTsr(group)">
+                      <strong>{{ group.tsr }}</strong>
+                    </button>
+                    <span>Комплектующих: {{ group.components.length }}</span>
+                  </div>
+                  <div class="row-actions">
+                    <button class="ghost-button" type="button" :disabled="isSaving" @click="openNewComponentFromTsr(group)">
+                      Добавить комплектующую
+                    </button>
+                    <button class="secondary-button" type="button" :disabled="isSaving" @click="saveClientTsrDetails(group)">Сохранить</button>
+                    <button class="danger-button" type="button" :disabled="isSaving" @click="removeClientTsrLink(group)">Открепить</button>
+                  </div>
                 </header>
-                <ul class="component-name-list">
+                <div class="client-tsr-editor-layout">
+                  <section class="client-tsr-info-section" aria-label="Сертификат и сроки">
+                    <span class="client-tsr-section-title">Сертификат и сроки</span>
+                    <div class="client-tsr-field-grid client-tsr-certificate-grid">
+                      <label class="client-tsr-date-field">
+                        <span class="client-tsr-field-label">Дата пробития</span>
+                        <DateInput
+                          :model-value="getClientTsrDraft(group).checkDate"
+                          :aria-label="`Дата пробития для ${group.tsr}`"
+                          @update:model-value="setClientTsrDraft(group, 'checkDate', $event)"
+                        />
+                      </label>
+                      <label class="client-tsr-certificate-field">
+                        <span class="client-tsr-field-label">Стоимость сертификата</span>
+                        <input
+                          class="client-tsr-certificate-input"
+                          :value="getClientTsrDraft(group).certificatePrice"
+                          inputmode="decimal"
+                          placeholder="Например: 250 000"
+                          @input="setClientTsrDraftFromEvent(group, 'certificatePrice', $event)"
+                        />
+                      </label>
+                    </div>
+                  </section>
+
+                  <section class="client-tsr-info-section client-tsr-assignment-section" aria-label="Протезист и повторное обращение">
+                    <span class="client-tsr-section-title">Протезист и повторное обращение</span>
+                    <div class="client-tsr-field-grid client-tsr-assignment-fields">
+                      <label class="client-tsr-prosthetist-field">
+                        <span class="client-tsr-field-label">Протезист</span>
+                        <select
+                          :value="getClientTsrDraft(group).prosthetist"
+                          @change="setClientTsrDraftFromEvent(group, 'prosthetist', $event)"
+                        >
+                          <option value="">Не выбран</option>
+                          <option value="Дмитрий">Дмитрий</option>
+                          <option value="Никита">Никита</option>
+                        </select>
+                      </label>
+                      <div class="client-tsr-address-card">
+                        <span>Адрес протезиста</span>
+                        <strong>{{ getProsthetistAddress(getClientTsrDraft(group).prosthetist, group.placeOfResidence) }}</strong>
+                      </div>
+                      <label class="client-tsr-repeat-field">
+                        <span class="client-tsr-field-label">Повторное обращение</span>
+                        <DateInput
+                          :model-value="getClientTsrDraft(group).repeatVisitDate"
+                          :aria-label="`Повторное обращение для ${group.tsr}`"
+                          @update:model-value="setClientTsrDraft(group, 'repeatVisitDate', $event)"
+                        />
+                      </label>
+                    </div>
+                  </section>
+                </div>
+
+                <ul v-if="group.components.length" class="component-name-list">
                   <li v-for="component in group.components" :key="String(component.module_id)">
-                    <strong>{{ getModuleName(component) }}</strong>
-                    <span>
-                      {{ component.supplier || 'Поставщик не указан' }}
-                      · {{ component.quantity ?? 1 }} шт.
+                    <button class="link-button component-name-link" type="button" @click="openComponentFromMain(component)">
+                      <strong>{{ getModuleName(component) }}</strong>
+                    </button>
+                    <span>{{ component.supplier || 'Поставщик не указан' }}</span>
+                    <span class="component-finance-line">
+                      Себестоимость: {{ formatMoney(component.cost) }} ·
+                      Цена: {{ formatMoney(component.price) }} ·
+                      Количество: {{ component.quantity ?? 1 }}
                     </span>
                   </li>
                 </ul>
+                <p v-else class="muted">Комплектующие к этому ТСР пока не добавлены.</p>
               </article>
             </div>
-            <p v-else class="muted">После привязки здесь появятся ТСР и списки относящихся к ним комплектующих.</p>
+            <p v-else class="muted">Сохрани пациента и прикрепи нужные коды через «Справочник ТСР».</p>
           </div>
 
           <label>
@@ -2593,111 +3282,135 @@ onBeforeUnmount(() => {
           </label>
         </form>
 
-        <div v-else-if="activeTab === 'identity'" class="detail-panel">
-          <form class="side-form flat-form" @submit.prevent="savePassport">
-            <div class="form-heading">
-              <h2>Паспорт</h2>
-            </div>
-            <div class="form-grid">
-              <label>
-                Серия
-                <input v-model="passportForm.series" />
-              </label>
-              <label>
-                Номер
-                <input v-model="passportForm.number" />
-              </label>
-              <label>
-                Место рождения
-                <input v-model="passportForm.birth_place" />
-              </label>
-            </div>
-            <div class="form-grid">
-              <label>
-                Дата рождения
-                <DateInput v-model="passportForm.birth_date" aria-label="Дата рождения" />
-              </label>
-              <label>
-                Код подразделения
-                <input v-model="passportForm.department_code" />
-              </label>
-              <label>
-                Дата выдачи
-                <DateInput v-model="passportForm.issue_date" aria-label="Дата выдачи паспорта" />
-              </label>
-              <label>
-                Дата окончания
-                <DateInput v-model="passportForm.expiry_date" :max-year="new Date().getFullYear() + 30" aria-label="Паспорт действителен до" />
-              </label>
-            </div>
-            <div class="form-grid">
-              <label>
-                Кем выдан
-                <input v-model="passportForm.issued_by" />
-              </label>
-              <label>
-                Адрес регистрации
-                <input v-model="passportForm.registration_address" />
-              </label>
-            </div>
-            <div class="row-actions"><button class="secondary-button" :disabled="isSaving" type="submit">{{ editingPassportId ? 'Обновить паспорт' : 'Сохранить паспорт' }}</button><button v-if="editingPassportId" class="ghost-button" type="button" @click="cancelPassportEdit">Отмена</button></div>
-          </form>
-
-          <div class="list-stack">
-            <div v-for="passport in passportItems" :key="String(passport.passport_id)" class="list-row">
+        <div v-else-if="activeTab === 'identity'" class="detail-panel identity-section">
+          <form class="side-form flat-form collapsible-form" @submit.prevent="savePassport">
+            <div class="form-heading collapsible-form-heading">
               <div>
-                <strong>{{ passport.series_number }}</strong>
-                <span>
-                  {{ passport.full_name }} · {{ passport.birth_date ?? 'дата рождения не указана' }} ·
-                  {{ passport.issued_by }}
-                </span>
+                <h2>Паспорт</h2>
+                <p class="muted">Форма не занимает место, пока она не нужна.</p>
+              </div>
+              <button
+                class="ghost-button"
+                type="button"
+                :disabled="passportItems.length > 0 && !editingPassportId"
+                @click="passportFormExpanded = !passportFormExpanded"
+              >
+                {{ passportItems.length > 0 && !editingPassportId ? 'Паспорт уже сохранён' : passportFormExpanded ? 'Свернуть' : 'Развернуть форму' }}
+              </button>
+            </div>
+            <div v-show="passportFormExpanded" class="collapsible-form-body">
+              <div class="form-grid">
+                <label>Серия<input v-model="passportForm.series" /></label>
+                <label>Номер<input v-model="passportForm.number" /></label>
+                <label>Место рождения<input v-model="passportForm.birth_place" /></label>
+              </div>
+              <div class="form-grid">
+                <label>Дата рождения<DateInput v-model="passportForm.birth_date" aria-label="Дата рождения" /></label>
+                <label>Код подразделения<input v-model="passportForm.department_code" /></label>
+                <label>Дата выдачи<DateInput v-model="passportForm.issue_date" aria-label="Дата выдачи паспорта" /></label>
+              </div>
+              <div class="form-grid">
+                <label>Кем выдан<input v-model="passportForm.issued_by" /></label>
+                <label>Адрес регистрации<input v-model="passportForm.registration_address" /></label>
               </div>
               <div class="row-actions">
-                <button class="ghost-button" type="button" @click="startEditPassport(passport)">Изм.</button>
-                <button class="danger-button" :disabled="isSaving" type="button" @click="removePassport(passport)">Удалить</button>
+                <button class="secondary-button" :disabled="isSaving" type="submit">{{ editingPassportId ? 'Обновить паспорт' : 'Сохранить паспорт' }}</button>
+                <button v-if="editingPassportId" class="ghost-button" type="button" @click="cancelPassportEdit">Отмена</button>
               </div>
             </div>
+          </form>
+
+          <div class="identity-card-list">
+            <article v-for="passport in passportItems" :key="String(passport.passport_id)" class="identity-document-card">
+              <header>
+                <div>
+                  <span class="identity-card-label">Паспорт</span>
+                  <strong>{{ passport.series_number }}</strong>
+                </div>
+                <div class="row-actions">
+                  <button class="ghost-button" type="button" @click="startEditPassport(passport)">Изм.</button>
+                  <button class="danger-button" :disabled="isSaving" type="button" @click="removePassport(passport)">Удалить</button>
+                </div>
+              </header>
+              <dl class="identity-details-grid">
+                <div><dt>Владелец</dt><dd>{{ passport.full_name }}</dd></div>
+                <div><dt>Дата рождения</dt><dd>{{ formatShortDate(passport.birth_date) }}</dd></div>
+                <div><dt>Дата выдачи</dt><dd>{{ formatShortDate(passport.issue_date) }}</dd></div>
+                <div><dt>Кем выдан</dt><dd>{{ passport.issued_by }}</dd></div>
+                <div><dt>Код подразделения</dt><dd>{{ passport.department_code || '—' }}</dd></div>
+                <div><dt>Адрес регистрации</dt><dd>{{ passport.registration_address }}</dd></div>
+              </dl>
+            </article>
             <p v-if="passportItems.length === 0" class="muted">Паспорта пока не сохранены.</p>
           </div>
 
-          <form class="side-form flat-form" @submit.prevent="saveSnils">
-            <div class="form-heading">
-              <h2>СНИЛС / ИПРА</h2>
-            </div>
-            <div class="form-grid">
-              <label>
-                СНИЛС
-                <input v-model="snilsForm.number" />
-              </label>
-              <label>
-                Номер ИПРА
-                <input v-model="snilsForm.ipra_number" />
-              </label>
-              <label>
-                Дата ИПРА
-                <DateInput v-model="snilsForm.ipra_date" aria-label="Дата ИПРА" />
-              </label>
-            </div>
-            <div class="row-actions"><button class="secondary-button" :disabled="isSaving" type="submit">{{ editingSnilsId ? 'Обновить СНИЛС' : 'Сохранить СНИЛС/ИПРА' }}</button><button v-if="editingSnilsId" class="ghost-button" type="button" @click="cancelSnilsEdit">Отмена</button></div>
-          </form>
-
-          <div class="list-stack">
-            <div v-for="snils in snilsItems" :key="String(snils.snils_id)" class="list-row">
+          <form class="side-form flat-form collapsible-form" @submit.prevent="saveSnils">
+            <div class="form-heading collapsible-form-heading">
               <div>
-                <strong>{{ snils.number }}</strong>
-                <span>{{ snils.issued_date ? `Выдан: ${snils.issued_date}` : 'Дата выдачи не указана' }}</span>
+                <h2>СНИЛС / ИПРА</h2>
+                <p class="muted">Дата относится к ИПРА, а не к СНИЛС.</p>
+              </div>
+              <button
+                class="ghost-button"
+                type="button"
+                :disabled="snilsItems.length > 0 && !editingSnilsId"
+                @click="snilsFormExpanded = !snilsFormExpanded"
+              >
+                {{ snilsItems.length > 0 && !editingSnilsId ? 'СНИЛС / ИПРА уже сохранены' : snilsFormExpanded ? 'Свернуть' : 'Развернуть форму' }}
+              </button>
+            </div>
+            <div v-show="snilsFormExpanded" class="collapsible-form-body">
+              <div class="form-grid">
+                <label>СНИЛС<input v-model="snilsForm.number" /></label>
+                <label>Номер ИПРА<input v-model="snilsForm.ipra_number" /></label>
+                <label>Дата ИПРА<DateInput v-model="snilsForm.ipra_date" aria-label="Дата ИПРА" /></label>
               </div>
               <div class="row-actions">
-                <button class="ghost-button" type="button" @click="startEditSnils(snils)">Изм.</button>
-                <button class="danger-button" :disabled="isSaving" type="button" @click="removeSnils(snils)">Удалить</button>
+                <button class="secondary-button" :disabled="isSaving" type="submit">{{ editingSnilsId ? 'Обновить СНИЛС / ИПРА' : 'Сохранить СНИЛС / ИПРА' }}</button>
+                <button v-if="editingSnilsId" class="ghost-button" type="button" @click="cancelSnilsEdit">Отмена</button>
               </div>
             </div>
-            <p v-if="snilsItems.length === 0" class="muted">СНИЛС пока не сохранены.</p>
+          </form>
+
+          <div class="identity-card-list">
+            <article v-for="snils in snilsItems" :key="String(snils.snils_id)" class="identity-document-card">
+              <header>
+                <div>
+                  <span class="identity-card-label">СНИЛС</span>
+                  <strong>{{ snils.number }}</strong>
+                </div>
+                <div class="row-actions">
+                  <button class="ghost-button" type="button" @click="startEditSnils(snils)">Изм.</button>
+                  <button class="danger-button" :disabled="isSaving" type="button" @click="removeSnils(snils)">Удалить</button>
+                </div>
+              </header>
+              <dl class="identity-details-grid">
+                <div><dt>Номер ИПРА</dt><dd>{{ selectedClient?.ipra_code || '—' }}</dd></div>
+                <div><dt>Дата ИПРА</dt><dd>{{ formatShortDate(snils.issued_date) }}</dd></div>
+              </dl>
+            </article>
+            <p v-if="snilsItems.length === 0" class="muted">СНИЛС / ИПРА пока не сохранены.</p>
           </div>
         </div>
 
         <div v-else-if="activeTab === 'phones'" class="detail-panel">
-          <p v-if="isTabLoading('phones')" class="muted">Загружаем телефоны...</p>
+          <p v-if="isTabLoading('phones')" class="muted">Загружаем контакты...</p>
+          <div class="form-heading">
+            <div>
+              <h2>Электронная почта</h2>
+              <p class="muted">У пациента хранится один актуальный адрес с возможностью изменения или удаления.</p>
+            </div>
+          </div>
+          <form class="toolbar-form compact-toolbar" @submit.prevent="saveEmail">
+            <input v-model="emailDraft" type="email" maxlength="64" placeholder="Электронная почта" />
+            <button class="secondary-button" :disabled="isSaving || !emailDraft.trim()" type="submit">
+              {{ selectedClient?.email ? 'Обновить' : 'Добавить' }}
+            </button>
+            <button v-if="selectedClient?.email" class="danger-button" :disabled="isSaving" type="button" @click="removeEmail">
+              Удалить
+            </button>
+          </form>
+          <div class="form-heading"><h2>Телефоны</h2></div>
           <form class="toolbar-form compact-toolbar" @submit.prevent="addPhone">
             <input v-model="newPhone.phone" placeholder="Телефон" />
             <button class="secondary-button" :disabled="isSaving || !newPhone.phone.trim()" type="submit">
@@ -2717,179 +3430,279 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-else-if="activeTab === 'modules'" class="detail-panel">
+        <div v-else-if="activeTab === 'modules'" class="detail-panel components-detail-panel">
           <p v-if="isTabLoading('modules')" class="muted">Загружаем комплектующие...</p>
-          <template v-if="!selectedClient?.is_archived">
-          <div class="form-heading">
-            <h2>Выбрать комплектующую для клиента</h2>
-          </div>
-          <form class="toolbar-form compact-toolbar" @submit.prevent="assignModule">
-            <select v-model="selectedModuleId">
-              <option value="">Выбери комплектующую со склада</option>
-              <option v-for="moduleItem in warehouseModules" :key="String(moduleItem.module_id)" :value="moduleItem.module_id">
-                {{ moduleItem.tsr?.full_tsr_code || 'ТСР не выбран' }} — {{ getModuleName(moduleItem) }}
-              </option>
-            </select>
-            <button class="secondary-button" :disabled="isSaving || !selectedModuleId" type="submit">
-              Привязать
+
+          <section v-if="!selectedClient?.is_archived" class="component-workbench">
+            <button
+              class="component-drawer-trigger"
+              type="button"
+              :aria-expanded="componentFormExpanded"
+              aria-controls="client-component-form"
+              @click="componentFormExpanded = !componentFormExpanded"
+            >
+              <span class="component-drawer-icon" aria-hidden="true">
+                <PackageOpen :size="20" />
+              </span>
+              <span class="component-drawer-copy">
+                <strong>{{ editingModuleId ? 'Редактировать комплектующую' : 'Добавить комплектующую' }}</strong>
+                <span>Создать новую позицию или выбрать готовую со склада и назначить код ТСР</span>
+              </span>
+              <span class="component-drawer-action">
+                {{ componentFormExpanded ? 'Свернуть' : 'Открыть форму' }}
+                <span class="component-drawer-chevron" :class="{ expanded: componentFormExpanded }" aria-hidden="true">⌄</span>
+              </span>
             </button>
-          </form>
 
-          <form class="side-form flat-form" @submit.prevent="saveClientModule">
-            <div class="form-heading">
-              <h2>{{ editingModuleId ? 'Редактирование комплектующей' : 'Создать комплектующую для клиента' }}</h2>
-              <button v-if="editingModuleId" class="ghost-button" type="button" @click="resetModuleForm">Отмена</button>
-            </div>
+            <form
+              id="client-component-form"
+              v-show="componentFormExpanded"
+              class="component-workbench-body"
+              @submit.prevent="submitComponentForm"
+            >
+              <template v-if="clientTsrGroups.some((group) => group.clientTsrId)">
+                <div class="component-target-row">
+                  <label class="component-target-field">
+                    <span>Код ТСР *</span>
+                    <select v-model="moduleForm.client_tsr_id" required @change="handleComponentTargetChange">
+                      <option value="">Выберите ТСР пациента</option>
+                      <option
+                        v-for="group in clientTsrGroups.filter((item) => item.clientTsrId)"
+                        :key="`component-target-${group.clientTsrId}`"
+                        :value="group.clientTsrId"
+                      >
+                        {{ getComponentTsrOptionLabel(group) }}
+                      </option>
+                    </select>
+                    <small>При одинаковых кодах ориентируйтесь на дату пробития и стоимость сертификата.</small>
+                  </label>
 
-            <div class="form-grid">
-              <label>
-                ТСР *
-                <select v-model="moduleForm.tsr_id" required>
-                  <option value="">Выбери ТСР</option>
-                  <option v-for="option in tsrOptions" :key="option.value" :value="option.value">
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-              <label>
-                Название и индекс *
-                <input v-model="moduleForm.module_name_index" list="client-module-name-index-list" required />
-                <datalist id="client-module-name-index-list">
-                  <option v-for="option in nameIndexOptions" :key="option.value" :value="option.value">
-                    {{ option.label }}
-                  </option>
-                </datalist>
-              </label>
-              <label>
-                Поставщик *
-                <input v-model="moduleForm.supplier" required />
-              </label>
-              <label>
-                Количество
-                <input v-model="moduleForm.quantity" inputmode="numeric" />
-              </label>
-            </div>
+                  <div v-if="selectedComponentTsrGroup" class="component-target-context" aria-live="polite">
+                    <span>Выбранный ТСР</span>
+                    <strong>{{ selectedComponentTsrGroup.tsr }}</strong>
+                    <div>
+                      <span>{{ formatShortDate(selectedComponentTsrGroup.checkDate) }}</span>
+                      <span>{{ formatMoney(getGroupCertificatePrice(selectedComponentTsrGroup)) }}</span>
+                      <span>{{ selectedComponentTsrGroup.components.length }} компл.</span>
+                    </div>
+                  </div>
+                </div>
 
-            <div class="form-grid">
-              <label>
-                Себестоимость за ед.
-                <input v-model="moduleForm.unit_cost" inputmode="decimal" @blur="formatModuleMoneyField('unit_cost')" />
-              </label>
-              <label>
-                Цена за ед.
-                <input v-model="moduleForm.unit_price" inputmode="decimal" @blur="formatModuleMoneyField('unit_price')" />
-              </label>
-              <label>
-                Номер счета и дата заказа
-                <input v-model="moduleForm.order_date_acc_num" />
-              </label>
-            </div>
+                <div v-if="!editingModuleId" class="component-mode-switch" role="tablist" aria-label="Способ добавления комплектующей">
+                  <button
+                    class="component-mode-button"
+                    :class="{ active: componentEntryMode === 'new' }"
+                    type="button"
+                    role="tab"
+                    :aria-selected="componentEntryMode === 'new'"
+                    @click="setComponentEntryMode('new')"
+                  >
+                    <Plus :size="16" aria-hidden="true" />
+                    Создать новую
+                  </button>
+                  <button
+                    class="component-mode-button"
+                    :class="{ active: componentEntryMode === 'warehouse' }"
+                    type="button"
+                    role="tab"
+                    :aria-selected="componentEntryMode === 'warehouse'"
+                    @click="setComponentEntryMode('warehouse')"
+                  >
+                    <PackageOpen :size="16" aria-hidden="true" />
+                    Выбрать со склада
+                    <span class="component-mode-count">{{ warehouseModules.length }}</span>
+                  </button>
+                </div>
 
-            <div class="form-grid">
-              <label>
-                Размер
-                <input v-model="moduleForm.size" />
-              </label>
-              <label>
-                Жесткость
-                <input v-model="moduleForm.stiffness" />
-              </label>
-              <label>
-                Сторона
-                <input v-model="moduleForm.side" />
-              </label>
-            </div>
+                <div v-if="componentEntryMode === 'warehouse' && !editingModuleId" class="component-stock-panel">
+                  <label>
+                    Комплектующая на складе *
+                    <select v-model="selectedModuleId" required @change="handleWarehouseModuleChange">
+                      <option value="">Выберите свободную комплектующую</option>
+                      <option
+                        v-for="moduleItem in warehouseModules"
+                        :key="String(moduleItem.module_id)"
+                        :value="moduleItem.module_id"
+                      >
+                        {{ moduleItem.tsr?.full_tsr_code || 'ТСР не выбран' }} — {{ getModuleName(moduleItem) }} — {{ moduleItem.supplier || 'поставщик не указан' }}
+                      </option>
+                    </select>
+                  </label>
+                  <p v-if="warehouseModules.length === 0" class="form-hint compact-hint">
+                    На складе нет свободных комплектующих. Переключитесь на «Создать новую».
+                  </p>
+                  <p v-else-if="selectedWarehouseTargetMismatch" class="component-inline-note component-inline-error">
+                    Код выбранной складской комплектующей не совпадает с выбранным ТСР пациента. Выберите подходящий ТСР или другую позицию.
+                  </p>
+                  <p v-else class="component-inline-note">
+                    В списке показаны все свободные комплектующие. Код выбранной позиции должен совпадать с выбранным ТСР пациента.
+                  </p>
+                  <div class="component-form-actions">
+                    <button class="primary-button" :disabled="isSaving || !selectedModuleId || !moduleForm.client_tsr_id || selectedWarehouseTargetMismatch" type="submit">
+                      {{ isSaving ? 'Привязываем...' : 'Привязать со склада' }}
+                    </button>
+                  </div>
+                </div>
 
-            <div class="form-grid">
-              <label>
-                Заказано
-                <input v-model="moduleForm.ordered" type="number" min="0" step="1" />
-              </label>
-              <label>
-                Получено
-                <input v-model="moduleForm.recd" type="number" min="0" step="1" />
-              </label>
-              <label>
-                Ожидается
-                <input v-model="moduleForm.pending" type="number" min="0" step="1" />
-              </label>
-              <label>
-                У протезиста
-                <input v-model="moduleForm.prosthetist_keep" type="number" min="0" step="1" />
-              </label>
-            </div>
+                <template v-else>
+                  <div class="component-form-section">
+                    <div class="component-section-heading">
+                      <strong>Основные данные</strong>
+                      <span>Название, поставщик, количество и цены</span>
+                    </div>
+                    <div class="form-grid component-primary-grid">
+                      <label>
+                        Название и индекс *
+                        <input v-model="moduleForm.module_name_index" list="client-module-name-index-list" required />
+                        <datalist id="client-module-name-index-list">
+                          <option v-for="option in nameIndexOptions" :key="option.value" :value="option.value">
+                            {{ option.label }}
+                          </option>
+                        </datalist>
+                      </label>
+                      <label>
+                        Поставщик *
+                        <input v-model="moduleForm.supplier" required />
+                      </label>
+                      <label class="component-quantity-field">
+                        Количество
+                        <input v-model="moduleForm.quantity" inputmode="numeric" />
+                      </label>
+                      <label>
+                        Себестоимость за ед.
+                        <input v-model="moduleForm.unit_cost" inputmode="decimal" @blur="formatModuleMoneyField('unit_cost')" />
+                      </label>
+                      <label>
+                        Цена за ед.
+                        <input v-model="moduleForm.unit_price" inputmode="decimal" @blur="formatModuleMoneyField('unit_price')" />
+                      </label>
+                    </div>
+                  </div>
 
-            <label>
-              Доп. свойства
-              <input v-model="moduleForm.properties" />
-            </label>
+                  <div class="component-form-section">
+                    <div class="component-section-heading">
+                      <strong>Характеристики и движение</strong>
+                      <span>Параметры изделия и состояние заказа</span>
+                    </div>
+                    <div class="form-grid component-characteristics-grid">
+                      <label>
+                        Номер счета и дата заказа
+                        <input v-model="moduleForm.order_date_acc_num" />
+                      </label>
+                      <label>
+                        Размер
+                        <input v-model="moduleForm.size" />
+                      </label>
+                      <label>
+                        Жесткость
+                        <input v-model="moduleForm.stiffness" />
+                      </label>
+                      <label>
+                        Сторона
+                        <input v-model="moduleForm.side" />
+                      </label>
+                      <label>
+                        Заказано
+                        <input v-model="moduleForm.ordered" type="number" min="0" step="1" />
+                      </label>
+                      <label>
+                        Получено
+                        <input v-model="moduleForm.recd" type="number" min="0" step="1" />
+                      </label>
+                      <label>
+                        Ожидается
+                        <input v-model="moduleForm.pending" type="number" min="0" step="1" />
+                      </label>
+                      <label>
+                        У протезиста
+                        <input v-model="moduleForm.prosthetist_keep" type="number" min="0" step="1" />
+                      </label>
+                    </div>
+                  </div>
 
-            <label>
-              Заметки
-              <textarea v-model="moduleForm.notes" rows="3" />
-            </label>
+                  <div class="component-form-section component-notes-section">
+                    <label>
+                      Доп. свойства
+                      <input v-model="moduleForm.properties" />
+                    </label>
+                    <label>
+                      Заметки
+                      <textarea v-model="moduleForm.notes" rows="3" />
+                    </label>
+                  </div>
 
-            <button class="secondary-button" :disabled="isSaving" type="submit">
-              {{ editingModuleId ? 'Сохранить комплектующую' : 'Создать комплектующую' }}
-            </button>
-          </form>
-          </template>
+                  <div class="component-form-actions">
+                    <button class="primary-button" :disabled="isSaving || !moduleForm.client_tsr_id" type="submit">
+                      {{ isSaving ? 'Сохраняем...' : editingModuleId ? 'Сохранить изменения' : 'Создать комплектующую' }}
+                    </button>
+                    <button v-if="editingModuleId" class="ghost-button" type="button" @click="resetModuleForm()">
+                      Отмена
+                    </button>
+                  </div>
+                </template>
+              </template>
+
+              <div v-else class="component-empty-target">
+                <strong>Сначала добавьте пациенту ТСР</strong>
+                <span>После добавления кода в разделе «Основное» здесь сразу станет доступно создание комплектующей.</span>
+              </div>
+            </form>
+          </section>
+
           <p v-else class="form-hint">
-            Комплектующие архивного клиента доступны для просмотра. Чтобы изменять их или назначать ТСР, сначала восстанови клиента.
+            Комплектующие архивного пациента доступны для просмотра. Чтобы изменять их или назначать ТСР, сначала восстановите пациента.
           </p>
 
-          <div v-if="clientTsrGroups.length" class="tsr-component-groups">
+          <div class="component-list-heading">
+            <div>
+              <h2>Комплектующие пациента</h2>
+              <p class="muted">Позиции сгруппированы по назначенному ТСР.</p>
+            </div>
+            <span class="component-total-badge">{{ clientModules.length }} поз.</span>
+          </div>
+
+          <div v-if="clientTsrGroups.length" class="tsr-component-groups component-groups-modern">
             <article v-for="group in clientTsrGroups" :key="group.key" class="tsr-component-group">
               <header class="tsr-component-header">
                 <div>
                   <strong>{{ group.tsr }}</strong>
-                  <span>Комплектующих: {{ group.components.length }}</span>
+                  <span>
+                    {{ formatShortDate(group.checkDate) }} · {{ formatMoney(getGroupCertificatePrice(group)) }} ·
+                    {{ group.components.length }} компл.
+                  </span>
                 </div>
-                <strong>{{ formatMoney(getGroupTotalPrice(group)) }}</strong>
-              </header>
-              <div v-if="!selectedClient?.is_archived" class="tsr-assignment-controls">
-                <label class="tsr-assignment-field">
-                  <span>ТСР всей группы</span>
-                  <select
-                    :value="getGroupTsrDraft(group)"
-                    :aria-label="`ТСР для группы ${group.tsr}`"
-                    @change="setGroupTsrDraft(group, $event)"
+                <div class="row-actions">
+                  <strong>{{ formatMoney(getGroupTotalPrice(group)) }}</strong>
+                  <button
+                    v-if="group.clientTsrId && !selectedClient?.is_archived"
+                    class="ghost-button"
+                    type="button"
+                    @click="openNewComponentFromTsr(group)"
                   >
-                    <option value="">Выбери ТСР</option>
-                    <option v-for="option in tsrOptions" :key="option.value" :value="option.value">
-                      {{ option.label }}
-                    </option>
-                  </select>
-                </label>
-                <button
-                  class="secondary-button"
-                  type="button"
-                  :disabled="isSaving || !getGroupTsrDraft(group) || getGroupTsrDraft(group) === group.tsrId"
-                  @click="assignTsrToGroup(group)"
-                >
-                  {{ group.tsrId ? 'Изменить для всей группы' : 'Назначить всей группе' }}
-                </button>
-              </div>
-
-              <div class="list-stack">
-                <div v-for="moduleItem in group.components" :key="String(moduleItem.module_id)" class="list-row">
+                    <Plus :size="15" aria-hidden="true" />
+                    Добавить
+                  </button>
+                </div>
+              </header>
+              <div v-if="group.components.length" class="list-stack">
+                <div v-for="moduleItem in group.components" :key="String(moduleItem.module_id)" class="list-row component-list-row">
                   <div>
                     <strong>{{ getModuleName(moduleItem) }}</strong>
                     <span>
-                      {{ moduleItem.supplier || moduleItem.properties || 'Комплектующая клиента' }} ·
-                      Кол-во: {{ moduleItem.quantity ?? 1 }} ·
-                      Себест.: {{ formatMoney(moduleItem.cost) }} ·
-                      Цена: {{ formatMoney(moduleItem.price) }}
+                      {{ moduleItem.supplier || moduleItem.properties || 'Комплектующая пациента' }} ·
+                      {{ moduleItem.quantity ?? 1 }} шт. ·
+                      себестоимость {{ formatMoney(moduleItem.cost) }} ·
+                      цена {{ formatMoney(moduleItem.price) }}
                     </span>
                   </div>
                   <div v-if="!selectedClient?.is_archived" class="row-actions component-actions">
                     <button
                       class="ghost-button"
                       type="button"
-                      title="Изменить данные или ТСР комплектующей"
+                      title="Изменить комплектующую"
                       @click="fillModuleForm(moduleItem)"
                     >
-                      Изм.
+                      Изменить
                     </button>
                     <button class="ghost-button" :disabled="isSaving" type="button" @click="unassignModule(moduleItem)">
                       На склад
@@ -2900,9 +3713,20 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
+              <div v-else class="component-group-empty">
+                <span>Комплектующих пока нет.</span>
+                <button
+                  v-if="group.clientTsrId && !selectedClient?.is_archived"
+                  class="link-button"
+                  type="button"
+                  @click="openNewComponentFromTsr(group)"
+                >
+                  Создать первую
+                </button>
+              </div>
             </article>
           </div>
-          <p v-else class="muted">К клиенту пока не привязаны комплектующие.</p>
+          <p v-else class="muted">К пациенту пока не прикреплены ТСР и комплектующие.</p>
         </div>
 
         <div v-else-if="activeTab === 'documents'" class="detail-panel">
@@ -2922,7 +3746,7 @@ onBeforeUnmount(() => {
             </label>
             <label class="contract-number-field">
               Номер
-              <input v-model="contractNumberSuffix" class="contract-number-input" inputmode="numeric" placeholder="021225" />
+              <input v-model="contractNumberSuffix" class="contract-number-input" inputmode="numeric" readonly aria-readonly="true" />
             </label>
             <label class="contract-date-field">
               Дата документа
@@ -2942,7 +3766,7 @@ onBeforeUnmount(() => {
           </form>
           <div v-if="showExtendedContractDates" class="contract-module-selector">
             <p class="eyebrow">ТСР и комплектующие для договора</p>
-            <article v-for="group in clientTsrGroups" :key="group.key" class="contract-tsr-group">
+            <article v-for="group in contractTsrGroups" :key="group.key" class="contract-tsr-group">
               <label class="checkbox-label contract-tsr-heading">
                 <input
                   type="checkbox"
@@ -2953,7 +3777,7 @@ onBeforeUnmount(() => {
                 <span>
                   <strong>{{ group.tsr }}</strong>
                   · {{ group.components.length }} комплектующих
-                  · {{ formatMoney(getGroupTotalPrice(group)) }}
+                  · сертификат: {{ formatMoney(getGroupCertificatePrice(group)) }}
                 </span>
               </label>
               <div class="contract-component-list">
@@ -2963,20 +3787,19 @@ onBeforeUnmount(() => {
                   class="checkbox-label"
                 >
                   <input
-                    v-model="selectedContractModuleIds"
                     type="checkbox"
-                    :value="String(component.module_id)"
+                    :checked="selectedContractModuleIds.includes(String(component.module_id))"
+                    @change="toggleContractComponent(group, String(component.module_id), $event)"
                   />
                   <span>
                     <strong>{{ getModuleName(component) }}</strong>
                     · {{ component.quantity ?? 1 }} шт.
-                    · {{ formatMoney(component.price) }}
                   </span>
                 </label>
               </div>
             </article>
-            <p v-if="clientTsrGroups.length === 0" class="muted">
-              Сначала привяжи к клиенту комплектующие и назначь им ТСР.
+            <p v-if="contractTsrGroups.length === 0" class="muted">
+              Сначала прикрепите ТСР к пациенту в разделе «Основное».
             </p>
           </div>
           <form class="upload-form" @submit.prevent="uploadDocument">
@@ -3041,7 +3864,7 @@ onBeforeUnmount(() => {
               :disabled="isSaving || !hasUnsavedClientChanges"
             >
               <Save :size="16" aria-hidden="true" />
-              {{ isSaving ? 'Сохраняем...' : isEditing ? 'Сохранить изменения' : 'Создать клиента' }}
+              {{ isSaving ? 'Сохраняем...' : isEditing ? 'Сохранить изменения' : 'Создать пациента' }}
             </button>
           </div>
         </section>
@@ -3067,7 +3890,7 @@ onBeforeUnmount(() => {
           <p v-if="referenceError" class="form-error">{{ referenceError }}</p>
           <p v-if="referenceSuccess" class="form-success">{{ referenceSuccess }}</p>
 
-          <form class="reference-editor" @submit.prevent="saveManagedReference">
+          <form v-if="canManageReferences" class="reference-editor" @submit.prevent="saveManagedReference">
             <label>
               Код ТСР
               <input v-model="referenceDraft" placeholder="Например: 8-07-01" required />
@@ -3094,15 +3917,23 @@ onBeforeUnmount(() => {
                 <span>№ {{ index + 1 }}</span>
               </div>
               <div class="row-actions">
-                <button class="ghost-button" type="button" :disabled="isReferenceSaving" @click="startEditReference(item)">Изм.</button>
-                <button class="danger-button" type="button" :disabled="isReferenceSaving" @click="removeManagedReference(item)">Удалить</button>
+                <button
+                  class="secondary-button"
+                  type="button"
+                  :disabled="isReferenceSaving || !isClientPersisted"
+                  @click="attachManagedReference(item)"
+                >
+                  {{ attachedTsrCounts.has(String(getReferenceId(item) || '')) ? 'Добавить ещё' : 'Прикрепить пациенту' }}
+                </button>
+                <button v-if="canManageReferences" class="ghost-button" type="button" :disabled="isReferenceSaving" @click="startEditReference(item)">Изм.</button>
+                <button v-if="canManageReferences" class="danger-button" type="button" :disabled="isReferenceSaving" @click="removeManagedReference(item)">Удалить</button>
               </div>
             </article>
             <p v-if="filteredReferenceItems.length === 0" class="empty-state">Записей не найдено.</p>
           </div>
 
           <p class="form-hint">
-            Здесь управляются только коды ТСР. Поле «Вид протеза» использует фиксированный список категорий конечностей.
+            Кнопка «Прикрепить пациенту» добавляет ТСР в раздел «Основное» и создаёт соответствующую группу в «Комплектующих». Редактирование самого справочника доступно администратору.
           </p>
         </section>
       </div>

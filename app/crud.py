@@ -2,10 +2,11 @@
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from sqlalchemy import select, or_, func, and_, update
+from sqlalchemy import select, or_, func, and_, update, case
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from . import models, schemas
 from passlib.context import CryptContext
@@ -147,7 +148,6 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
                 "series_number": ps.series_number,
                 "issued_by": ps.issued_by,
                 "issue_date": ps.issue_date,
-                "expiry_date": ps.expiry_date,
                 "registration_address": ps.registration_address,
                 "version": ps.version,
                 "created_at": ps.created_at,
@@ -164,7 +164,6 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
                 "series_number": ps.series_number,
                 "issued_by": ps.issued_by,
                 "issue_date": ps.issue_date,
-                "expiry_date": ps.expiry_date,
                 "registration_address": ps.registration_address,
                 "version": ps.version,
                 "created_at": ps.created_at,
@@ -215,6 +214,20 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
             modules_list.append(schemas.ModuleRead.model_validate(m).model_dump())
 
     custom_fields = get_client_custom_field_values(db, client.client_id)
+    tsr_items = []
+    if "tsr_items" in client.__dict__:
+        tsr_items = [
+            schemas.ClientTsrRead.model_validate(item).model_dump()
+            for item in client.tsr_items
+        ]
+    else:
+        linked_tsr = db.execute(
+            select(models.ClientTsr)
+            .where(models.ClientTsr.client_id == client.client_id)
+            .options(selectinload(models.ClientTsr.tsr))
+            .order_by(models.ClientTsr.created_at, models.ClientTsr.client_tsr_id)
+        ).scalars().all()
+        tsr_items = [schemas.ClientTsrRead.model_validate(item).model_dump() for item in linked_tsr]
 
     result = {
         "client_id": client.client_id,
@@ -231,6 +244,7 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "notes": client.notes,
         "check_date": client.check_date,
         "prosthesis_type": client.prosthesis_type,
+        "email": getattr(client, "email", None),
         "certificate_price": client.certificate_price,
         "taxation_system": client.taxation_system or "УСН",
         "ipra_code": client.ipra_code,
@@ -245,6 +259,7 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "passports": passports_list,
         "snils": snils_list,
         "modules": modules_list,
+        "tsr_items": tsr_items,
         "tsr_code": client.tsr_code,
         "prosthetist_salary": getattr(client, "prosthetist_salary", 0.0),
         "agent_salary": getattr(client, "agent_salary", 0.0),
@@ -265,6 +280,42 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
 # -------------------------
 # Client
 # -------------------------
+
+def _normalize_reference_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().replace("ё", "е").split())
+
+
+def _client_is_successfully_completed(db: Session, client: models.Client) -> bool:
+    """Return True only for the explicit business state used for auto-archive."""
+    status_code = _normalize_reference_text(client.status_code)
+    stage_code = _normalize_reference_text(client.current_stage)
+
+    if status_code == "success" and stage_code == "shipping":
+        return True
+
+    status = db.get(models.Status, client.status_code) if client.status_code else None
+    stage = db.get(models.Stage, client.current_stage) if client.current_stage else None
+    return (
+        _normalize_reference_text(getattr(status, "description", None)) == "успешно завершен"
+        and _normalize_reference_text(getattr(stage, "description", None)) == "выполнено"
+    )
+
+
+def _apply_client_archive_state(
+    db: Session,
+    client: models.Client,
+    *,
+    is_archived: bool,
+) -> None:
+    client.is_archived = is_archived
+    module_update = update(models.Module).where(models.Module.client_id == client.client_id)
+    if is_archived:
+        module_update = module_update.values(is_archived=True)
+    else:
+        # Ручно архивированные позиции остаются в архиве после восстановления клиента.
+        module_update = module_update.values(is_archived=models.Module.is_manually_archived)
+    db.execute(module_update)
+
 
 def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any]:
     """
@@ -287,6 +338,7 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         notes=client_in.notes,
         check_date=client_in.check_date,
         prosthesis_type=client_in.prosthesis_type,
+        email=client_in.email,
         certificate_price=client_in.certificate_price,
         taxation_system=client_in.taxation_system,
         place_of_residence=client_in.place_of_residence,
@@ -309,6 +361,9 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
             phone = models.Phone(client_id=client.client_id, number=p.number)
             db.add(phone)
 
+        if _client_is_successfully_completed(db, client):
+            _apply_client_archive_state(db, client, is_archived=True)
+
         db.commit()
         db.refresh(client)
         return _client_to_dict(db, client)
@@ -329,6 +384,7 @@ def get_client(db: Session, client_id: UUID) -> Optional[Dict[str, Any]]:
             selectinload(models.Client.passports),
             selectinload(models.Client.snils),
             selectinload(models.Client.modules).selectinload(models.Module.tsr),
+            selectinload(models.Client.tsr_items).selectinload(models.ClientTsr.tsr),
             selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
         )
     )
@@ -358,6 +414,7 @@ def list_clients(
         selectinload(models.Client.passports),
         selectinload(models.Client.snils),
         selectinload(models.Client.modules).selectinload(models.Module.tsr),
+        selectinload(models.Client.tsr_items).selectinload(models.ClientTsr.tsr),
         selectinload(models.Client.accounting_values).joinedload(models.AccountingFieldValue.field),
     )
 
@@ -369,6 +426,7 @@ def list_clients(
                 models.Client.first_name.ilike(like),
                 models.Client.last_name.ilike(like),
                 models.Client.middle_name.ilike(like),
+                models.Client.email.ilike(like),
             )
         )
     if status:
@@ -400,10 +458,19 @@ def update_client(db: Session, client_id: UUID, payload: Dict[str, Any]) -> Opti
     if not client:
         return None
 
+    # The actual address is controlled by the selected prosthetist and cannot
+    # be changed independently, including through a direct API request.
+    payload.pop("place_of_residence", None)
+    if "prosthetist" in payload:
+        payload["place_of_residence"] = schemas.PROSTHETIST_ADDRESSES.get(payload.get("prosthetist"))
+
     # обновляются только существующие поля
     for k, v in payload.items():
         if hasattr(client, k):
             setattr(client, k, v)
+
+    if not client.is_archived and _client_is_successfully_completed(db, client):
+        _apply_client_archive_state(db, client, is_archived=True)
 
     db.add(client)
     try:
@@ -428,6 +495,7 @@ def delete_client(db: Session, client_id: UUID) -> bool:
     ).scalars().all()
     for module in linked_modules:
         module.client_id = None
+        module.client_tsr_id = None
         module.is_archived = bool(module.is_manually_archived)
 
     db.flush()
@@ -451,16 +519,7 @@ def set_client_archive_state(
     if not client:
         return None
 
-    client.is_archived = is_archived
-    module_update = update(models.Module).where(models.Module.client_id == client_id)
-    if is_archived:
-        module_update = module_update.values(is_archived=True)
-    else:
-        # Ручно архивированные позиции остаются в архиве после восстановления клиента.
-        module_update = module_update.values(
-            is_archived=models.Module.is_manually_archived,
-        )
-    db.execute(module_update)
+    _apply_client_archive_state(db, client, is_archived=is_archived)
 
     try:
         db.commit()
@@ -486,6 +545,17 @@ def assign_tsr_to_client_modules(
     if not db.get(models.TstCodeRef, tsr_id):
         raise ValueError("Выбранный ТСР не найден")
 
+    existing_link = db.execute(
+        select(models.ClientTsr).where(
+            models.ClientTsr.client_id == client_id,
+            models.ClientTsr.tsr_id == tsr_id,
+        ).order_by(models.ClientTsr.created_at, models.ClientTsr.client_tsr_id)
+    ).scalars().first()
+    if not existing_link:
+        existing_link = models.ClientTsr(client_id=client_id, tsr_id=tsr_id)
+        db.add(existing_link)
+        db.flush()
+
     unique_ids = list(dict.fromkeys(component_ids))
     components = db.execute(
         select(models.Module).where(models.Module.module_id.in_(unique_ids))
@@ -498,8 +568,11 @@ def assign_tsr_to_client_modules(
 
     for component in components:
         component.tsr_id = tsr_id
+        component.client_tsr_id = existing_link.client_tsr_id
 
     try:
+        db.flush()
+        _sync_client_tsr_legacy_fields(db, client_id)
         db.commit()
     except Exception:
         db.rollback()
@@ -513,6 +586,148 @@ def assign_tsr_to_client_modules(
             selectinload(models.Module.tsr),
         )
     ).scalars().all()
+
+
+def _parse_decimal_money(value: Any) -> Decimal:
+    if value is None:
+        return Decimal("0")
+    text_value = str(value).strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    text_value = re.sub(r"[^0-9.\-]", "", text_value)
+    try:
+        return Decimal(text_value or "0")
+    except InvalidOperation:
+        return Decimal("0")
+
+
+def _format_decimal_money(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.01')):.2f}"
+
+
+def _sync_client_tsr_legacy_fields(db: Session, client_id: UUID) -> None:
+    """Keep old client columns usable by legacy reports and IP templates."""
+    client = db.get(models.Client, client_id)
+    if not client:
+        return
+    links = db.execute(
+        select(models.ClientTsr)
+        .where(models.ClientTsr.client_id == client_id)
+        .options(selectinload(models.ClientTsr.tsr))
+        .order_by(models.ClientTsr.created_at, models.ClientTsr.client_tsr_id)
+    ).scalars().all()
+    client.tsr_code = "\n".join(
+        str(link.tsr.full_tsr_code or "").strip()
+        for link in links
+        if link.tsr and str(link.tsr.full_tsr_code or "").strip()
+    ) or None
+    dated_links = [link.check_date for link in links if link.check_date is not None]
+    client.check_date = max(dated_links) if dated_links else None
+    total = sum((_parse_decimal_money(link.certificate_price) for link in links), Decimal("0"))
+    client.certificate_price = _format_decimal_money(total) if links else None
+
+
+def list_client_tsr(db: Session, client_id: UUID) -> List[models.ClientTsr]:
+    if not db.get(models.Client, client_id):
+        raise ValueError("Клиент не найден")
+    return db.execute(
+        select(models.ClientTsr)
+        .where(models.ClientTsr.client_id == client_id)
+        .options(selectinload(models.ClientTsr.tsr))
+        .order_by(models.ClientTsr.created_at, models.ClientTsr.client_tsr_id)
+    ).scalars().all()
+
+
+def create_client_tsr(db: Session, client_id: UUID, payload: schemas.ClientTsrCreate) -> models.ClientTsr:
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Клиент не найден")
+    if client.is_archived:
+        raise ValueError("Сначала восстановите клиента из архива")
+    if not db.get(models.TstCodeRef, payload.tsr_id):
+        raise ValueError("Выбранный ТСР не найден")
+    item = models.ClientTsr(
+        client_id=client_id,
+        tsr_id=payload.tsr_id,
+        check_date=payload.check_date,
+        certificate_price=(payload.certificate_price or None),
+        prosthetist=payload.prosthetist,
+        place_of_residence=schemas.PROSTHETIST_ADDRESSES.get(payload.prosthetist),
+        repeat_visit_date=payload.repeat_visit_date,
+    )
+    db.add(item)
+    try:
+        db.flush()
+        _sync_client_tsr_legacy_fields(db, client_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return db.execute(
+        select(models.ClientTsr)
+        .where(models.ClientTsr.client_tsr_id == item.client_tsr_id)
+        .options(selectinload(models.ClientTsr.tsr))
+    ).scalars().one()
+
+
+def update_client_tsr(
+    db: Session,
+    client_id: UUID,
+    client_tsr_id: UUID,
+    payload: schemas.ClientTsrUpdate,
+) -> Optional[models.ClientTsr]:
+    item = db.execute(
+        select(models.ClientTsr).where(
+            models.ClientTsr.client_tsr_id == client_tsr_id,
+            models.ClientTsr.client_id == client_id,
+        )
+    ).scalars().first()
+    if not item:
+        return None
+    values = payload.model_dump(exclude_unset=True)
+    for key, value in values.items():
+        normalized_value = (value or None) if key == "certificate_price" else value
+        setattr(item, key, normalized_value)
+    if "prosthetist" in values:
+        item.place_of_residence = schemas.PROSTHETIST_ADDRESSES.get(values.get("prosthetist"))
+    try:
+        db.flush()
+        _sync_client_tsr_legacy_fields(db, client_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return db.execute(
+        select(models.ClientTsr)
+        .where(models.ClientTsr.client_tsr_id == client_tsr_id)
+        .options(selectinload(models.ClientTsr.tsr))
+    ).scalars().one()
+
+
+def delete_client_tsr(db: Session, client_id: UUID, client_tsr_id: UUID) -> bool:
+    item = db.execute(
+        select(models.ClientTsr).where(
+            models.ClientTsr.client_tsr_id == client_tsr_id,
+            models.ClientTsr.client_id == client_id,
+        )
+    ).scalars().first()
+    if not item:
+        return False
+    used_count = db.scalar(
+        select(func.count()).select_from(models.Module).where(
+            models.Module.client_id == client_id,
+            models.Module.client_tsr_id == item.client_tsr_id,
+        )
+    ) or 0
+    if used_count:
+        raise ValueError("Нельзя открепить ТСР: к нему привязаны комплектующие клиента")
+    db.delete(item)
+    try:
+        db.flush()
+        _sync_client_tsr_legacy_fields(db, client_id)
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
 
 
 # -------------------------
@@ -545,8 +760,8 @@ def create_agent(db: Session, agent_in: schemas.AgentCreate) -> Dict[str, Any]:
 
     agent = models.Agent(
         last_name=agent_in.last_name,
-        first_name=agent_in.first_name or "",
-        middle_name=agent_in.middle_name or "",
+        first_name=agent_in.first_name,
+        middle_name=agent_in.middle_name,
         legal_address=agent_in.legal_address,
         actual_address=agent_in.actual_address,
         
@@ -705,9 +920,14 @@ def update_phone(db: Session, phone_id: int, payload: Dict[str, Any]) -> Optiona
         raise
 
 def create_passport(db: Session, client_id: UUID, passport_in: schemas.PassportCreate) -> models.Passport:
-    client = db.get(models.Client, client_id)
+    # Lock the client row so two simultaneous requests cannot create duplicates.
+    client = db.execute(
+        select(models.Client).where(models.Client.client_id == client_id).with_for_update()
+    ).scalars().first()
     if not client:
         raise ValueError("Client not found")
+    if db.scalar(select(func.count()).select_from(models.Passport).where(models.Passport.client_id == client_id)):
+        raise ValueError("У клиента уже сохранён паспорт. Измените существующий документ.")
     
     # Явная передача полей, чтобы избежать ошибок валидации
     passport = models.Passport(
@@ -719,7 +939,6 @@ def create_passport(db: Session, client_id: UUID, passport_in: schemas.PassportC
         issued_by=passport_in.issued_by,
         issue_date=passport_in.issue_date,
         department_code=passport_in.department_code,
-        expiry_date=passport_in.expiry_date,
         registration_address=passport_in.registration_address,
         created_at=datetime.now(timezone.utc),
     )
@@ -762,9 +981,14 @@ def delete_passport(db: Session, passport_id: UUID) -> bool:
         raise
 
 def create_snils(db: Session, client_id: UUID, snils_in: schemas.SnilsCreate) -> models.Snils:
-    client = db.get(models.Client, client_id)
+    # The same lock protects the single SNILS/IPRA record from concurrent creates.
+    client = db.execute(
+        select(models.Client).where(models.Client.client_id == client_id).with_for_update()
+    ).scalars().first()
     if not client:
         raise ValueError("Client not found")
+    if db.scalar(select(func.count()).select_from(models.Snils).where(models.Snils.client_id == client_id)):
+        raise ValueError("У клиента уже сохранены СНИЛС / ИПРА. Измените существующий документ.")
         
     snils = models.Snils(
         client_id=client_id, 
@@ -802,6 +1026,17 @@ def delete_snils(db: Session, snils_id: UUID) -> bool:
     snils = db.get(models.Snils, snils_id)
     if not snils:
         return False
+    client_id = snils.client_id
+    remaining_count = db.scalar(
+        select(func.count()).select_from(models.Snils).where(
+            models.Snils.client_id == client_id,
+            models.Snils.snils_id != snils_id,
+        )
+    ) or 0
+    if remaining_count == 0:
+        client = db.get(models.Client, client_id)
+        if client:
+            client.ipra_code = None
     db.delete(snils)
     try:
         db.commit()
@@ -859,6 +1094,53 @@ def create_status(db: Session, status_in: schemas.StatusCreate):
 # Module
 # -------------------------
 
+def _resolve_module_client_tsr(
+    db: Session,
+    *,
+    client_id: UUID,
+    tsr_id: UUID,
+    client_tsr_id: UUID | None,
+    create_if_missing: bool = True,
+) -> models.ClientTsr:
+    """Resolve the concrete client↔TSR instance used by a component.
+
+    Duplicate TSR codes are allowed, therefore an explicit ``client_tsr_id`` is
+    mandatory as soon as more than one matching assignment exists.
+    """
+    if client_tsr_id:
+        assignment = db.execute(
+            select(models.ClientTsr).where(
+                models.ClientTsr.client_tsr_id == client_tsr_id,
+                models.ClientTsr.client_id == client_id,
+            )
+        ).scalars().first()
+        if not assignment:
+            raise ValueError("Выбранный ТСР не принадлежит клиенту")
+        if assignment.tsr_id != tsr_id:
+            raise ValueError("Код комплектующей не совпадает с выбранным ТСР клиента")
+        return assignment
+
+    assignments = db.execute(
+        select(models.ClientTsr)
+        .where(
+            models.ClientTsr.client_id == client_id,
+            models.ClientTsr.tsr_id == tsr_id,
+        )
+        .order_by(models.ClientTsr.created_at, models.ClientTsr.client_tsr_id)
+    ).scalars().all()
+    if len(assignments) == 1:
+        return assignments[0]
+    if len(assignments) > 1:
+        raise ValueError("У клиента несколько одинаковых ТСР. Выберите нужную карточку ТСР.")
+    if not create_if_missing:
+        raise ValueError("Выбранный ТСР не прикреплён к клиенту")
+
+    assignment = models.ClientTsr(client_id=client_id, tsr_id=tsr_id)
+    db.add(assignment)
+    db.flush()
+    _sync_client_tsr_legacy_fields(db, client_id)
+    return assignment
+
 def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module:
     """Создает комплектующую. Проверяет клиента, если ID передан."""
     # Если client_id передан (не None), проверяем, существует ли такой клиент
@@ -870,10 +1152,22 @@ def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module
 
     if not module_in.tsr_id or not db.get(models.TstCodeRef, module_in.tsr_id):
         raise ValueError("Выбранный ТСР не найден")
-    
+
+    data = module_in.model_dump()
+    if client:
+        assignment = _resolve_module_client_tsr(
+            db,
+            client_id=client.client_id,
+            tsr_id=module_in.tsr_id,
+            client_tsr_id=module_in.client_tsr_id,
+        )
+        data["client_tsr_id"] = assignment.client_tsr_id
+    else:
+        data["client_tsr_id"] = None
+
     # Создаем объект модели
     db_module = models.Module(
-        **module_in.model_dump(),
+        **data,
         is_archived=bool(client.is_archived) if client else False,
         is_manually_archived=False,
     )
@@ -927,6 +1221,21 @@ def list_modules(
     stmt = stmt.offset(skip).limit(limit)
     return db.execute(stmt).scalars().all()
 
+
+def count_stock_module_units(db: Session) -> int:
+    """Количество свободных единиц комплектующих на рабочем складе."""
+    quantity = case(
+        (models.Module.quantity > 0, models.Module.quantity),
+        else_=1,
+    )
+    value = db.scalar(
+        select(func.coalesce(func.sum(quantity), 0)).where(
+            models.Module.client_id.is_(None),
+            models.Module.is_archived.is_(False),
+        )
+    )
+    return int(value or 0)
+
 def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -> Optional[models.Module]:
     db_module = db.get(models.Module, module_id)
     if not db_module:
@@ -949,6 +1258,29 @@ def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -
             raise ValueError("Для комплектующей необходимо выбрать ТСР")
         if not db.get(models.TstCodeRef, data['tsr_id']):
             raise ValueError("Выбранный ТСР не найден")
+
+    final_client_id = data.get('client_id', db_module.client_id)
+    final_tsr_id = data.get('tsr_id', db_module.tsr_id)
+    explicit_assignment = 'client_tsr_id' in data
+    assignment_id = data.get('client_tsr_id') if explicit_assignment else db_module.client_tsr_id
+    if not explicit_assignment and (
+        final_client_id != db_module.client_id or final_tsr_id != db_module.tsr_id
+    ):
+        assignment_id = None
+
+    if final_client_id is None:
+        data['client_tsr_id'] = None
+    else:
+        if final_tsr_id is None:
+            raise ValueError("Для комплектующей необходимо выбрать ТСР")
+        assignment = _resolve_module_client_tsr(
+            db,
+            client_id=final_client_id,
+            tsr_id=final_tsr_id,
+            client_tsr_id=assignment_id,
+        )
+        data['client_tsr_id'] = assignment.client_tsr_id
+        data['tsr_id'] = assignment.tsr_id
 
     for k, v in data.items():
         setattr(db_module, k, v)
@@ -1200,12 +1532,44 @@ def update_tsr(db: Session, tsr_id: UUID, full_tsr_code: str):
 
     existing = db.execute(select(models.TstCodeRef).where(models.TstCodeRef.full_tsr_code == full_tsr_code)).scalars().first()
     if existing and existing.tsr_id != tsr_id:
+        affected_client_ids: set[UUID] = set()
+        links = db.execute(
+            select(models.ClientTsr).where(models.ClientTsr.tsr_id == tsr_id)
+        ).scalars().all()
+        for link in links:
+            affected_client_ids.add(link.client_id)
+            duplicate = db.execute(
+                select(models.ClientTsr).where(
+                    models.ClientTsr.client_id == link.client_id,
+                    models.ClientTsr.tsr_id == existing.tsr_id,
+                )
+            ).scalars().first()
+            if duplicate:
+                if link.check_date and (
+                    not duplicate.check_date or link.check_date > duplicate.check_date
+                ):
+                    duplicate.check_date = link.check_date
+                combined_price = (
+                    _parse_decimal_money(duplicate.certificate_price)
+                    + _parse_decimal_money(link.certificate_price)
+                )
+                duplicate.certificate_price = (
+                    _format_decimal_money(combined_price)
+                    if combined_price
+                    else None
+                )
+                db.delete(link)
+            else:
+                link.tsr_id = existing.tsr_id
         _replace_tsr_code_in_clients(db, old_code, full_tsr_code)
         db.execute(
             update(models.Module)
             .where(models.Module.tsr_id == tsr_id)
             .values(tsr_id=existing.tsr_id)
         )
+        db.flush()
+        for client_id in affected_client_ids:
+            _sync_client_tsr_legacy_fields(db, client_id)
         db.delete(item)
         db.commit()
         db.refresh(existing)
@@ -1225,6 +1589,11 @@ def delete_tsr(db: Session, tsr_id: UUID):
         ).scalar_one()
         if linked_modules:
             raise ValueError("Этот ТСР используется в комплектующих. Сначала назначьте им другой ТСР.")
+        linked_clients = db.execute(
+            select(func.count()).select_from(models.ClientTsr).where(models.ClientTsr.tsr_id == tsr_id)
+        ).scalar_one()
+        if linked_clients:
+            raise ValueError("Этот ТСР прикреплён к клиентам. Сначала открепите его в карточках клиентов.")
         db.delete(tsr_to_delete)
         db.commit()
         return True

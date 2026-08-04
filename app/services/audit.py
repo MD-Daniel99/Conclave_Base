@@ -262,7 +262,7 @@ def _enrich_details(
         or _subject_from_snapshot(entity, before)
     )
 
-    raw["subject_label"] = ENTITY_LABELS.get(entity, "Запись")
+    raw.setdefault("subject_label", ENTITY_LABELS.get(entity, "Запись"))
     if subject_name:
         raw["subject_name"] = subject_name
 

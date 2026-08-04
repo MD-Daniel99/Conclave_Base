@@ -18,27 +18,21 @@ from typing import Optional, List, Any, Dict, Literal
 from uuid import UUID
 from datetime import datetime, date
 
-from pydantic import AliasChoices, BaseModel, Field, constr, field_validator, model_validator, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, constr, model_validator, ConfigDict
 
 # --- типы с базовой валидацией ---
 InnType = constr(pattern=r'^\d{10}(\d{2})?$', strip_whitespace=True)  # 10 или 12 цифр
 OgrnipType = constr(pattern=r'^\d{15}$', strip_whitespace=True)         # 15 цифр
 BicType = constr(pattern=r'^\d{9}$', strip_whitespace=True)            # 9 цифр
 AccountType = constr(min_length=20, max_length=34, pattern=r'^\d+$', strip_whitespace=True)  # 20..34 цифр
-PROSTHESIS_TYPES = frozenset({
-    "Верхних конечностей",
-    "Нижних конечностей",
-    "Верхних и нижних конечностей",
-})
+
 TaxationSystem = Literal["УСН", "ОСНО"]
-
-
-def validate_prosthesis_type(value: Optional[str]) -> Optional[str]:
-    if value is not None and value not in PROSTHESIS_TYPES:
-        allowed = ", ".join(sorted(PROSTHESIS_TYPES))
-        raise ValueError(f"Некорректный вид протеза. Допустимые значения: {allowed}.")
-    return value
-
+Prosthetists = Literal["Дмитрий", "Никита"]
+PlacesOfResidence = Literal["Ивана Сусанина, д. 3", "Большая Почтовая, д. 18/20"]
+PROSTHETIST_ADDRESSES = {
+    "Дмитрий": "Ивана Сусанина, д. 3",
+    "Никита": "Большая Почтовая, д. 18/20",
+}
 
 
 class ClientSummary(BaseModel):
@@ -56,11 +50,41 @@ class TsrSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ClientTsrBase(BaseModel):
+    tsr_id: UUID
+    check_date: Optional[date] = None
+    certificate_price: Optional[str] = None
+    prosthetist: Prosthetists | None = None
+    repeat_visit_date: Optional[date] = None
+
+
+class ClientTsrCreate(ClientTsrBase):
+    pass
+
+
+class ClientTsrUpdate(BaseModel):
+    check_date: Optional[date] = None
+    certificate_price: Optional[str] = None
+    prosthetist: Prosthetists | None = None
+    repeat_visit_date: Optional[date] = None
+
+
+class ClientTsrRead(ClientTsrBase):
+    client_tsr_id: UUID
+    client_id: UUID
+    place_of_residence: Optional[str] = None
+    tsr: TsrSummary
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 # -------------------------
 # Module
 # -------------------------
 class ModuleBase(BaseModel):
     tsr_id: Optional[UUID] = None
+    client_tsr_id: Optional[UUID] = None
     module_name_index: Optional[str] = None
     supplier: str
     ordered: int = Field(default=0, ge=0)
@@ -92,6 +116,7 @@ class ModuleUpdate(BaseModel):
     # Все поля опциональны для PATCH-запросов
     client_id: Optional[UUID] = None # Разрешаем перепривязку комплектующей
     tsr_id: Optional[UUID] = None
+    client_tsr_id: Optional[UUID] = None
     module_name_index: Optional[str] = None
     supplier: Optional[str] = None
     ordered: Optional[int] = Field(default=None, ge=0)
@@ -131,7 +156,7 @@ class AgentBase(BaseModel):
     """
     model_config = ConfigDict(from_attributes=True)
 
-    last_name: str = Field(..., description="Фамилия")
+    last_name: Optional[str] = Field(None, description="Фамилия")
     first_name: Optional[str] = Field(None, description="Имя")
     middle_name: Optional[str] = Field(None, description="Отчество")
     legal_address: Optional[str] = Field(None, description="Юридический адрес")
@@ -157,8 +182,9 @@ class AgentBase(BaseModel):
 
 
 class AgentCreate(AgentBase):
-    """Схема для создания агента."""
-    pass
+    """Схема создания: обязательно только непустое имя."""
+
+    first_name: str = Field(..., min_length=1, max_length=128, description="Имя")
 
 
 class AgentUpdate(BaseModel):
@@ -186,6 +212,8 @@ class AgentUpdate(BaseModel):
                     values[k] = None
                 else:
                     values[k] = v
+        if "first_name" in values and values.get("first_name") is None:
+            raise ValueError("Имя агента обязательно")
         return values
 
 
@@ -202,7 +230,7 @@ class AgentSummary(BaseModel):
 
     agent_id: UUID
     external_id: Optional[int] = None
-    last_name: str
+    last_name: Optional[str] = None
     first_name: Optional[str] = None
     middle_name: Optional[str] = None
 
@@ -244,9 +272,10 @@ class ClientBase(BaseModel):
     ipra_code: Optional[str] = None
     certificate_price: Optional[str] = None
     taxation_system: TaxationSystem = "УСН"
-    place_of_residence: Optional[str] = None
-    prosthetist: Optional[str] = None
+    place_of_residence: PlacesOfResidence | None = None
+    prosthetist: Prosthetists | None = None
     tsr_code: Optional[str] = None
+    email: Optional[str] = None
 
     prosthetist_salary: Optional[float] = 0.0
     agent_salary: Optional[float] = 0.0
@@ -269,16 +298,18 @@ class ClientBase(BaseModel):
                     values[k] = None
                 else:
                     values[k] = v
+        prosthetist = values.get("prosthetist")
+        if prosthetist in PROSTHETIST_ADDRESSES:
+            values["place_of_residence"] = PROSTHETIST_ADDRESSES[prosthetist]
+        elif prosthetist is None:
+            values["place_of_residence"] = None
         return values
 
 
 class ClientCreate(ClientBase):
+    # Протезист теперь назначается отдельно для каждого ТСР клиента.
+    prosthetist: Optional[Prosthetists] = None
     phones: Optional[List[PhoneCreate]] = Field(default_factory=list)
-
-    @field_validator("prosthesis_type")
-    @classmethod
-    def _validate_prosthesis_type(cls, value: Optional[str]) -> Optional[str]:
-        return validate_prosthesis_type(value)
 
 
 class ClientUpdate(BaseModel):
@@ -298,9 +329,10 @@ class ClientUpdate(BaseModel):
     ipra_code: Optional[str] = None
     certificate_price: Optional[str] = None
     taxation_system: Optional[TaxationSystem] = None
-    place_of_residence: Optional[str] = None
-    prosthetist: Optional[str] = None
+    place_of_residence: PlacesOfResidence | None = None
+    prosthetist: Optional[Prosthetists] = None
     tsr_code: Optional[str] = None
+    email: Optional[str] = None
 
     prosthetist_salary: Optional[float] = None
     agent_salary: Optional[float] = None
@@ -313,11 +345,6 @@ class ClientUpdate(BaseModel):
     other_expenses: Optional[float] = None
     agency_expenses: Optional[float] = None
 
-    @field_validator("prosthesis_type")
-    @classmethod
-    def _validate_prosthesis_type(cls, value: Optional[str]) -> Optional[str]:
-        return validate_prosthesis_type(value)
-
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
         for k, v in list(values.items()):
@@ -328,6 +355,11 @@ class ClientUpdate(BaseModel):
                     values[k] = None
                 else:
                     values[k] = v
+        prosthetist = values.get("prosthetist")
+        if prosthetist in PROSTHETIST_ADDRESSES:
+            values["place_of_residence"] = PROSTHETIST_ADDRESSES[prosthetist]
+        elif "prosthetist" in values and prosthetist is None:
+            values["place_of_residence"] = None
         return values
 
 
@@ -362,6 +394,7 @@ class ClientRead(ClientBase):
     passports: Optional[List["PassportRead"]] = Field(default_factory = list)
 
     modules: Optional[List["ModuleRead"]] = Field(default_factory = list)
+    tsr_items: Optional[List[ClientTsrRead]] = Field(default_factory=list)
 
     custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
@@ -419,7 +452,6 @@ class PassportBase(BaseModel):
     
     department_code: Optional[str] = None 
     
-    expiry_date: Optional[date] = None
     registration_address: str
 
 
@@ -440,7 +472,6 @@ class PassportUpdate(BaseModel):
     department_code: Optional[str] = None 
 
     
-    expiry_date: Optional[date] = None
     registration_address: Optional[str] = None
 
 class PassportRead(PassportBase):
@@ -559,6 +590,7 @@ class UserSettingsUpdate(BaseModel):
     tax_usn_percent: Optional[float] = Field(default=None, ge=0)
     tax_osno_percent: Optional[float] = Field(default=None, ge=0)
     acq_percent: Optional[float] = None
+    vat_percent: Optional[float] = Field(default=None, ge=0)
 
 # Documents storage
 class DocumentRead(BaseModel):
@@ -584,13 +616,15 @@ class DocumentType:
 
 class ContractGeneration(BaseModel):
     template_type: str = DocumentType.LLC_CONTRACT
-    document_number: str
+    document_number: Optional[str] = None
     document_date: str
     plan_date: Optional[str] = None
     document_number_prefix: Optional[str] = None
     document_number_suffix: Optional[str] = None
     appendix_number: Optional[str] = None
     appendix_date: Optional[str] = None
+    selected_client_tsr_ids: List[UUID] = Field(default_factory=list)
+    selected_tsr_ids: List[UUID] = Field(default_factory=list)
     selected_module_ids: List[UUID] = Field(default_factory=list)
 
 

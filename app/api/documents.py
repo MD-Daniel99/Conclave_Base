@@ -62,6 +62,14 @@ def list_contract_templates(
     return contracts.list_contract_templates()
 
 
+@router.get("/contracts/next_number")
+def next_contract_number(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return {"number": contracts.get_next_contract_number(db)}
+
+
 @router.get("/download/{document_id}")
 def download_file(
     document_id: UUID,
@@ -117,6 +125,9 @@ def gen_contract(
         action="document.generate_contract",
         user=current_user,
         after=contract,
-        details={"template_type": payload.template_type, "document_number": payload.document_number},
+        details={
+            "template_type": payload.template_type,
+            "document_number": contract.document_number,
+        },
     )
     return contract

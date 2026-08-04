@@ -12,6 +12,7 @@ import type {
   ClientSnilsCreate,
   ClientSnilsUpdate,
   ClientUpdatePayload,
+  ClientTsr,
 } from '@/shared/types/entities'
 
 export interface ListClientsParams {
@@ -63,6 +64,44 @@ export async function assignClientComponentsTsr(
   payload: { component_ids: string[]; tsr_id: string },
 ) {
   await api.patch(`/clients/${clientId}/components/tsr`, payload)
+}
+
+
+export async function fetchClientTsr(clientId: string) {
+  const { data } = await api.get<ClientTsr[]>(`/clients/${clientId}/tsr`)
+  return data
+}
+
+export async function attachClientTsr(
+  clientId: string,
+  payload: {
+    tsr_id: string
+    check_date?: string | null
+    certificate_price?: string | null
+    prosthetist?: 'Дмитрий' | 'Никита' | null
+    repeat_visit_date?: string | null
+  },
+) {
+  const { data } = await api.post<ClientTsr>(`/clients/${clientId}/tsr`, payload)
+  return data
+}
+
+export async function updateClientTsr(
+  clientId: string,
+  clientTsrId: string,
+  payload: {
+    check_date?: string | null
+    certificate_price?: string | null
+    prosthetist?: 'Дмитрий' | 'Никита' | null
+    repeat_visit_date?: string | null
+  },
+) {
+  const { data } = await api.patch<ClientTsr>(`/clients/${clientId}/tsr/${clientTsrId}`, payload)
+  return data
+}
+
+export async function detachClientTsr(clientId: string, clientTsrId: string) {
+  await api.delete(`/clients/${clientId}/tsr/${clientTsrId}`)
 }
 
 export async function fetchClientPhones(clientId: string) {

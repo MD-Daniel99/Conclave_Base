@@ -83,13 +83,13 @@ export type AgentCreate = {
      *
      * Ð¤Ð°Ð¼Ð¸Ð»Ð¸Ñ
      */
-    last_name: string;
+    last_name?: string | null;
     /**
      * First Name
      *
      * Ð˜Ð¼Ñ
      */
-    first_name?: string | null;
+    first_name: string;
     /**
      * Middle Name
      *
@@ -151,7 +151,7 @@ export type AgentRead = {
      *
      * Ð¤Ð°Ð¼Ð¸Ð»Ð¸Ñ
      */
-    last_name: string;
+    last_name?: string | null;
     /**
      * First Name
      *
@@ -233,7 +233,7 @@ export type AgentSummary = {
     /**
      * Last Name
      */
-    last_name: string;
+    last_name?: string | null;
     /**
      * First Name
      */
@@ -402,6 +402,8 @@ export type ClientCreate = {
      * Certificate Price
      */
     certificate_price?: string | null;
+    /** Email */
+    email?: string | null;
     /**
      * Place Of Residence
      */
@@ -492,6 +494,8 @@ export type ClientRead = {
      * Certificate Price
      */
     certificate_price?: string | null;
+    /** Email */
+    email?: string | null;
     /**
      * Place Of Residence
      */
@@ -629,6 +633,8 @@ export type ClientUpdate = {
      * Certificate Price
      */
     certificate_price?: string | null;
+    /** Email */
+    email?: string | null;
     /**
      * Place Of Residence
      */
@@ -687,6 +693,8 @@ export type ContractGeneration = {
      * Appendix Date
      */
     appendix_date?: string | null;
+    selected_client_tsr_ids?: Array<string>;
+    selected_tsr_ids?: Array<string>;
     selected_module_ids?: Array<string>;
 };
 
@@ -740,6 +748,7 @@ export type HttpValidationError = {
  */
 export type ModuleCreate = {
     tsr_id?: string | null;
+    client_tsr_id?: string | null;
     /**
      * Module Name Index
      */
@@ -835,6 +844,7 @@ export type ModuleNameIndexRead = {
  */
 export type ModuleRead = {
     tsr_id?: string | null;
+    client_tsr_id?: string | null;
     /**
      * Module Name Index
      */
@@ -924,6 +934,7 @@ export type ModuleUpdate = {
      */
     client_id?: string | null;
     tsr_id?: string | null;
+    client_tsr_id?: string | null;
     /**
      * Module Name Index
      */
@@ -1019,10 +1030,6 @@ export type PassportCreate = {
      */
     department_code?: string | null;
     /**
-     * Expiry Date
-     */
-    expiry_date?: string | null;
-    /**
      * Registration Address
      */
     registration_address: string;
@@ -1060,10 +1067,6 @@ export type PassportRead = {
      * Department Code
      */
     department_code?: string | null;
-    /**
-     * Expiry Date
-     */
-    expiry_date?: string | null;
     /**
      * Registration Address
      */
@@ -1118,10 +1121,6 @@ export type PassportUpdate = {
      * Department Code
      */
     department_code?: string | null;
-    /**
-     * Expiry Date
-     */
-    expiry_date?: string | null;
     /**
      * Registration Address
      */
@@ -1458,10 +1457,13 @@ export type UserSettingsUpdate = {
      * Tax Percent
      */
     tax_percent?: number | null;
+    tax_usn_percent?: number | null;
+    tax_osno_percent?: number | null;
     /**
      * Acq Percent
      */
     acq_percent?: number | null;
+    vat_percent?: number | null;
 };
 
 /**

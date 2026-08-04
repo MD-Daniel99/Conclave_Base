@@ -30,6 +30,11 @@ const ACTION_LABELS: Record<string, string> = {
   'tsr.upsert': 'Добавлен код ТСР',
   'tsr.update': 'Изменён код ТСР',
   'tsr.delete': 'Удалён код ТСР',
+  'tsr.attach': 'ТСР добавлен клиенту',
+  'tsr.detach': 'ТСР удалён у клиента',
+  'client_tsr.create': 'Добавлен клиенту',
+  'client_tsr.update': 'Изменены данные',
+  'client_tsr.delete': 'Удалён у клиента',
   'name_index.upsert': 'Добавлено название комплектующей',
   'name_index.delete': 'Удалено название комплектующей',
   'status.create': 'Добавлен статус',
@@ -49,10 +54,11 @@ const FIELD_LABELS: Record<string, string> = {
   client_id: 'Клиент',
   tsr_id: 'ТСР',
   deadline: 'Повторное обращение',
+  repeat_visit_date: 'Повторное обращение по ТСР',
   check_date: 'Дата пробития',
   certificate_price: 'Стоимость сертификата',
   taxation_system: 'Налогообложение',
-  prosthesis_type: 'Вид протеза',
+  prosthesis_type: 'Диагноз',
   tsr_code: 'ТСР',
   prosthetist_salary: 'ЗП протезиста',
   agent_salary: 'ЗП агента',
@@ -64,7 +70,7 @@ const FIELD_LABELS: Record<string, string> = {
   patient_payment: 'Пациенту',
   other_expenses: 'Прочее',
   agency_expenses: 'Агентские',
-  place_of_residence: 'Место проживания',
+  place_of_residence: 'Адрес протезиста',
   prosthetist: 'Протезист',
   is_archived: 'В архиве',
   ipra_code: 'Номер ИПРА',
@@ -98,15 +104,14 @@ const FIELD_LABELS: Record<string, string> = {
   issued_by: 'Кем выдан',
   issue_date: 'Дата выдачи',
   department_code: 'Код подразделения',
-  expiry_date: 'Дата окончания',
   registration_address: 'Адрес регистрации',
   filename: 'Файл',
   document_number: 'Номер договора',
   field_name: 'Название поля',
   field_type: 'Тип поля',
-  tax_percent: 'Налог УСН, %',
-  tax_usn_percent: 'Налог УСН, %',
-  tax_osno_percent: 'Налог ОСНО, %',
+  tax_percent: 'Налог при ставке 6%, %',
+  tax_usn_percent: 'Налог при ставке 6%, %',
+  tax_osno_percent: 'Налог при ставке 12%, %',
   acq_percent: 'Эквайринг, %',
   custom_values: 'Дополнительные поля',
 }
@@ -125,6 +130,7 @@ const IGNORED_FIELDS = new Set([
   'field_id',
   'value_id',
   'accounting_id',
+  'client_tsr_id',
   'log_id',
   'modules',
   'phones',
@@ -220,11 +226,19 @@ function withSubject(action: string, item: AuditLogItem) {
   if (!name) {
     return action
   }
-  return `${action}: ${label.toLowerCase()} «${name}»`
+  const visibleLabel = label === 'ТСР' ? label : label.toLowerCase()
+  return `${action}: ${visibleLabel} «${name}»`
 }
 
 export function formatAuditAction(item: AuditLogItem) {
-  const action = ACTION_LABELS[item.action] ?? item.action ?? 'Изменение'
+  const clientTsrLabels: Record<string, string> = {
+    'tsr.attach': 'ТСР добавлен клиенту',
+    'tsr.update': 'Изменены данные ТСР клиента',
+    'tsr.detach': 'ТСР удалён у клиента',
+  }
+  const action = item.entity === 'client' && clientTsrLabels[item.action]
+    ? clientTsrLabels[item.action]
+    : ACTION_LABELS[item.action] ?? item.action ?? 'Изменение'
   return withSubject(action, item)
 }
 

@@ -723,6 +723,7 @@ def reset_business_data(db: Any, models: Any, delete: Any, text: Any) -> None:
         models.Passport,
         models.Snils,
         models.Reminder,
+        models.ClientTsr,
         models.Module,
         models.Client,
         models.Agent,
@@ -788,6 +789,23 @@ def execute_import(plan: ImportPlan) -> None:
                 db.add(client)
                 db.flush()
                 client_by_name[item.full_name] = client
+                for tsr_index, tsr_item in enumerate(item.tsr_items):
+                    tsr_model = tsr_by_code.get(tsr_item.code)
+                    if not tsr_model:
+                        continue
+                    db.add(models.ClientTsr(
+                        client_id=client.client_id,
+                        tsr_id=tsr_model.tsr_id,
+                        check_date=item.check_date,
+                        # The source CSV contains one total certificate amount,
+                        # so it is preserved on the first TSR and can later be
+                        # split manually in the client card when necessary.
+                        certificate_price=(
+                            f"{item.certificate_price:.2f}"
+                            if tsr_index == 0
+                            else None
+                        ),
+                    ))
                 if item.phone:
                     db.add(models.Phone(client_id=client.client_id, number=item.phone))
                 if item.snils:

@@ -16,7 +16,8 @@
 """
 
 from sqlalchemy import (
-    Column, String, Text, Date, Integer, DateTime, ForeignKey, JSON, BigInteger, text, func, Float, Boolean, Sequence
+    Column, String, Text, Date, Integer, DateTime, ForeignKey, JSON, BigInteger, text, func, Float, Boolean, Sequence,
+    CheckConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -43,7 +44,7 @@ class Agent(Base):
         unique=True
     )
 
-    last_name = Column(String(128), nullable=False)
+    last_name = Column(String(128), nullable=True)
     first_name = Column(String(128), nullable=False)
     middle_name = Column(String(128), nullable=True)  
 
@@ -88,6 +89,22 @@ class Stage(Base):
 
 class Client(Base):
     __tablename__ = "CLIENT"
+    __table_args__ = (
+        CheckConstraint(
+            "taxation_system IN ('УСН', 'ОСНО')",
+            name="ck_client_taxation_system_allowed",
+        ),
+        CheckConstraint(
+            "prosthetist IS NULL OR prosthetist IN ('Дмитрий', 'Никита')",
+            name="ck_client_prosthetist_allowed",
+        ),
+        CheckConstraint(
+            "(prosthetist IS NULL AND place_of_residence IS NULL) OR "
+            "(prosthetist = 'Дмитрий' AND place_of_residence = 'Ивана Сусанина, д. 3') OR "
+            "(prosthetist = 'Никита' AND place_of_residence = 'Большая Почтовая, д. 18/20')",
+            name="ck_client_prosthetist_address",
+        ),
+    )
 
     client_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
 
@@ -116,15 +133,17 @@ class Client(Base):
 
     check_date = Column(Date, nullable=True)          
     certificate_price = Column(String(255), nullable=True)
+
     taxation_system = Column(
-        String(4),
+        String(16),
         nullable=False,
         default="УСН",
         server_default=text("'УСН'"),
     )
-    ipra_code = Column(String(64), nullable = True)
     place_of_residence = Column(String(255), nullable = True)
-    prosthetist = Column(String(255), nullable=True)
+    prosthetist = Column(String(32), nullable=True)
+
+    ipra_code = Column(String(64), nullable = True)
     is_archived = Column(
         Boolean,
         nullable=False,
@@ -133,9 +152,8 @@ class Client(Base):
         index=True,
     )
 
-    prosthesis_type = Column(String(255), ForeignKey("REF_PROSTHESIS.name"), nullable=True) 
-    # Хранится как многострочное текстовое поле, потому что в текущем UI можно выбрать несколько ТСР.
-    # Для строгой нормализации позже лучше вынести в отдельную таблицу CLIENT_TSR.
+    prosthesis_type = Column(String(255), nullable=True)
+    # Legacy mirror for old reports/templates. The normalized source of truth is CLIENT_TSR.
     tsr_code = Column(Text, nullable=True)
 
     prosthetist_salary = Column(Float, default=0.0)
@@ -150,6 +168,7 @@ class Client(Base):
     patient_payment = Column(Float, nullable=False, default=0.0, server_default=text("0"))
     other_expenses = Column(Float, nullable=False, default=0.0, server_default=text("0"))
     agency_expenses = Column(Float, nullable=False, default=0.0, server_default=text("0"))
+    email = Column(String(64), nullable = True)
 
     # отношения
     # prosthesis_type = relationship("ProsthesisRef", back_populates = "client")
@@ -162,6 +181,13 @@ class Client(Base):
     reminders = relationship("Reminder", back_populates="client", cascade="all, delete-orphan", passive_deletes=True)
     # Комплектующие — складские позиции, поэтому при удалении клиента их нельзя удалять каскадом.
     modules = relationship("Module", back_populates="client", passive_deletes=True)
+    tsr_items = relationship(
+        "ClientTsr",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ClientTsr.created_at",
+    )
 
     # В класс Client добавьте relationship (после существующих)
     accounting_values = relationship("AccountingFieldValue", back_populates="client", cascade="all, delete-orphan")
@@ -220,7 +246,6 @@ class Passport(Base):
     issued_by = Column(Text, nullable=False)
     issue_date = Column(Date, nullable=False)
     department_code = Column(String(7), nullable=True) 
-    expiry_date = Column(Date, nullable=True)
     registration_address = Column(Text, nullable=False)
     version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -268,6 +293,12 @@ class Module(Base):
     module_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
     client_id = Column(UUID(as_uuid=True), ForeignKey("CLIENT.client_id", ondelete="SET NULL"), nullable=True)
     tsr_id = Column(UUID(as_uuid=True), ForeignKey("REF_TSR.tsr_id", ondelete="RESTRICT"), nullable=True, index=True)
+    client_tsr_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("CLIENT_TSR.client_tsr_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     module_name_index = Column(String(128), ForeignKey("REF_NameIndex.name_index"), nullable = False) 
     supplier = Column(String(64), nullable = False)
     ordered = Column(Integer, nullable=False, default=0, server_default=text("0"))
@@ -302,6 +333,7 @@ class Module(Base):
 
     client = relationship("Client", back_populates = "modules")
     tsr = relationship("TstCodeRef", back_populates="modules")
+    client_tsr = relationship("ClientTsr", back_populates="modules")
 
 
 class User(Base):
@@ -319,9 +351,12 @@ class User(Base):
         return f"<User {self.username} ({self.role})>"
 
 class ProsthesisRef(Base):
+    """Legacy reference retained for API/backward compatibility."""
+
     __tablename__ = "REF_PROSTHESIS"
-    prosthesis_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
-    name = Column(Text, nullable = True, unique = True)
+    prosthesis_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    name = Column(Text, nullable=True, unique=True)
+
 
 class TstCodeRef(Base):
     __tablename__ = "REF_TSR"
@@ -330,6 +365,54 @@ class TstCodeRef(Base):
     #letter_code = Column(Text, nulllable = True, unique = True)
     full_tsr_code = Column(Text, nullable=True, unique=True)
     modules = relationship("Module", back_populates="tsr", passive_deletes=True)
+    client_links = relationship("ClientTsr", back_populates="tsr", passive_deletes=True)
+
+
+class ClientTsr(Base):
+    """Explicit TSR assignment to a client, independent from warehouse components."""
+
+    __tablename__ = "CLIENT_TSR"
+    __table_args__ = (
+        CheckConstraint(
+            "prosthetist IS NULL OR prosthetist IN ('Дмитрий', 'Никита')",
+            name="ck_client_tsr_prosthetist_allowed",
+        ),
+        CheckConstraint(
+            "(prosthetist IS NULL AND place_of_residence IS NULL) OR "
+            "(prosthetist = 'Дмитрий' AND place_of_residence = 'Ивана Сусанина, д. 3') OR "
+            "(prosthetist = 'Никита' AND place_of_residence = 'Большая Почтовая, д. 18/20')",
+            name="ck_client_tsr_prosthetist_address",
+        ),
+    )
+    client_tsr_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    client_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("CLIENT.client_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tsr_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("REF_TSR.tsr_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    check_date = Column(Date, nullable=True)
+    certificate_price = Column(String(255), nullable=True)
+    prosthetist = Column(String(32), nullable=True)
+    place_of_residence = Column(String(255), nullable=True)
+    repeat_visit_date = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    client = relationship("Client", back_populates="tsr_items")
+    tsr = relationship("TstCodeRef", back_populates="client_links")
+    modules = relationship("Module", back_populates="client_tsr", passive_deletes=True)
 
 
 class ModuleNameIndex(Base):

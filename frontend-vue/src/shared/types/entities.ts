@@ -30,7 +30,25 @@ import type {
 } from '@/shared/api/generated/types.gen'
 
 export type Agent = AgentRead
-export type Client = Omit<ClientRead, 'modules'> & {
+export interface ClientTsr {
+  client_tsr_id: string
+  client_id: string
+  tsr_id: string
+  check_date?: string | null
+  certificate_price?: string | null
+  prosthetist?: 'Дмитрий' | 'Никита' | null
+  place_of_residence?: string | null
+  repeat_visit_date?: string | null
+  tsr: {
+    id?: string
+    tsr_id?: string
+    full_tsr_code?: string | null
+  }
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type Client = Omit<ClientRead, 'modules' | 'tsr_items'> & {
   prosthetist?: string | null
   is_archived?: boolean
   taxation_system?: 'УСН' | 'ОСНО'
@@ -42,6 +60,7 @@ export type Client = Omit<ClientRead, 'modules'> & {
   other_expenses?: number | null
   agency_expenses?: number | null
   modules?: ComponentItem[]
+  tsr_items?: ClientTsr[]
 }
 export type ClientPhone = PhoneRead
 export type ClientPhoneCreate = PhoneCreate
@@ -68,7 +87,10 @@ export type ClientUpdatePayload = ClientUpdate & {
   agency_expenses?: number | null
 }
 export type ClientDocument = DocumentRead
-export type ContractGenerationPayload = ContractGeneration
+export type ContractGenerationPayload = ContractGeneration & {
+  selected_client_tsr_ids?: string[]
+  selected_tsr_ids?: string[]
+}
 export type ComponentItem = ModuleRead & {
   is_archived?: boolean
   is_manually_archived?: boolean
@@ -152,6 +174,7 @@ export interface AccountingReportAmounts {
   cost: number
   salary: number
   custom_expenses: number
+  vat: number
   tax: number
   acquiring: number
   profit: number
@@ -178,6 +201,7 @@ export interface AccountingReport {
     tax_usn_percent?: number
     tax_osno_percent?: number
     acquiring_percent: number
+    vat_percent?: number
   }
   custom_fields: AccountingReportField[]
   rows: AccountingReportRow[]
@@ -197,6 +221,7 @@ export interface ContractAccountingAmounts {
   other_expenses: number
   agency_expenses: number
   custom_expenses: number
+  vat: number
   tax: number
   tax_percent?: number
   acquiring: number

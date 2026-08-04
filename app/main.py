@@ -35,31 +35,51 @@ from app.api import (
 models.Base.metadata.create_all(bind=engine)
 
 
+STATUS_DEFAULTS: dict[str, str] = {
+    "new": "Новый",
+    "work": "В работе",
+    "fail": "Отказ",
+    "hold": "Отложен",
+    "success": "Успешно завершен",
+}
+
+STAGE_DEFAULTS: dict[str, str] = {
+    "contact": "Первичный контакт",
+    "meeting": "Встреча/Переговоры",
+    "contract": "Договор",
+    "prepay": "Оплата",
+    "production": "Протезирование",
+    "done": "Закрытие актов",
+    "shipping": "Выполнено",
+}
+
+
 def init_db_data() -> None:
+    """Создать или синхронизировать системные справочники по стабильным кодам.
+
+    В отличие от прежней реализации, обновление выполняется и тогда, когда
+    таблицы уже содержат записи. Поэтому изменение подписи в словарях выше
+    применяется после пересборки и перезапуска приложения.
+    """
     db = SessionLocal()
     try:
-        if db.query(models.Status).count() == 0:
-            db.add_all([
-                models.Status(status_code="new", description="Новый"),
-                models.Status(status_code="work", description="В работе"),
-                models.Status(status_code="success", description="Успешно завершен"),
-                models.Status(status_code="fail", description="Отказ"),
-                models.Status(status_code="hold", description="Отложен"),
-            ])
-            db.commit()
+        for status_code, description in STATUS_DEFAULTS.items():
+            db.merge(
+                models.Status(
+                    status_code=status_code,
+                    description=description,
+                )
+            )
 
-        if db.query(models.Stage).count() == 0:
-            db.add_all([
-                models.Stage(stage_code="contact", description="Первичный контакт"),
-                models.Stage(stage_code="meeting", description="Встреча/Переговоры"),
-                models.Stage(stage_code="kp", description="Отправлено КП"),
-                models.Stage(stage_code="contract", description="Договор"),
-                models.Stage(stage_code="prepay", description="Предоплата"),
-                models.Stage(stage_code="production", description="В производстве"),
-                models.Stage(stage_code="shipping", description="Отгрузка"),
-                models.Stage(stage_code="done", description="Закрытие актов"),
-            ])
-            db.commit()
+        for stage_code, description in STAGE_DEFAULTS.items():
+            db.merge(
+                models.Stage(
+                    stage_code=stage_code,
+                    description=description,
+                )
+            )
+
+        db.commit()
     except Exception:
         db.rollback()
         raise

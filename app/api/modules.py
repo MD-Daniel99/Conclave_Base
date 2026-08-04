@@ -43,6 +43,14 @@ def api_list_components(
     return crud.list_modules(db, skip, limit, q, supplier, client_id, unassigned, archived)
 
 
+@router.get("/stock/count", response_model=int)
+def api_count_stock_components(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return crud.count_stock_module_units(db)
+
+
 @router.get("/{component_id}", response_model=schemas.ModuleRead)
 def api_get_component(
     component_id: UUID,

@@ -20,7 +20,7 @@ import { fetchAgents } from '@/shared/api/agents'
 import { fetchRecentAudit } from '@/shared/api/audit'
 import { fetchClientContractCoverage } from '@/shared/api/accounting'
 import { fetchClients } from '@/shared/api/clients'
-import { fetchComponents } from '@/shared/api/components'
+import { fetchStockComponentCount } from '@/shared/api/components'
 import { getApiErrorMessage } from '@/shared/api/http'
 import EmptyState from '@/shared/ui/EmptyState.vue'
 import StatusPill from '@/shared/ui/StatusPill.vue'
@@ -30,13 +30,13 @@ import {
   formatAuditTime,
   summarizeAuditDetails,
 } from '@/shared/lib/audit'
-import type { Agent, AuditLogItem, Client, ComponentItem } from '@/shared/types/entities'
+import type { Agent, AuditLogItem, Client } from '@/shared/types/entities'
 
 const authStore = useAuthStore()
 const recentAudit = ref<AuditLogItem[]>([])
 const clients = ref<Client[]>([])
 const agents = ref<Agent[]>([])
-const stockComponents = ref<ComponentItem[]>([])
+const stockComponentCount = ref(0)
 const clientsWithoutContracts = ref<number | null>(null)
 const isLoading = ref(false)
 const dashboardError = ref('')
@@ -45,15 +45,10 @@ const recentClients = computed(() => [...clients.value]
   .sort((left, right) => String(right.updated_at ?? '').localeCompare(String(left.updated_at ?? '')))
   .slice(0, 5))
 
-const stockComponentCount = computed(() => stockComponents.value.reduce(
-  (sum, item) => sum + Math.max(0, Number(item.quantity ?? 0)),
-  0,
-))
-
 const quickActions = computed(() => [
   {
     to: '/clients',
-    label: 'Клиенты',
+    label: 'Пациенты',
     description: 'Карточки и этапы',
     icon: UsersRound,
   },
@@ -125,7 +120,7 @@ async function loadDashboard() {
   const requests = [
     fetchClients({ limit: 1000, archived: false }),
     fetchAgents({ limit: 1000 }),
-    fetchComponents({ limit: 1000, archived: false, unassigned: true }),
+    fetchStockComponentCount(),
     fetchClientContractCoverage(),
     authStore.isAdmin ? fetchRecentAudit(12) : Promise.resolve([]),
   ] as const
@@ -134,7 +129,7 @@ async function loadDashboard() {
 
   if (clientResult.status === 'fulfilled') clients.value = clientResult.value
   if (agentResult.status === 'fulfilled') agents.value = agentResult.value
-  if (stockResult.status === 'fulfilled') stockComponents.value = stockResult.value
+  if (stockResult.status === 'fulfilled') stockComponentCount.value = stockResult.value
   if (coverageResult.status === 'fulfilled') {
     clientsWithoutContracts.value = coverageResult.value.filter((item) => item.requires_contract).length
   }
@@ -160,7 +155,7 @@ onMounted(loadDashboard)
         <p class="eyebrow">Центр управления</p>
         <h1>Здравствуйте, {{ authStore.user?.username }}</h1>
         <p class="muted page-subtitle">
-          Главное по клиентам, срокам и складу — без переходов между разделами.
+          Главное по пациентам, срокам и складу — без переходов между разделами.
         </p>
       </div>
       <div class="row-actions page-heading-actions">
@@ -170,7 +165,7 @@ onMounted(loadDashboard)
         </button>
         <RouterLink class="primary-button" to="/clients">
           <UserPlus :size="16" aria-hidden="true" />
-          Новый клиент
+          Новый пациент
         </RouterLink>
       </div>
     </div>
@@ -186,7 +181,7 @@ onMounted(loadDashboard)
     <div v-else class="metric-grid dashboard-metrics">
       <article class="metric-card">
         <div class="metric-card-header">
-          <span>Активные клиенты</span>
+          <span>Активные пациенты</span>
           <span class="metric-icon"><UsersRound :size="19" aria-hidden="true" /></span>
         </div>
         <strong>{{ clients.length }}</strong>
@@ -195,12 +190,12 @@ onMounted(loadDashboard)
 
       <article class="metric-card metric-card-contracts">
         <div class="metric-card-header">
-          <span>Клиентов без договоров</span>
+          <span>Пациентов без договоров</span>
           <span class="metric-icon amber"><FileWarning :size="19" aria-hidden="true" /></span>
         </div>
         <strong>{{ clientsWithoutContracts ?? '—' }}</strong>
         <span class="metric-trend">
-          {{ clientsWithoutContracts === null ? 'Показатель временно недоступен' : 'Клиенты, для которых договор ещё не сформирован' }}
+          {{ clientsWithoutContracts === null ? 'Показатель временно недоступен' : 'Пациенты, для которых договор ещё не сформирован' }}
         </span>
       </article>
 
@@ -218,11 +213,11 @@ onMounted(loadDashboard)
       <section class="surface-panel dashboard-panel">
         <div class="dashboard-panel-heading">
           <div>
-            <h2>Недавно обновлённые клиенты</h2>
+            <h2>Недавно обновлённые пациенты</h2>
             <p>Карточки, в которых были последние изменения</p>
           </div>
           <RouterLink class="ghost-button" to="/clients">
-            Все клиенты
+            Все пациенты
             <ArrowRight :size="15" aria-hidden="true" />
           </RouterLink>
         </div>
@@ -246,7 +241,7 @@ onMounted(loadDashboard)
         </div>
         <EmptyState
           v-else
-          title="Клиентов пока нет"
+          title="Пациентов пока нет"
           description="Создайте первую карточку, чтобы она появилась в рабочем обзоре."
         />
       </section>

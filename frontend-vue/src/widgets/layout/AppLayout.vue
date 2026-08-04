@@ -31,7 +31,7 @@ const profileMenu = ref<InstanceType<typeof Menu> | null>(null)
 
 const allNavigationItems = [
   { to: '/', label: 'Обзор', icon: LayoutDashboard },
-  { to: '/clients', label: 'Клиенты', icon: UsersRound },
+  { to: '/clients', label: 'Пациенты', icon: UsersRound },
   { to: '/agents', label: 'Агенты', icon: Handshake },
   { to: '/warehouse', label: 'Склад', icon: PackageOpen },
   { to: '/accounting', label: 'Бухгалтерия', icon: Landmark, adminOnly: true },

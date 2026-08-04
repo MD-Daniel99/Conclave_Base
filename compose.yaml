@@ -35,7 +35,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./storage:/app/storage.      
+      - ./storage:/app/storage
       - ./scripts:/app/scripts:ro
       - ./import_csv:/app/import_csv:ro
     depends_on:

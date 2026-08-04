@@ -12,6 +12,11 @@ export async function fetchContractTemplates() {
   return data
 }
 
+export async function fetchNextContractNumber() {
+  const { data } = await api.get<{ number: string }>('/documents/contracts/next_number')
+  return data.number
+}
+
 export async function fetchClientDocuments(clientId: string) {
   const { data } = await api.get<ClientDocument[]>(`/documents/clients/${clientId}/list`)
   return data

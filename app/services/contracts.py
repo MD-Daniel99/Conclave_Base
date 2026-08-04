@@ -7,6 +7,7 @@ from typing import Any
 from docxtpl import DocxTemplate
 from jinja2 import Environment, StrictUndefined
 from num2words import num2words
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app import crud, models
@@ -46,6 +47,24 @@ def list_contract_templates() -> list[dict[str, str]]:
         {"value": key, "label": config["label"]}
         for key, config in TEMPLATES_CONFIG.items()
     ]
+
+
+def get_next_contract_number(db: Session) -> str:
+    """Return the next number in the new PREFIX/NNN contract series.
+
+    Legacy test documents used date-like numbers without a slash. They are not
+    part of the new global 001, 002, ... sequence requested for contracts.
+    """
+    existing_numbers = db.execute(
+        select(models.Document.document_number)
+        .where(models.Document.document_type.in_(("llc_contract", "dmk_contract")))
+    ).scalars().all()
+    contract_count = sum(
+        1
+        for raw_number in existing_numbers
+        if re.fullmatch(r"\s*[^/]+/\d+\s*", str(raw_number or ""))
+    )
+    return f"{contract_count + 1:03d}"
 
 
 def normalize_template_key(raw_key: str | None) -> str:
@@ -116,7 +135,13 @@ def format_money(amount: float) -> str:
 
 def rub_to_words(amount: float) -> str:
     try:
-        return num2words(amount, lang="ru", to="currency", currency="RUB").capitalize()
+        rubles = int(amount)
+        kopecks = int(round((amount - rubles) * 100))
+        if kopecks == 100:
+            rubles += 1
+            kopecks = 0
+        words = num2words(rubles, lang="ru").capitalize()
+        return f"{words} {kopecks:02d}/100" if kopecks else words
     except Exception:
         return format_money(amount)
 
@@ -244,10 +269,11 @@ def group_llc_components_by_tsr(components: list[dict[str, Any]]) -> list[dict[s
                 f"У комплектующей «{component.get('module_name_index') or index}» не выбран ТСР"
             )
 
-        group_key = str(component.get("tsr_id") or tsr.get("id") or tsr_full)
+        group_key = str(component.get("client_tsr_id") or component.get("tsr_id") or tsr.get("id") or tsr_full)
         if group_key not in groups:
             groups[group_key] = {
                 "key": group_key,
+                "client_tsr_id": str(component.get("client_tsr_id") or ""),
                 "tsr_id": str(component.get("tsr_id") or tsr.get("id") or ""),
                 "tsr_full": tsr_full,
                 "components": [],
@@ -257,15 +283,48 @@ def group_llc_components_by_tsr(components: list[dict[str, Any]]) -> list[dict[s
     return list(groups.values())
 
 
-def build_llc_contract_items(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build one LLC contract row per TSR with its selected components."""
+def build_llc_contract_items(
+    components: list[dict[str, Any]],
+    client_tsr_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build one LLC contract row per selected client TSR.
+
+    A TSR remains selectable even before components are attached. Components
+    are supplemental details; the contractual price is always the certificate
+    price stored on the client↔TSR link.
+    """
+    components_by_assignment: dict[str, list[dict[str, Any]]] = {}
+    legacy_components_by_tsr: dict[str, list[dict[str, Any]]] = {}
+    for component in components:
+        client_tsr_id = str(component.get("client_tsr_id") or "")
+        tsr_id = str(component.get("tsr_id") or (component.get("tsr") or {}).get("id") or "")
+        if client_tsr_id:
+            components_by_assignment.setdefault(client_tsr_id, []).append(component)
+        if tsr_id:
+            legacy_components_by_tsr.setdefault(tsr_id, []).append(component)
+
     items: list[dict[str, Any]] = []
-    for group in group_llc_components_by_tsr(components):
-        tsr_full = group["tsr_full"]
+    for client_tsr in client_tsr_items:
+        tsr = client_tsr.get("tsr") or {}
+        client_tsr_id = str(client_tsr.get("client_tsr_id") or "")
+        tsr_id = str(client_tsr.get("tsr_id") or tsr.get("id") or "")
+        tsr_full = str(tsr.get("full_tsr_code") or "").strip()
+        if not tsr_full:
+            raise ValueError("У выбранного ТСР отсутствует код в справочнике")
         code = extract_tsr_numeric(tsr_full)
         name = extract_tsr_literals(tsr_full) or tsr_full
-        group_components = group["components"]
-        total_price = sum(parse_money(component.get("price")) for component in group_components)
+        group_components = sorted(
+            components_by_assignment.get(client_tsr_id, [])
+            if client_tsr_id
+            else legacy_components_by_tsr.get(tsr_id, []),
+            key=lambda component: (
+                str(component.get("module_name_index") or "").casefold(),
+                str(component.get("module_id") or ""),
+            ),
+        )
+        certificate_price = parse_money(client_tsr.get("certificate_price"))
+        if certificate_price <= 0:
+            raise ValueError(f"Для ТСР «{tsr_full}» укажите стоимость сертификата")
         component_names: list[str] = []
         for component_index, component in enumerate(group_components, start=1):
             component_name = str(component.get("module_name_index") or "").strip() or "Без названия"
@@ -279,10 +338,14 @@ def build_llc_contract_items(components: list[dict[str, Any]]) -> list[dict[str,
             "name_and_code": "\n".join(part for part in (code or tsr_full, name) if part),
             # Одна строка — один выбранный ТСР (протез), а не количество его деталей.
             "quantity": 1,
-            "price": format_money(total_price),
-            "raw_price": total_price,
-            "total_price": format_money(total_price),
-            "raw_total_price": total_price,
+            # Цена договора по ТСР — стоимость электронного сертификата,
+            # а не сумма отпускных цен комплектующих.
+            "price": format_money(certificate_price),
+            "raw_price": certificate_price,
+            "total_price": format_money(certificate_price),
+            "raw_total_price": certificate_price,
+            "certificate_price": certificate_price,
+            "check_date": format_date_ru(client_tsr.get("check_date")),
             "module_name": ", ".join(
                 str(component.get("module_name_index") or "")
                 for component in group_components
@@ -297,7 +360,7 @@ def select_llc_modules(client: dict[str, Any], payload: Any) -> list[dict[str, A
     modules = client.get("modules") or []
     selected_ids = {str(value) for value in (getattr(payload, "selected_module_ids", None) or [])}
     if not selected_ids:
-        raise ValueError("Для договора ООО выберите хотя бы одну комплектующую клиента")
+        return []
 
     selected = [module for module in modules if str(module.get("module_id")) in selected_ids]
     if len(selected) != len(selected_ids):
@@ -305,11 +368,93 @@ def select_llc_modules(client: dict[str, Any], payload: Any) -> list[dict[str, A
     return selected
 
 
+def select_llc_tsr_items(
+    client: dict[str, Any],
+    payload: Any,
+    selected_modules: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    attached_items = client.get("tsr_items") or []
+    attached_by_assignment_id = {
+        str(item.get("client_tsr_id") or ""): item
+        for item in attached_items
+        if str(item.get("client_tsr_id") or "")
+    }
+    selected_assignment_ids = {
+        str(value)
+        for value in (getattr(payload, "selected_client_tsr_ids", None) or [])
+        if str(value)
+    }
+    selected_tsr_ids = {
+        str(value) for value in (getattr(payload, "selected_tsr_ids", None) or []) if str(value)
+    }
+
+    # Backward compatibility with an older frontend that sent only TSR or
+    # component IDs. New clients select the concrete client↔TSR instance.
+    if not selected_assignment_ids and not selected_tsr_ids:
+        selected_assignment_ids = {
+            str(module.get("client_tsr_id") or "")
+            for module in selected_modules
+            if str(module.get("client_tsr_id") or "")
+        }
+        if not selected_assignment_ids:
+            selected_tsr_ids = {
+                str(module.get("tsr_id") or (module.get("tsr") or {}).get("id") or "")
+                for module in selected_modules
+                if str(module.get("tsr_id") or (module.get("tsr") or {}).get("id") or "")
+            }
+    if not selected_assignment_ids and not selected_tsr_ids:
+        raise ValueError("Для договора ООО выберите хотя бы один ТСР клиента")
+
+    if selected_assignment_ids:
+        missing_ids = selected_assignment_ids.difference(attached_by_assignment_id)
+        if missing_ids:
+            raise ValueError("Один или несколько выбранных ТСР не прикреплены к клиенту")
+        selected_items = [
+            item for item in attached_items
+            if str(item.get("client_tsr_id") or "") in selected_assignment_ids
+        ]
+    else:
+        attached_tsr_ids = {
+            str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or "")
+            for item in attached_items
+        }
+        missing_ids = selected_tsr_ids.difference(attached_tsr_ids)
+        if missing_ids:
+            raise ValueError("Один или несколько выбранных ТСР не прикреплены к клиенту")
+        # A legacy request selecting a code includes all duplicate instances of
+        # that code, which is the least surprising backward-compatible result.
+        selected_items = [
+            item for item in attached_items
+            if str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or "") in selected_tsr_ids
+        ]
+
+    selected_item_ids = {str(item.get("client_tsr_id") or "") for item in selected_items}
+    selected_item_tsr_ids = {
+        str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or "")
+        for item in selected_items
+    }
+    for module in selected_modules:
+        module_assignment_id = str(module.get("client_tsr_id") or "")
+        module_tsr_id = str(module.get("tsr_id") or (module.get("tsr") or {}).get("id") or "")
+        if module_assignment_id:
+            if module_assignment_id not in selected_item_ids:
+                raise ValueError("Выбранная комплектующая относится к ТСР, который не включён в договор")
+        elif module_tsr_id not in selected_item_tsr_ids:
+            raise ValueError("Выбранная комплектующая относится к ТСР, который не включён в договор")
+
+    return selected_items
+
+
 def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc_contract") -> dict[str, Any]:
     passport = latest_by_created(client.get("passports") or [])
     snils = latest_by_created(client.get("snils") or [])
     phones = client.get("phones") or []
     modules = select_llc_modules(client, payload) if template_key == "llc_contract" else (client.get("modules") or [])
+    selected_client_tsr_items = (
+        select_llc_tsr_items(client, payload, modules)
+        if template_key == "llc_contract"
+        else []
+    )
 
     raw_series_number = str(passport.get("series_number", "")).replace("-", " ")
     compact_series_number = re.sub(r"\D", "", raw_series_number)
@@ -340,14 +485,18 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     prosthesis_type = str(client.get("prosthesis_type") or "").strip()
     clean_prosthesis_type = re.sub(r"(?i)^протез\s+", "", prosthesis_type)
     contract_items = (
-        build_llc_contract_items(modules)
+        build_llc_contract_items(modules, selected_client_tsr_items)
         if template_key == "llc_contract"
         else build_contract_items(client, modules)
     )
 
     module_sum = sum(parse_money(module.get("price")) for module in modules)
     certificate_sum = parse_money(client.get("certificate_price"))
-    total_sum = module_sum if template_key == "llc_contract" else (module_sum or certificate_sum)
+    total_sum = (
+        sum(parse_money(item.get("raw_total_price")) for item in contract_items)
+        if template_key == "llc_contract"
+        else (module_sum or certificate_sum)
+    )
 
     full_name = f"{client.get('last_name', '')} {client.get('first_name', '')} {client.get('middle_name') or ''}".strip()
     phone = phones[0].get("number", "") if phones else ""
@@ -438,6 +587,17 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     if not client:
         raise ValueError("Клиент не найден")
 
+    if template_key in {"llc_contract", "dmk_contract"}:
+        # Serialize number allocation inside the current DB transaction. The UI
+        # only previews the next number; the server remains the source of truth.
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SELECT pg_advisory_xact_lock(73921001)"))
+        number_suffix = get_next_contract_number(db)
+        number_prefix = str(getattr(payload, "document_number_prefix", None) or "СД").strip().upper()
+        payload.document_number_prefix = number_prefix
+        payload.document_number_suffix = number_suffix
+        payload.document_number = f"{number_prefix}/{number_suffix}"
+
     context = build_context(client, payload, template_key)
     doc = DocxTemplate(template_path)
     validate_template_context(doc, context)
@@ -457,22 +617,41 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         if template_key == "llc_contract"
         else (client.get("modules") or [])
     )
+    selected_document_tsr_items = (
+        select_llc_tsr_items(client, payload, selected_document_components)
+        if template_key == "llc_contract"
+        else []
+    )
     component_snapshot = [
         {
             "component_id": str(component.get("module_id")),
             "component_name": component.get("module_name_index"),
+            "client_tsr_id": str(component.get("client_tsr_id") or ""),
             "tsr_id": str(component.get("tsr_id") or (component.get("tsr") or {}).get("id") or ""),
             "tsr": (component.get("tsr") or {}).get("full_tsr_code"),
             "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
             "price": parse_money(component.get("price")),
+            "cost": parse_money(component.get("cost")),
         }
         for component in selected_document_components
     ]
+    components_by_client_tsr: dict[str, list[dict[str, Any]]] = {}
+    for component in selected_document_components:
+        component_key = str(
+            component.get("client_tsr_id")
+            or component.get("tsr_id")
+            or (component.get("tsr") or {}).get("id")
+            or ""
+        )
+        components_by_client_tsr.setdefault(component_key, []).append(component)
     tsr_component_snapshot = (
         [
             {
-                "tsr_id": group["tsr_id"],
-                "tsr": group["tsr_full"],
+                "client_tsr_id": str(item.get("client_tsr_id") or ""),
+                "tsr_id": str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or ""),
+                "tsr": (item.get("tsr") or {}).get("full_tsr_code"),
+                "certificate_price": parse_money(item.get("certificate_price")),
+                "check_date": str(item.get("check_date") or ""),
                 "components": [
                     {
                         "component_id": str(component.get("module_id")),
@@ -480,14 +659,27 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
                         "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
                         "price": parse_money(component.get("price")),
                     }
-                    for component in group["components"]
+                    for component in components_by_client_tsr.get(
+                        str(
+                            item.get("client_tsr_id")
+                            or item.get("tsr_id")
+                            or (item.get("tsr") or {}).get("id")
+                            or ""
+                        ),
+                        [],
+                    )
                 ],
             }
-            for group in group_llc_components_by_tsr(selected_document_components)
+            for item in selected_document_tsr_items
         ]
         if template_key == "llc_contract"
         else []
     )
+
+    components_cost = sum(
+    parse_money(component.get("cost"))
+    for component in selected_document_components
+)
 
     db_doc = models.Document(
         client_id=client_id,
@@ -497,11 +689,12 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         size=os.path.getsize(save_path),
         document_type=template_key,
         document_number=str(getattr(payload, "document_number", "") or "").strip(),
-        contract_total=parse_money(context.get("Сумма")),
-        certificate_amount=parse_money(client.get("certificate_price")),
+        
+        certificate_amount=parse_money(context.get("Сумма")),
         contract_metadata={
             "selected_components": component_snapshot,
             "selected_tsr_components": tsr_component_snapshot,
+            "components_cost": components_cost,
             # Обратная совместимость с ранее сформированными отчётами/выгрузками.
             "selected_modules": [
                 {

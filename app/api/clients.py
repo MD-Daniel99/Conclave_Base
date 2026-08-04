@@ -7,7 +7,7 @@ from uuid import UUID
 from app import crud, models, schemas
 from app.api.deps import get_current_user
 from app.db import get_db
-from app.services.audit import log_action
+from app.services.audit import log_action, snapshot
 
 router = APIRouter()
 
@@ -99,6 +99,114 @@ def assign_tsr_to_client_components(
         },
     )
     return components
+
+
+@router.get("/{client_id}/tsr", response_model=List[schemas.ClientTsrRead])
+def read_client_tsr(
+    client_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        return crud.list_client_tsr(db, client_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.post("/{client_id}/tsr", response_model=schemas.ClientTsrRead, status_code=status.HTTP_201_CREATED)
+def attach_client_tsr(
+    client_id: UUID,
+    payload: schemas.ClientTsrCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        item = crud.create_client_tsr(db, client_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action="client_tsr.create",
+        user=current_user,
+        after=item,
+        details={
+            "subject_label": "ТСР",
+            "subject_name": str(item.tsr.full_tsr_code or "").strip() if item.tsr else "",
+        },
+    )
+    return item
+
+
+@router.patch("/{client_id}/tsr/{client_tsr_id}", response_model=schemas.ClientTsrRead)
+def patch_client_tsr(
+    client_id: UUID,
+    client_tsr_id: UUID,
+    payload: schemas.ClientTsrUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    before_item = next(
+        (item for item in crud.list_client_tsr(db, client_id) if item.client_tsr_id == client_tsr_id),
+        None,
+    )
+    before_snapshot = snapshot(before_item) if before_item else None
+    updated = crud.update_client_tsr(db, client_id, client_tsr_id, payload)
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ТСР клиента не найден")
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action="client_tsr.update",
+        user=current_user,
+        before=before_snapshot,
+        after=updated,
+        details={
+            "subject_label": "ТСР",
+            "subject_name": str(updated.tsr.full_tsr_code or "").strip() if updated.tsr else "",
+        },
+    )
+    return updated
+
+
+@router.delete("/{client_id}/tsr/{client_tsr_id}", status_code=status.HTTP_204_NO_CONTENT)
+def detach_client_tsr(
+    client_id: UUID,
+    client_tsr_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    before_item = next(
+        (item for item in crud.list_client_tsr(db, client_id) if item.client_tsr_id == client_tsr_id),
+        None,
+    )
+    before_snapshot = snapshot(before_item) if before_item else None
+    subject_name = (
+        str(before_item.tsr.full_tsr_code or "").strip()
+        if before_item and before_item.tsr
+        else ""
+    )
+    try:
+        deleted = crud.delete_client_tsr(db, client_id, client_tsr_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ТСР клиента не найден")
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action="client_tsr.delete",
+        user=current_user,
+        before=before_snapshot,
+        details={
+            "subject_label": "ТСР",
+            "subject_name": subject_name,
+        },
+    )
+    return None
 
 
 def _change_client_archive_state(
@@ -203,7 +311,8 @@ def create_passport_for_client(
     try:
         passport = crud.create_passport(db, client_id, payload)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        code = status.HTTP_409_CONFLICT if "уже" in str(e).lower() else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=code, detail=str(e))
     log_action(db, entity="client", entity_id=client_id, action="passport.create", user=current_user, after=passport)
     return passport
 
@@ -218,6 +327,7 @@ def create_snils_for_client(
     try:
         snils = crud.create_snils(db, client_id, payload)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        code = status.HTTP_409_CONFLICT if "уже" in str(e).lower() else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=code, detail=str(e))
     log_action(db, entity="client", entity_id=client_id, action="snils.create", user=current_user, after=snils)
     return snils

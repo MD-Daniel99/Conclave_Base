@@ -25,6 +25,7 @@ def get_accounting_report(
     tax_usn_percent: float | None = Query(default=None, ge=0),
     tax_osno_percent: float = Query(default=20.0, ge=0),
     acquiring_percent: float = Query(default=2.0, ge=0),
+    vat_percent: float = Query(default=20.0, ge=0),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
 ):
@@ -37,6 +38,7 @@ def get_accounting_report(
         tax_usn_percent=tax_usn_percent,
         tax_osno_percent=tax_osno_percent,
         acquiring_percent=acquiring_percent,
+        vat_percent=vat_percent,
     )
 
 
@@ -49,6 +51,7 @@ def get_contract_accounting_report(
     tax_usn_percent: float | None = Query(default=None, ge=0),
     tax_osno_percent: float = Query(default=20.0, ge=0),
     acquiring_percent: float = Query(default=2.0, ge=0),
+    vat_percent: float = Query(default=20.0, ge=0),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
 ):
@@ -61,6 +64,7 @@ def get_contract_accounting_report(
         tax_usn_percent=tax_usn_percent,
         tax_osno_percent=tax_osno_percent,
         acquiring_percent=acquiring_percent,
+        vat_percent=vat_percent,
     )
 
 

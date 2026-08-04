@@ -1106,3 +1106,1203 @@ body.modal-open {
     width: auto;
   }
 }
+
+
+/* Responsive full-width tables and compact collapsible client forms. */
+.page-frame {
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+}
+
+.page-section,
+.surface-panel,
+.table-wrap,
+.desktop-entity-table,
+.accounting-table {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.table-wrap > table,
+.desktop-entity-table > table,
+.accounting-table > table {
+  width: 100%;
+  min-width: 100%;
+  table-layout: auto;
+}
+
+.collapsible-form,
+.collapsible-form-body {
+  display: grid;
+  gap: 14px;
+}
+
+.collapsible-form-heading {
+  align-items: center;
+  margin: 0;
+}
+
+.form-hint-inline {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.identity-section,
+.identity-card-list {
+  display: grid;
+  gap: 14px;
+}
+
+.identity-document-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.identity-document-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.identity-document-card > header strong,
+.identity-card-label {
+  display: block;
+}
+
+.identity-card-label {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.identity-details-grid {
+  display: grid;
+  gap: 10px 16px;
+  margin: 0;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.identity-details-grid div {
+  min-width: 0;
+}
+
+.identity-details-grid dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.identity-details-grid dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.tsr-details-grid {
+  align-items: end;
+}
+
+@media (min-width: 1800px) {
+  .page-frame {
+    padding-inline: clamp(30px, 3vw, 72px);
+  }
+}
+
+/* Client TSR cards: compact dates and readable component economics. */
+.client-profile-modal .tsr-details-grid {
+  grid-template-columns: minmax(210px, 250px) minmax(170px, 220px) minmax(260px, 1fr);
+}
+
+.client-profile-modal .client-tsr-date-field,
+.client-profile-modal .client-tsr-certificate-field {
+  min-width: 0;
+}
+
+.client-profile-modal .client-tsr-date-field .date-input-year {
+  flex: 0 0 72px;
+  width: 72px;
+  min-width: 72px;
+}
+
+.client-profile-modal .client-tsr-certificate-input {
+  width: 100%;
+  max-width: none;
+}
+
+.client-tsr-component-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(92px, 1fr));
+  gap: 0;
+  align-self: end;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.client-tsr-metric {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 4px 14px;
+  border-left: 1px solid var(--border);
+}
+
+.client-tsr-metric:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.client-tsr-component-summary span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.client-tsr-component-summary strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-tsr-target-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.client-tsr-target-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text-soft);
+  text-align: left;
+  background: var(--surface);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.client-tsr-target-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+}
+
+.client-tsr-target-card.active {
+  border-color: var(--accent);
+  background: linear-gradient(135deg, var(--accent-soft), var(--surface));
+  box-shadow: inset 0 0 0 1px rgb(148 112 245 / 22%);
+}
+
+.client-tsr-target-card strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.client-tsr-target-card span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.component-target-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  color: var(--muted);
+  background: var(--accent-soft);
+}
+
+.component-target-summary strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.component-name-link {
+  justify-content: flex-start;
+  padding: 0;
+  text-align: left;
+}
+
+.tsr-title-link {
+  justify-content: flex-start;
+  max-width: 100%;
+  padding: 0;
+  color: var(--text);
+  text-align: left;
+}
+
+.tsr-title-link strong {
+  overflow-wrap: anywhere;
+}
+
+.component-finance-line {
+  font-weight: 650;
+}
+
+.accounting-percent-toolbar {
+  grid-template-columns: repeat(4, minmax(130px, 165px)) minmax(230px, 1fr);
+}
+
+@media (max-width: 1180px) {
+  .accounting-percent-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .client-profile-modal .tsr-details-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .client-profile-modal .client-tsr-certificate-input {
+    max-width: none;
+  }
+
+  .client-tsr-component-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .client-tsr-metric,
+  .client-tsr-metric:first-child {
+    padding: 8px 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .client-tsr-metric:first-child {
+    border-top: 0;
+  }
+}
+
+@media (max-width: 860px) {
+  .accounting-percent-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Client components: compact single-workflow drawer. */
+.components-detail-panel {
+  gap: 18px;
+}
+
+.component-workbench {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.component-drawer-trigger {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+  text-align: left;
+  background:
+    linear-gradient(135deg, rgb(148 112 245 / 15%), transparent 44%),
+    var(--surface-soft);
+  box-shadow: none;
+}
+
+.component-drawer-trigger:hover {
+  background:
+    linear-gradient(135deg, rgb(148 112 245 / 21%), transparent 48%),
+    var(--surface-soft);
+  transform: none;
+}
+
+.component-drawer-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgb(148 112 245 / 34%);
+  border-radius: 12px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.component-drawer-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.component-drawer-copy strong {
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.component-drawer-copy span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-drawer-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.component-drawer-chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 17px;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.component-drawer-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.component-workbench-body {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.component-target-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(230px, 0.7fr);
+  align-items: stretch;
+  gap: 12px;
+}
+
+.component-target-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.component-target-field > span {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.component-target-field small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.component-target-context {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid rgb(148 112 245 / 28%);
+  border-radius: 13px;
+  background: var(--accent-soft);
+}
+
+.component-target-context > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.component-target-context > strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-target-context > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.component-target-context > div span {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-soft);
+  font-size: 10px;
+  background: rgb(16 24 39 / 22%);
+}
+
+.component-mode-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 520px);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-soft);
+}
+
+.component-mode-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  background: transparent;
+  box-shadow: none;
+}
+
+.component-mode-button:hover {
+  color: var(--text-soft);
+  background: rgb(255 255 255 / 4%);
+  transform: none;
+}
+
+.component-mode-button.active {
+  border-color: rgb(148 112 245 / 30%);
+  color: var(--text);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-xs);
+}
+
+.component-mode-count {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--accent-dark);
+  font-size: 10px;
+  text-align: center;
+  background: var(--accent-soft);
+}
+
+.component-stock-panel,
+.component-form-section,
+.component-notes-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.component-stock-panel > label {
+  display: grid;
+  gap: 7px;
+}
+
+.component-inline-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.component-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.component-section-heading strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.component-section-heading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.component-primary-grid {
+  grid-template-columns: minmax(230px, 1.45fr) minmax(180px, 1fr) minmax(90px, 0.42fr) minmax(150px, 0.72fr) minmax(150px, 0.72fr);
+}
+
+.component-characteristics-grid {
+  grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(110px, 0.65fr)) repeat(4, minmax(90px, 0.5fr));
+}
+
+.component-notes-section {
+  grid-template-columns: minmax(220px, 0.8fr) minmax(280px, 1.2fr);
+}
+
+.component-notes-section label {
+  display: grid;
+  gap: 7px;
+}
+
+.component-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.component-form-actions .primary-button {
+  min-width: 190px;
+}
+
+.component-empty-target {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  padding: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.component-empty-target strong {
+  color: var(--text);
+}
+
+.component-empty-target span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.component-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 2px;
+}
+
+.component-list-heading h2,
+.component-list-heading p {
+  margin: 0;
+}
+
+.component-list-heading p {
+  margin-top: 3px;
+}
+
+.component-total-badge {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 800;
+  background: var(--surface-soft);
+}
+
+.component-groups-modern .tsr-component-group {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.component-groups-modern .tsr-component-header {
+  padding: 11px 13px;
+  border-bottom-color: var(--border);
+  background: var(--surface-soft);
+}
+
+.component-groups-modern .tsr-component-header > div:first-child {
+  min-width: 0;
+}
+
+.component-groups-modern .tsr-component-header > div:first-child strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-groups-modern .tsr-component-header > div:first-child span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.component-list-row {
+  min-height: 54px;
+  padding: 9px 10px;
+  border-color: var(--border);
+  background: var(--surface-soft);
+}
+
+.component-list-row > div:first-child strong {
+  font-size: 12px;
+}
+
+.component-list-row > div:first-child span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.component-group-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) {
+  .component-primary-grid,
+  .component-characteristics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .component-drawer-trigger {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .component-drawer-action {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .component-drawer-copy span {
+    white-space: normal;
+  }
+
+  .component-target-row,
+  .component-notes-section {
+    grid-template-columns: 1fr;
+  }
+
+  .component-primary-grid,
+  .component-characteristics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .component-workbench-body {
+    padding: 12px;
+  }
+
+  .component-mode-switch,
+  .component-primary-grid,
+  .component-characteristics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .component-section-heading,
+  .component-list-heading,
+  .component-groups-modern .tsr-component-header,
+  .component-group-empty {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .component-groups-modern .tsr-component-header > div:first-child strong {
+    white-space: normal;
+  }
+
+  .component-form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .component-form-actions button {
+    width: 100%;
+  }
+}
+
+.component-inline-error {
+  color: var(--danger);
+}
+
+/* Client components: readable cards and overflow-safe responsive form. */
+.components-detail-panel,
+.component-workbench,
+.component-workbench-body,
+.component-stock-panel,
+.component-form-section,
+.component-notes-section,
+.component-target-row,
+.component-target-field,
+.component-target-context,
+.component-groups-modern,
+.component-groups-modern .tsr-component-group,
+.component-list-row,
+.component-list-row > div:first-child {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.component-workbench-body {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+.component-workbench-body .form-grid,
+.component-workbench-body .form-grid > label,
+.component-workbench-body input,
+.component-workbench-body select,
+.component-workbench-body textarea {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.component-workbench-body input,
+.component-workbench-body select,
+.component-workbench-body textarea {
+  width: 100%;
+}
+
+.component-drawer-copy strong {
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.component-drawer-copy span {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.component-target-field > span {
+  font-size: 14px;
+}
+
+.component-target-field small,
+.component-inline-note,
+.component-section-heading span,
+.component-empty-target span {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.component-target-context {
+  gap: 7px;
+  padding: 14px 16px;
+}
+
+.component-target-context > span {
+  font-size: 11px;
+}
+
+.component-target-context > strong {
+  overflow: visible;
+  font-size: 15px;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.component-target-context > div span {
+  font-size: 12px;
+}
+
+.component-mode-button {
+  min-height: 42px;
+  font-size: 14px;
+}
+
+.component-section-heading strong {
+  font-size: 15px;
+}
+
+.component-primary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.component-primary-grid > label:first-child {
+  grid-column: span 2;
+}
+
+.component-characteristics-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.component-notes-section {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.component-form-actions {
+  width: 100%;
+}
+
+.component-list-heading h2 {
+  font-size: 21px;
+}
+
+.component-list-heading p,
+.component-total-badge,
+.component-group-empty {
+  font-size: 13px;
+}
+
+.component-groups-modern .tsr-component-header {
+  align-items: flex-start;
+  gap: 16px;
+  padding: 15px 16px;
+}
+
+.component-groups-modern .tsr-component-header > div:first-child {
+  flex: 1 1 420px;
+}
+
+.component-groups-modern .tsr-component-header > div:first-child strong {
+  display: block;
+  overflow: visible;
+  font-size: 16px;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.component-groups-modern .tsr-component-header > div:first-child span {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.component-list-row {
+  align-items: flex-start;
+  min-height: 72px;
+  gap: 16px;
+  padding: 13px 14px;
+}
+
+.component-list-row > div:first-child {
+  flex: 1 1 420px;
+}
+
+.component-list-row > div:first-child strong {
+  display: block;
+  overflow: visible;
+  font-size: 15px;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.component-list-row > div:first-child span {
+  display: block;
+  margin-top: 5px;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.component-list-row .component-actions {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1180px) {
+  .component-primary-grid,
+  .component-characteristics-grid,
+  .component-notes-section {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .component-primary-grid > label:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .component-primary-grid,
+  .component-characteristics-grid,
+  .component-notes-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .component-primary-grid > label:first-child {
+    grid-column: auto;
+  }
+
+  .component-list-row {
+    flex-direction: column;
+  }
+
+  .component-list-row .component-actions {
+    width: 100%;
+  }
+}
+
+/* Per-TSR assignment: prosthetist, address and repeat visit live in each TSR card. */
+.client-main-assignment-grid {
+  grid-template-columns: minmax(260px, 2fr) minmax(150px, 0.7fr);
+}
+
+.client-profile-modal .tsr-component-group {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.client-profile-modal .tsr-component-header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  padding: 18px 20px;
+}
+
+.client-profile-modal .tsr-component-header > div:first-child {
+  flex: 1 1 520px;
+  min-width: 0;
+}
+
+.client-profile-modal .tsr-component-header .row-actions {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.client-tsr-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 14px;
+  padding: 18px 20px 14px;
+}
+
+.client-tsr-info-section {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: rgb(255 255 255 / 2.5%);
+}
+
+.client-tsr-assignment-section {
+  border-color: rgb(148 112 245 / 34%);
+  background: linear-gradient(135deg, rgb(148 112 245 / 9%), rgb(66 215 234 / 4%));
+}
+
+.client-tsr-section-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.client-tsr-field-grid {
+  display: grid;
+  align-items: end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.client-tsr-certificate-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.client-tsr-assignment-fields {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+  grid-template-areas:
+    "prosthetist repeat"
+    "address address";
+  align-items: start;
+}
+
+.client-tsr-assignment-fields > label:first-child {
+  grid-area: prosthetist;
+}
+
+.client-tsr-assignment-fields .client-tsr-address-card {
+  grid-area: address;
+}
+
+.client-tsr-assignment-fields .client-tsr-repeat-field {
+  grid-area: repeat;
+}
+
+.client-tsr-field-grid > label {
+  display: grid;
+  align-content: start;
+  grid-template-rows: auto auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.client-tsr-field-label {
+  display: block;
+  min-width: 0;
+  min-height: 1.45em;
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  line-height: 1.45;
+}
+
+.client-tsr-certificate-field .client-tsr-field-label {
+  max-width: 100%;
+}
+
+.client-tsr-assignment-fields select,
+.client-tsr-assignment-fields .date-input {
+  align-self: start;
+  margin: 0;
+}
+
+.client-tsr-field-grid > label,
+.client-tsr-field-grid input,
+.client-tsr-field-grid select,
+.client-tsr-field-grid .date-input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.client-tsr-field-grid > label,
+.client-tsr-repeat-field {
+  overflow-wrap: anywhere;
+}
+
+.client-tsr-date-field .date-input {
+  width: min(100%, 340px);
+}
+
+.client-tsr-repeat-field .date-input {
+  width: 100%;
+  max-width: 100%;
+}
+
+.client-tsr-repeat-field {
+  min-width: 0;
+}
+
+.client-tsr-address-card {
+  display: grid;
+  align-content: center;
+  min-height: 68px;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgb(15 27 44 / 55%);
+}
+
+.client-tsr-address-card span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.client-tsr-address-card strong {
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.client-profile-modal .component-name-list,
+.client-profile-modal .tsr-component-group > .muted {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  margin-inline: 20px;
+}
+
+.table-tsr {
+  min-width: 280px;
+  max-width: 520px;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media (max-width: 1180px) {
+  .client-tsr-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .client-tsr-assignment-fields {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+  }
+}
+
+@media (max-width: 820px) {
+  .client-main-assignment-grid,
+  .client-tsr-certificate-grid,
+  .client-tsr-assignment-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .client-tsr-assignment-fields {
+    grid-template-areas:
+      "prosthetist"
+      "repeat"
+      "address";
+  }
+
+  .client-profile-modal .tsr-component-header .row-actions {
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .client-tsr-editor-layout {
+    padding: 14px;
+  }
+
+  .client-profile-modal .component-name-list,
+  .client-profile-modal .tsr-component-group > .muted {
+    margin-inline: 14px;
+  }
+}

@@ -29,6 +29,7 @@ def build_accounting_report(
     tax_usn_percent: float | None = None,
     tax_osno_percent: float = 20.0,
     acquiring_percent: float = 2.0,
+    vat_percent: float = 20.0,
 ) -> dict[str, Any]:
     """Build the same accounting report that existed in Streamlit.
 
@@ -57,6 +58,7 @@ def build_accounting_report(
         "cost": 0.0,
         "salary": 0.0,
         "custom_expenses": 0.0,
+        "vat": 0.0,
         "tax": 0.0,
         "acquiring": 0.0,
         "profit": 0.0,
@@ -116,10 +118,11 @@ def build_accounting_report(
             tax_usn_percent=effective_usn_percent,
             tax_osno_percent=tax_osno_percent,
         )
-        tax = revenue * (applied_tax_percent / 100)
+        vat = revenue * (vat_percent / (100 + vat_percent)) if revenue else 0.0
+        tax = (revenue - vat) * (applied_tax_percent / 100)
         acquiring = revenue * (acquiring_percent / 100)
         has_no_accounting_basis = modules_cost == 0 and client_date is None
-        profit = 0.0 if has_no_accounting_basis else revenue - tax - acquiring - modules_cost - salary - custom_expenses
+        profit = 0.0 if has_no_accounting_basis else revenue - vat - tax - acquiring - modules_cost - salary - custom_expenses
 
         row = {
             "client": serialize_client(client, client_date),
@@ -128,6 +131,7 @@ def build_accounting_report(
                 "cost": modules_cost,
                 "salary": salary,
                 "custom_expenses": custom_expenses,
+                "vat": vat,
                 "tax": tax,
                 "tax_percent": applied_tax_percent,
                 "acquiring": acquiring,
@@ -149,6 +153,7 @@ def build_accounting_report(
             "tax_usn_percent": effective_usn_percent,
             "tax_osno_percent": tax_osno_percent,
             "acquiring_percent": acquiring_percent,
+            "vat_percent": vat_percent,
         },
         "custom_fields": custom_fields,
         "rows": rows,
@@ -166,6 +171,7 @@ def build_contract_accounting_report(
     tax_usn_percent: float | None = None,
     tax_osno_percent: float = 20.0,
     acquiring_percent: float = 2.0,
+    vat_percent: float = 20.0,
 ) -> dict[str, Any]:
     """Build a per-contract ledger without counting one certificate more than once.
 
@@ -273,7 +279,8 @@ def build_contract_accounting_report(
         for contract_index, row in enumerate(client_rows, start=1):
             amounts = row["amounts"]
             percentage_basis = certificate if contract_index == 1 else 0.0
-            tax = percentage_basis * (amounts["tax_percent"] / 100)
+            vat = percentage_basis * (vat_percent / (100 + vat_percent)) if percentage_basis else 0.0
+            tax = (percentage_basis - vat) * (amounts["tax_percent"] / 100)
             acquiring = percentage_basis * (acquiring_percent / 100)
             expenses_total = (
                 amounts["modules_cost"]
@@ -287,6 +294,7 @@ def build_contract_accounting_report(
                     "agency_expenses",
                 ))
                 + amounts["custom_expenses"]
+                + vat
                 + tax
                 + acquiring
             )
@@ -296,6 +304,7 @@ def build_contract_accounting_report(
                 "certificate": balance_before,
                 "certificate_original": certificate,
                 "certificate_remaining": remaining_certificate,
+                "vat": vat,
                 "tax": tax,
                 "acquiring": acquiring,
                 "profit": remaining_certificate,
@@ -338,7 +347,7 @@ def build_contract_accounting_report(
     amount_keys = [
         "certificate", "modules_cost", "prosthetist_work", "patient_travel",
         "patient_accommodation", "patient_meals", "patient_payment", "other_expenses",
-        "agency_expenses", "custom_expenses", "tax", "acquiring", "profit",
+        "agency_expenses", "custom_expenses", "vat", "tax", "acquiring", "profit",
     ]
     totals = {
         key: sum(row["amounts"][key] for row in rows)
@@ -372,6 +381,7 @@ def build_contract_accounting_report(
             "tax_usn_percent": effective_usn_percent,
             "tax_osno_percent": tax_osno_percent,
             "acquiring_percent": acquiring_percent,
+            "vat_percent": vat_percent,
         },
         "custom_fields": custom_fields,
         "rows": rows,

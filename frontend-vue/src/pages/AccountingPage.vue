@@ -54,6 +54,7 @@ const leadingColumns = [
 ]
 
 const trailingColumns = [
+  { key: 'vat', label: 'НДС' },
   { key: 'tax', label: 'Налог' },
   { key: 'acquiring', label: 'Эквайринг' },
   { key: 'profit', label: 'Прибыль' },
@@ -72,6 +73,7 @@ const hideFailed = ref(true)
 const taxUsnPercent = ref(6)
 const taxOsnoPercent = ref(20)
 const acquiringPercent = ref(1)
+const vatPercent = ref(20)
 const newFieldName = ref('')
 const newFieldType = ref<'number' | 'text'>('number')
 const pageLimit = ref(50)
@@ -156,14 +158,17 @@ const rows = computed(() =>
     const certificate = isColumnVisible('certificate') ? rawCertificate : 0
     const modulesCost = isColumnVisible('modules_cost') ? rawModulesCost : 0
     const taxPercent = getClientTaxPercent(client)
-    const tax = isColumnVisible('tax') ? certificate * (taxPercent / 100) : 0
+    const vat = isColumnVisible('vat')
+      ? certificate * (vatPercent.value / (100 + vatPercent.value))
+      : 0
+    const tax = isColumnVisible('tax') ? (certificate - vat) * (taxPercent / 100) : 0
     const acquiring = isColumnVisible('acquiring')
       ? certificate * (acquiringPercent.value / 100)
       : 0
     const hasNoAccountingBasis = rawModulesCost === 0 && !getCheckDate(client)
     const profit = hasNoAccountingBasis
       ? 0
-      : certificate - modulesCost - fixedExpenses - customExpenses - tax - acquiring
+      : certificate - modulesCost - fixedExpenses - customExpenses - vat - tax - acquiring
 
     return {
       client,
@@ -171,6 +176,7 @@ const rows = computed(() =>
       modulesCost,
       fixedExpenses,
       customExpenses,
+      vat,
       tax,
       taxPercent,
       acquiring,
@@ -198,6 +204,7 @@ const totals = computed(() =>
       acc.modulesCost += row.modulesCost
       acc.fixedExpenses += row.fixedExpenses
       acc.customExpenses += row.customExpenses
+      acc.vat += row.vat
       acc.tax += row.tax
       acc.acquiring += row.acquiring
       acc.profit += row.profit
@@ -208,6 +215,7 @@ const totals = computed(() =>
       modulesCost: 0,
       fixedExpenses: 0,
       customExpenses: 0,
+      vat: 0,
       tax: 0,
       acquiring: 0,
       profit: 0,
@@ -244,12 +252,12 @@ function getCheckDate(client: Client) {
   return String(client.check_date ?? '').slice(0, 10)
 }
 
-function getTaxationSystem(client: Client): 'УСН' | 'ОСНО' {
-  return client.taxation_system === 'ОСНО' ? 'ОСНО' : 'УСН'
+function getTaxationSystem(client: Client): '6%' | '12%' {
+  return client.taxation_system === 'ОСНО' ? '12%' : '6%'
 }
 
 function getClientTaxPercent(client: Client) {
-  return getTaxationSystem(client) === 'ОСНО' ? taxOsnoPercent.value : taxUsnPercent.value
+  return client.taxation_system === 'ОСНО' ? taxOsnoPercent.value : taxUsnPercent.value
 }
 
 function clientRequiresContract(client: Client) {
@@ -402,6 +410,9 @@ async function loadSettings() {
     if (typeof settings.acq_percent === 'number') {
       acquiringPercent.value = settings.acq_percent
     }
+    if (typeof settings.vat_percent === 'number') {
+      vatPercent.value = settings.vat_percent
+    }
   } catch {
     // Настройки не должны блокировать бухгалтерию.
   } finally {
@@ -435,6 +446,7 @@ async function savePercentSettings() {
       tax_usn_percent: taxUsnPercent.value,
       tax_osno_percent: taxOsnoPercent.value,
       acq_percent: acquiringPercent.value,
+      vat_percent: vatPercent.value,
     })
     successMessage.value = 'Проценты сохранены автоматически'
   } catch (caughtError) {
@@ -566,7 +578,7 @@ async function removeCustomField(field: AccountingCustomField) {
 }
 
 watch([query, startDate, endDate, hideFailed, pageLimit], resetAccountingPage)
-watch([taxUsnPercent, taxOsnoPercent, acquiringPercent], queuePercentSettingsSave)
+watch([taxUsnPercent, taxOsnoPercent, acquiringPercent, vatPercent], queuePercentSettingsSave)
 watch(activeAccountingTab, (tab) => {
   if (tab === 'clients') {
     void loadData()
@@ -598,16 +610,20 @@ onMounted(async () => {
 
     <div class="toolbar-form accounting-percent-toolbar">
       <label>
-        Налог УСН, %
+        УСН 6%,
         <input v-model.number="taxUsnPercent" min="0" step="0.1" type="number" />
       </label>
       <label>
-        Налог ОСНО, %
+        УСН 15%,
         <input v-model.number="taxOsnoPercent" min="0" step="0.1" type="number" />
       </label>
       <label>
         Эквайринг, %
         <input v-model.number="acquiringPercent" min="0" step="0.1" type="number" />
+      </label>
+      <label>
+        НДС, %
+        <input v-model.number="vatPercent" min="0" step="0.1" type="number" />
       </label>
       <span class="muted accounting-autosave-status">
         {{ isPercentSaving ? 'Сохраняем проценты...' : 'Проценты сохраняются автоматически' }}
@@ -633,7 +649,7 @@ onMounted(async () => {
         <div class="metric-card">
           <span>Расходы</span>
           <strong>
-            {{ formatMoney(totals.modulesCost + totals.fixedExpenses + totals.customExpenses + totals.tax + totals.acquiring) }}
+            {{ formatMoney(totals.modulesCost + totals.fixedExpenses + totals.customExpenses + totals.vat + totals.tax + totals.acquiring) }}
           </strong>
         </div>
         <div class="metric-card">
@@ -712,6 +728,7 @@ onMounted(async () => {
               >
                 {{ getFieldName(field) }}
               </th>
+              <th v-if="isColumnVisible('vat')">НДС</th>
               <th v-if="isColumnVisible('tax')">Налог</th>
               <th v-if="isColumnVisible('acquiring')">Эквайринг</th>
               <th v-if="isColumnVisible('profit')">Прибыль</th>
@@ -756,6 +773,7 @@ onMounted(async () => {
                   @blur="formatCustomEditableValue(row.client, field)"
                 />
               </td>
+              <td v-if="isColumnVisible('vat')" class="table-money">{{ formatMoney(row.vat) }}</td>
               <td
                 v-if="isColumnVisible('tax')"
                 class="table-money"
@@ -805,6 +823,7 @@ onMounted(async () => {
       :tax-usn-percent="taxUsnPercent"
       :tax-osno-percent="taxOsnoPercent"
       :acquiring-percent="acquiringPercent"
+      :vat-percent="vatPercent"
     />
   </section>
 </template>

@@ -127,7 +127,7 @@ function getComponentActions(item: ComponentItem): ActionMenuItem[] {
         action: () => selectComponent(item),
       },
       {
-        label: 'Переместить в архив',
+        label: 'Переместить в Списанные комплектующие',
         icon: Archive,
         disabled: isSaving.value,
         action: () => changeComponentArchiveState(item, true),
@@ -398,16 +398,16 @@ async function removeComponent(item: ComponentItem) {
 
 async function changeComponentArchiveState(item: ComponentItem, archive: boolean) {
   const componentId = getComponentId(item)
-  const action = archive ? 'переместить в архив' : 'восстановить из архива'
+  const action = archive ? 'переместить в Списанные комплектующие' : 'восстановить из Списанные комплектующие'
 
   if (!componentId) {
     return
   }
 
   if (!(await confirmAction({
-    header: archive ? 'Перемещение в архив' : 'Восстановление',
+    header: archive ? 'Перемещение в Списанные комплектующие' : 'Восстановление',
     message: `${action[0].toUpperCase()}${action.slice(1)} комплектующую «${getComponentName(item)}»?`,
-    acceptLabel: archive ? 'В архив' : 'Восстановить',
+    acceptLabel: archive ? 'В Списанные комплектующие' : 'Восстановить',
   }))) {
     return
   }
@@ -428,8 +428,8 @@ async function changeComponentArchiveState(item: ComponentItem, archive: boolean
     }
 
     successMessage.value = archive
-      ? 'Комплектующая перемещена в архив'
-      : 'Комплектующая восстановлена из архива'
+      ? 'Комплектующая перемещена в Списанные комплектующие'
+      : 'Комплектующая восстановлена из Списанные комплектующие'
     await loadData()
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
@@ -508,7 +508,7 @@ onBeforeUnmount(() => {
         Рабочий склад
       </button>
       <button :class="{ active: activeWarehouseListMode === 'archive' }" type="button" @click="switchWarehouseListMode('archive')">
-        Архив
+        Списанные комплектующие
       </button>
     </div>
 
@@ -680,7 +680,7 @@ onBeforeUnmount(() => {
               :disabled="isSaving"
               @click="changeComponentArchiveState(selectedComponent, true)"
             >
-              В архив
+              В Списанные комплектующие
             </button>
             <button class="ghost-button" type="button" @click="closeComponentCard">Закрыть</button>
           </div>

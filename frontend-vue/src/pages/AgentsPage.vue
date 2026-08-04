@@ -143,6 +143,26 @@ function formatDate(value?: string | null) {
   return date.toLocaleDateString('ru-RU')
 }
 
+function getClientRepeatVisits(client: Client) {
+  const dates = (client.tsr_items ?? [])
+    .map((item) => String(item.repeat_visit_date || '').slice(0, 10))
+    .filter(Boolean)
+
+  if (!dates.length) {
+    return (client.tsr_items ?? []).length ? '-' : formatDate(client.deadline)
+  }
+
+  const counts = new Map<string, number>()
+  for (const value of dates) {
+    const label = formatDate(value)
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+
+  return [...counts.entries()]
+    .map(([label, count]) => count > 1 ? `${label} (x${count})` : label)
+    .join('; ')
+}
+
 function cleanOptional(value: string) {
   const trimmed = value.trim()
   return trimmed === '' ? null : trimmed
@@ -240,11 +260,6 @@ function validateAccount(label: string, value: string) {
 }
 
 function validateForm() {
-  if (!form.last_name.trim()) {
-    error.value = 'Заполните фамилию агента'
-    return false
-  }
-
   if (!form.first_name.trim()) {
     error.value = 'Заполните имя агента'
     return false
@@ -261,7 +276,7 @@ function validateForm() {
 
 function buildCreatePayload(): AgentCreate {
   return {
-    last_name: form.last_name.trim(),
+    last_name: cleanOptional(form.last_name),
     first_name: form.first_name.trim(),
     middle_name: cleanOptional(form.middle_name),
     legal_address: cleanOptional(form.legal_address),
@@ -276,7 +291,7 @@ function buildCreatePayload(): AgentCreate {
 
 function buildUpdatePayload(): AgentUpdate {
   return {
-    last_name: form.last_name.trim(),
+    last_name: cleanOptional(form.last_name),
     first_name: form.first_name.trim(),
     middle_name: cleanOptional(form.middle_name),
     legal_address: cleanOptional(form.legal_address),
@@ -690,8 +705,8 @@ onBeforeUnmount(() => {
           <form v-if="activeAgentTab === 'edit'" class="detail-panel" @submit.prevent="saveAgent">
             <div class="form-grid">
               <label>
-                Фамилия *
-                <input v-model="form.last_name" required />
+                Фамилия
+                <input v-model="form.last_name" />
               </label>
 
               <label>
@@ -761,7 +776,7 @@ onBeforeUnmount(() => {
                     {{ client.status?.description || client.status_code || 'Без статуса' }} ·
                     {{ client.stage?.description || client.current_stage || 'Без этапа' }}
                   </span>
-                  <span>Повторное обращение: {{ formatDate(client.deadline) }}</span>
+                  <span>Повторное обращение по ТСР: {{ getClientRepeatVisits(client) }}</span>
                 </div>
               </article>
             </div>

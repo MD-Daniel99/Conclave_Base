@@ -17,6 +17,7 @@ const props = defineProps<{
   taxUsnPercent: number
   taxOsnoPercent: number
   acquiringPercent: number
+  vatPercent: number
 }>()
 const router = useRouter()
 
@@ -50,6 +51,7 @@ const leadingColumns = [
 ]
 
 const trailingColumns = [
+  { key: 'vat', label: 'НДС' },
   { key: 'tax', label: 'Налог' },
   { key: 'acquiring', label: 'Эквайринг' },
   { key: 'profit', label: 'Прибыль' },
@@ -180,12 +182,12 @@ function syncSelectedColumns() {
   knownColumnKeys.value = availableKeys
 }
 
-function getTaxationSystem(row: ContractAccountingRow): 'УСН' | 'ОСНО' {
-  return row.client.taxation_system === 'ОСНО' ? 'ОСНО' : 'УСН'
+function getTaxationSystem(row: ContractAccountingRow): '6%' | '12%' {
+  return row.client.taxation_system === 'ОСНО' ? '12%' : '6%'
 }
 
 function getTaxPercent(row: ContractAccountingRow) {
-  return getTaxationSystem(row) === 'ОСНО' ? props.taxOsnoPercent : props.taxUsnPercent
+  return row.client.taxation_system === 'ОСНО' ? props.taxOsnoPercent : props.taxUsnPercent
 }
 
 function isFailedRow(row: ContractAccountingRow) {
@@ -220,6 +222,7 @@ const calculatedRows = computed(() => {
     modulesCost: number
     fixedExpenses: number
     customExpenses: number
+    vat: number
     tax: number
     taxPercent: number
     acquiring: number
@@ -259,14 +262,17 @@ const calculatedRows = computed(() => {
       const modulesCost = isColumnVisible('modules_cost') ? row.amounts.modules_cost : 0
       const taxPercent = getTaxPercent(row)
       const appliesPercentageExpenses = row.amounts.applies_percentage_expenses ?? index === 0
+      const vat = isColumnVisible('vat') && appliesPercentageExpenses
+        ? certificateOriginal * (props.vatPercent / (100 + props.vatPercent))
+        : 0
       const tax = isColumnVisible('tax') && appliesPercentageExpenses
-        ? certificateOriginal * (taxPercent / 100)
+        ? (certificateOriginal - vat) * (taxPercent / 100)
         : 0
       const acquiring = isColumnVisible('acquiring') && appliesPercentageExpenses
         ? certificateOriginal * (props.acquiringPercent / 100)
         : 0
       const certificate = certificateBalance
-      const profit = certificate - modulesCost - fixedExpenses - customExpenses - tax - acquiring
+      const profit = certificate - modulesCost - fixedExpenses - customExpenses - vat - tax - acquiring
       certificateBalance = profit
 
       calculated.push({
@@ -275,6 +281,7 @@ const calculatedRows = computed(() => {
         modulesCost,
         fixedExpenses,
         customExpenses,
+        vat,
         tax,
         taxPercent,
         acquiring,
@@ -347,7 +354,7 @@ const totals = computed(() => {
     })
     totalsAcc.certificate += chronologicalRows[0]?.certificate ?? 0
     totalsAcc.expenses += chronologicalRows.reduce((sum, item) => (
-      sum + item.modulesCost + item.fixedExpenses + item.customExpenses + item.tax + item.acquiring
+      sum + item.modulesCost + item.fixedExpenses + item.customExpenses + item.vat + item.tax + item.acquiring
     ), 0)
     totalsAcc.profit += chronologicalRows[chronologicalRows.length - 1]?.profit ?? 0
     return totalsAcc
@@ -372,6 +379,7 @@ async function loadData() {
       tax_usn_percent: props.taxUsnPercent,
       tax_osno_percent: props.taxOsnoPercent,
       acquiring_percent: props.acquiringPercent,
+      vat_percent: props.vatPercent,
     })
     reportRows.value = report.rows
     customFields.value = report.custom_fields
@@ -513,9 +521,7 @@ onMounted(loadData)
     </div>
 
     <p class="form-hint">
-      Для нескольких договоров одного клиента сертификат учитывается один раз. Каждый следующий договор показывает остаток
-      после расходов по предыдущим договорам; налог и эквайринг начисляются только в первом договоре.
-      Снятые финансовые колонки исключаются из расчёта.
+    Снятые финансовые колонки исключаются из расчёта.
     </p>
 
     <div class="field-chip-row" aria-label="Настройка колонок бухгалтерии по договорам">
@@ -562,6 +568,7 @@ onMounted(loadData)
             >
               {{ field.label }}
             </th>
+            <th v-if="isColumnVisible('vat')">НДС</th>
             <th v-if="isColumnVisible('tax')">Налог</th>
             <th v-if="isColumnVisible('acquiring')">Эквайринг</th>
             <th v-if="isColumnVisible('profit')">Прибыль</th>
@@ -609,6 +616,15 @@ onMounted(loadData)
                 @input="setCustom(item.row, field, ($event.target as HTMLInputElement).value)"
                 @blur="formatCustom(item.row, field)"
               />
+            </td>
+            <td
+              v-if="isColumnVisible('vat')"
+              class="table-money"
+              :title="item.appliesPercentageExpenses
+                ? `НДС · ${props.vatPercent}%`
+                : 'НДС уже учтён в первом договоре этого клиента'"
+            >
+              {{ formatMoney(item.vat) }}
             </td>
             <td
               v-if="isColumnVisible('tax')"
