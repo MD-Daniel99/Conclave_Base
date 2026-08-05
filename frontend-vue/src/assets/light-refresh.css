@@ -2306,3 +2306,220 @@ body.modal-open {
     margin-inline: 14px;
   }
 }
+
+/* Stable table filters: visible text, predictable controls and responsive toolbars. */
+.filterable-table-header {
+  min-width: 8.5rem;
+}
+
+.filterable-table-header:not(:has(.table-column-filter)) {
+  min-width: 4.5rem;
+}
+
+.table-column-filter {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  height: 36px;
+  margin-top: 0.55rem;
+  padding: 7px 10px;
+  border: 1px solid rgb(159 177 199 / 38%);
+  border-radius: 9px;
+  color: #f4f7fb !important;
+  -webkit-text-fill-color: #f4f7fb;
+  caret-color: #ffffff;
+  background: #15243a !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
+  opacity: 1;
+}
+
+.table-column-filter::placeholder {
+  color: #91a2b8 !important;
+  -webkit-text-fill-color: #91a2b8;
+  opacity: 1;
+}
+
+.table-column-filter:hover {
+  border-color: rgb(187 169 255 / 52%);
+  background: #192b43 !important;
+}
+
+.table-column-filter:focus {
+  border-color: #a98cff;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff;
+  background: #192b43 !important;
+  box-shadow: 0 0 0 3px rgb(148 112 245 / 18%);
+}
+
+.table-column-filter option {
+  color: #f4f7fb;
+  background: #182a40;
+}
+
+.toolbar-form select,
+.table-column-filter:is(select) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  color: #f4f7fb;
+  -webkit-text-fill-color: #f4f7fb;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #bdc9da 50%),
+    linear-gradient(135deg, #bdc9da 50%, transparent 50%),
+    linear-gradient(180deg, #17283f, #142238) !important;
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%,
+    0 0 !important;
+  background-size: 5px 5px, 5px 5px, 100% 100% !important;
+  background-repeat: no-repeat !important;
+}
+
+.clients-toolbar {
+  grid-template-columns: minmax(260px, 1fr) minmax(125px, 160px) max-content;
+  min-width: 0;
+}
+
+.clients-toolbar > *,
+.filter-actions {
+  min-width: 0;
+}
+
+.filter-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.filter-actions > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .clients-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(120px, 160px);
+  }
+
+  .clients-toolbar .filter-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .clients-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .clients-toolbar .filter-actions {
+    grid-column: auto;
+  }
+}
+
+/* Keep the original compact TSR selector in the Documents tab. */
+.client-profile-modal .contract-module-selector .contract-tsr-heading {
+  min-height: 52px;
+  height: auto;
+  align-items: center;
+}
+
+.client-profile-modal .contract-module-selector .checkbox-label input[type="checkbox"] {
+  flex: 0 0 18px;
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+}
+
+.client-profile-modal .contract-module-selector .contract-tsr-heading span {
+  min-width: 0;
+  line-height: 1.45;
+}
+
+/* High-contrast stepped TSR palette: neighbouring cards are deliberately
+   more distinct while remaining inside the app's purple/blue/teal theme. */
+.client-tsr-gradient-card {
+  border-color: rgb(var(--tsr-card-accent-rgb, 148 112 245) / 72%);
+  border-left: 5px solid rgb(var(--tsr-card-accent-rgb, 148 112 245) / 92%);
+  background:
+    radial-gradient(
+      circle at 100% 0%,
+      rgb(var(--tsr-card-accent-rgb, 148 112 245) / 30%),
+      transparent 24rem
+    ),
+    linear-gradient(
+      145deg,
+      rgb(var(--tsr-card-accent-rgb, 148 112 245) / 20%),
+      #18263a 72%
+    );
+  box-shadow:
+    inset 0 1px 0 rgb(var(--tsr-card-accent-rgb, 148 112 245) / 24%),
+    0 12px 30px rgb(2 8 23 / 18%);
+}
+
+.client-tsr-gradient-card .tsr-component-header {
+  border-bottom-color: rgb(var(--tsr-card-accent-rgb, 148 112 245) / 48%);
+  background: linear-gradient(
+    90deg,
+    rgb(var(--tsr-card-accent-rgb, 148 112 245) / 38%),
+    rgb(var(--tsr-card-accent-rgb, 148 112 245) / 12%)
+  );
+}
+
+.client-tsr-gradient-card .client-tsr-info-section {
+  border-color: rgb(var(--tsr-card-accent-rgb, 148 112 245) / 34%);
+  background: rgb(var(--tsr-card-accent-rgb, 148 112 245) / 10%);
+}
+
+
+/* Universal data-table responsiveness.
+   Never hide business columns because of viewport width. On narrow screens,
+   preserve the full table and expose horizontal scrolling instead. */
+.table-wrap,
+.desktop-entity-table,
+.accounting-table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable both-edges;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-wrap > table,
+.desktop-entity-table > table,
+.accounting-table > table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+}
+
+/* Explicitly neutralize old breakpoint-based column hiding. */
+.client-col-prosthetist,
+.client-col-check-date {
+  display: table-cell !important;
+}
+
+/* The reduced mobile cards omit part of the business data, therefore the
+   full horizontally-scrollable table remains the single source of truth. */
+.mobile-entity-list {
+  display: none !important;
+}
+
+@media (max-width: 760px) {
+  .desktop-entity-table {
+    display: block !important;
+  }
+
+  .table-wrap > table,
+  .desktop-entity-table > table,
+  .accounting-table > table {
+    width: max-content;
+    min-width: 100%;
+  }
+}

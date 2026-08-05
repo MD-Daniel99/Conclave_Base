@@ -11,6 +11,8 @@ import {
 } from '@/shared/api/accounting'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
+import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection, type TableFilterKind } from '@/shared/lib/table'
+import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 import type { AccountingReportField, ContractAccountingRow } from '@/shared/types/entities'
 
 const props = defineProps<{
@@ -70,6 +72,9 @@ const pageLimit = ref(50)
 const currentPage = ref(1)
 const selectedColumnKeys = ref<string[]>([])
 const knownColumnKeys = ref<string[]>([])
+const contractColumnFilters = reactive<Record<string, string>>({})
+const contractSortKey = ref<string | null>(null)
+const contractSortDirection = ref<SortDirection>(null)
 const isLoading = ref(false)
 const isSaving = ref(false)
 const error = ref('')
@@ -182,8 +187,8 @@ function syncSelectedColumns() {
   knownColumnKeys.value = availableKeys
 }
 
-function getTaxationSystem(row: ContractAccountingRow): '6%' | '12%' {
-  return row.client.taxation_system === 'ОСНО' ? '12%' : '6%'
+function getTaxationSystem(row: ContractAccountingRow) {
+  return `УСН ${getTaxPercent(row)}%`
 }
 
 function getTaxPercent(row: ContractAccountingRow) {
@@ -191,135 +196,112 @@ function getTaxPercent(row: ContractAccountingRow) {
 }
 
 function isFailedRow(row: ContractAccountingRow) {
-  const text = `${row.client.status ?? ''} ${row.client.current_stage ?? ''}`.toLowerCase()
+  const text = `${row.client.status ?? ''} ${row.client.current_stage ?? ''}`.toLocaleLowerCase('ru-RU')
   return ['fail', 'hold', 'cancel', 'отказ', 'отлож', 'отмен'].some((token) => text.includes(token))
 }
 
 function getDocumentDate(row: ContractAccountingRow) {
-  return String(row.document.date ?? row.document.created_at ?? '').slice(0, 10)
+  return String(row.document.certificate_date ?? '').slice(0, 10)
 }
 
 function getDocumentSortKey(row: ContractAccountingRow) {
-  return [
-    row.document.created_at ?? '',
-    getDocumentDate(row),
-    row.document.document_id,
-  ].join('|')
+  return [row.document.created_at ?? '', getDocumentDate(row), row.document.document_id].join('|')
 }
 
-const calculatedRows = computed(() => {
-  const groupedRows = new Map<string, ContractAccountingRow[]>()
+const calculatedRows = computed(() => reportRows.value.map((row) => {
+  const values = ensureRow(row)
+  const fixedExpenses = expenseColumns.reduce((sum, column) => sum + parseMoney(values[column.key]), 0)
+  const customExpenses = customFields.value.reduce((sum, field) => (
+    isNumericField(field) ? sum + parseMoney(values.custom[field.key]) : sum
+  ), 0)
+  const certificate = parseMoney(row.amounts.certificate)
+  const modulesCost = parseMoney(row.amounts.modules_cost)
+  const taxPercent = getTaxPercent(row)
+  const vat = certificate * (props.vatPercent / (100 + props.vatPercent))
+  const revenueWithoutVat = certificate - vat
+  const acquiring = certificate * (props.acquiringPercent / 100)
+  const taxBase = Math.max(
+    0,
+    revenueWithoutVat - modulesCost - fixedExpenses - customExpenses - acquiring,
+  )
+  const tax = taxBase * (taxPercent / 100)
+  const profit = revenueWithoutVat - modulesCost - fixedExpenses - customExpenses - acquiring - tax
+  return {
+    row,
+    certificate,
+    modulesCost,
+    fixedExpenses,
+    customExpenses,
+    vat,
+    tax,
+    acquiring,
+    profit,
+  }
+}))
 
-  reportRows.value.forEach((row) => {
-    const group = groupedRows.get(row.client.client_id) ?? []
-    group.push(row)
-    groupedRows.set(row.client.client_id, group)
-  })
+type CalculatedContractRow = (typeof calculatedRows.value)[number]
 
-  const calculated: Array<{
-    row: ContractAccountingRow
-    certificate: number
-    modulesCost: number
-    fixedExpenses: number
-    customExpenses: number
-    vat: number
-    tax: number
-    taxPercent: number
-    acquiring: number
-    profit: number
-    appliesPercentageExpenses: boolean
-  }> = []
+function contractColumnValue(item: CalculatedContractRow, key: string): unknown {
+  if (key === 'client') return [
+    item.row.document.filename,
+    item.row.document.document_number,
+    item.row.client.full_name,
+    item.row.client.short_name,
+    getDocumentDate(item.row),
+  ].filter(Boolean).join(' ')
+  if (key === 'certificate') return item.certificate
+  if (key === 'modules_cost') return item.modulesCost
+  if (key === 'vat') return item.vat
+  if (key === 'tax') return item.tax
+  if (key === 'acquiring') return item.acquiring
+  if (key === 'profit') return item.profit
+  if (key.startsWith('custom:')) {
+    const field = customFields.value.find((entry) => getCustomColumnKey(entry) === key)
+    return field ? getCustom(item.row, field) : ''
+  }
+  if (expenseColumns.some((column) => column.key === key)) {
+    return parseMoney(getExpense(item.row, key as ExpenseKey))
+  }
+  return ''
+}
 
-  groupedRows.forEach((clientRows) => {
-    const chronologicalRows = [...clientRows].sort((left, right) => {
-      const leftIndex = left.amounts.contract_index
-      const rightIndex = right.amounts.contract_index
-      if (typeof leftIndex === 'number' && typeof rightIndex === 'number') {
-        return leftIndex - rightIndex
-      }
-      return getDocumentSortKey(left).localeCompare(getDocumentSortKey(right))
-    })
-    const certificateOriginal = isColumnVisible('certificate')
-      ? parseMoney(
-        chronologicalRows[0]?.amounts.certificate_original
-          ?? chronologicalRows[0]?.amounts.certificate
-          ?? 0,
-      )
-      : 0
-    let certificateBalance = certificateOriginal
+function contractFilterKind(key: string): TableFilterKind {
+  if (key === 'client') return 'text'
+  if (key.startsWith('custom:')) {
+    const field = customFields.value.find((entry) => getCustomColumnKey(entry) === key)
+    return field && !isNumericField(field) ? 'text' : 'number'
+  }
+  return 'number'
+}
 
-    chronologicalRows.forEach((row, index) => {
-      const values = ensureRow(row)
-      const fixedExpenses = expenseColumns.reduce((sum, column) => (
-        sum + (isColumnVisible(column.key) ? parseMoney(values[column.key]) : 0)
-      ), 0)
-      const customExpenses = customFields.value.reduce((sum, field) => {
-        if (!isNumericField(field) || !isColumnVisible(getCustomColumnKey(field))) {
-          return sum
-        }
-        return sum + parseMoney(values.custom[field.key])
-      }, 0)
-      const modulesCost = isColumnVisible('modules_cost') ? row.amounts.modules_cost : 0
-      const taxPercent = getTaxPercent(row)
-      const appliesPercentageExpenses = row.amounts.applies_percentage_expenses ?? index === 0
-      const vat = isColumnVisible('vat') && appliesPercentageExpenses
-        ? certificateOriginal * (props.vatPercent / (100 + props.vatPercent))
-        : 0
-      const tax = isColumnVisible('tax') && appliesPercentageExpenses
-        ? (certificateOriginal - vat) * (taxPercent / 100)
-        : 0
-      const acquiring = isColumnVisible('acquiring') && appliesPercentageExpenses
-        ? certificateOriginal * (props.acquiringPercent / 100)
-        : 0
-      const certificate = certificateBalance
-      const profit = certificate - modulesCost - fixedExpenses - customExpenses - vat - tax - acquiring
-      certificateBalance = profit
-
-      calculated.push({
-        row,
-        certificate,
-        modulesCost,
-        fixedExpenses,
-        customExpenses,
-        vat,
-        tax,
-        taxPercent,
-        acquiring,
-        profit,
-        appliesPercentageExpenses,
-      })
-    })
-  })
-
-  return calculated.sort((left, right) => (
-    getDocumentSortKey(right.row).localeCompare(getDocumentSortKey(left.row))
-  ))
-})
+function sortContracts(key: string) {
+  const next = nextSortState({ key: contractSortKey.value, direction: contractSortDirection.value }, key)
+  contractSortKey.value = next.key
+  contractSortDirection.value = next.direction
+  currentPage.value = 1
+}
 
 const rows = computed(() => {
-  const normalized = query.value.trim().toLowerCase()
-
-  return calculatedRows.value
-    .filter((item) => {
-      const row = item.row
-      if (hideFailed.value && isFailedRow(row)) {
-        return false
-      }
-
-      const documentDate = getDocumentDate(row)
-      if (startDate.value && documentDate < startDate.value) {
-        return false
-      }
-      if (endDate.value && documentDate > endDate.value) {
-        return false
-      }
-
-      return !normalized || [
-        row.document.filename,
-        row.document.document_number ?? '',
-        row.client.full_name,
-      ].join(' ').toLowerCase().includes(normalized)
-    })
+  const normalized = query.value.trim().toLocaleLowerCase('ru-RU')
+  const filtered = calculatedRows.value.filter((item) => {
+    const row = item.row
+    if (hideFailed.value && isFailedRow(row)) return false
+    const certificateDate = getDocumentDate(row)
+    if ((startDate.value || endDate.value) && !certificateDate) return false
+    if (startDate.value && certificateDate < startDate.value) return false
+    if (endDate.value && certificateDate > endDate.value) return false
+    const searchable = String(contractColumnValue(item, 'client')).toLocaleLowerCase('ru-RU')
+    if (normalized && !searchable.includes(normalized)) return false
+    return availableColumns.value.every((column) => matchesTableFilter(
+      contractColumnValue(item, column.key),
+      contractColumnFilters[column.key] ?? '',
+      contractFilterKind(column.key),
+    ))
+  })
+  const defaultSorted = contractSortKey.value
+    ? filtered
+    : [...filtered].sort((left, right) => getDocumentSortKey(right.row).localeCompare(getDocumentSortKey(left.row)))
+  return sortTableRows(defaultSorted, contractSortKey.value, contractSortDirection.value, contractColumnValue)
 })
 
 const pagedRows = computed(() => {
@@ -329,40 +311,34 @@ const pagedRows = computed(() => {
 
 const hasPreviousPage = computed(() => currentPage.value > 1)
 const hasNextPage = computed(() => currentPage.value * pageLimit.value < rows.value.length)
-const visibleRangeStart = computed(() => (
-  rows.value.length === 0 ? 0 : (currentPage.value - 1) * pageLimit.value + 1
-))
+const visibleRangeStart = computed(() => rows.value.length === 0 ? 0 : (currentPage.value - 1) * pageLimit.value + 1)
 const visibleRangeEnd = computed(() => Math.min(currentPage.value * pageLimit.value, rows.value.length))
+const activeContractFilterCount = computed(() => [
+  query.value.trim(),
+  startDate.value,
+  endDate.value,
+  ...Object.values(contractColumnFilters).map((value) => value.trim()),
+].filter(Boolean).length)
 
-const totals = computed(() => {
-  const byClient = new Map<string, typeof rows.value>()
-
-  rows.value.forEach((item) => {
-    const group = byClient.get(item.row.client.client_id) ?? []
-    group.push(item)
-    byClient.set(item.row.client.client_id, group)
-  })
-
-  return [...byClient.values()].reduce((totalsAcc, clientRows) => {
-    const chronologicalRows = [...clientRows].sort((left, right) => {
-      const leftIndex = left.row.amounts.contract_index
-      const rightIndex = right.row.amounts.contract_index
-      if (typeof leftIndex === 'number' && typeof rightIndex === 'number') {
-        return leftIndex - rightIndex
-      }
-      return getDocumentSortKey(left.row).localeCompare(getDocumentSortKey(right.row))
-    })
-    totalsAcc.certificate += chronologicalRows[0]?.certificate ?? 0
-    totalsAcc.expenses += chronologicalRows.reduce((sum, item) => (
-      sum + item.modulesCost + item.fixedExpenses + item.customExpenses + item.vat + item.tax + item.acquiring
-    ), 0)
-    totalsAcc.profit += chronologicalRows[chronologicalRows.length - 1]?.profit ?? 0
-    return totalsAcc
-  }, { certificate: 0, expenses: 0, profit: 0 })
-})
+const totals = computed(() => rows.value.reduce((acc, item) => {
+  acc.certificate += item.certificate
+  acc.expenses += item.modulesCost + item.fixedExpenses + item.customExpenses + item.vat + item.tax + item.acquiring
+  acc.profit += item.profit
+  return acc
+}, { certificate: 0, expenses: 0, profit: 0 }))
 
 function resetPage() {
   currentPage.value = 1
+}
+
+function resetContractFilters() {
+  query.value = ''
+  startDate.value = ''
+  endDate.value = ''
+  Object.keys(contractColumnFilters).forEach((key) => { contractColumnFilters[key] = '' })
+  contractSortKey.value = null
+  contractSortDirection.value = null
+  resetPage()
 }
 
 function visibleColumnCount() {
@@ -465,17 +441,20 @@ async function removeField(field: AccountingReportField) {
   }
 }
 
-watch([query, startDate, endDate, hideFailed, pageLimit], resetPage)
+watch([query, startDate, endDate, hideFailed, pageLimit, contractColumnFilters], resetPage, { deep: true })
 onMounted(loadData)
 </script>
 
 <template>
   <div class="accounting-tab-content">
     <form class="inline-search wide-search contract-accounting-search" @submit.prevent="loadData">
-      <input v-model="query" placeholder="Договор или клиент" />
+      <input v-model="query" placeholder="Договор, клиент, номер или дата пробития" />
       <DateInput v-model="startDate" aria-label="Дата начала" />
       <DateInput v-model="endDate" aria-label="Дата окончания" />
       <button class="secondary-button" type="submit">Обновить</button>
+      <button v-if="activeContractFilterCount" class="ghost-button" type="button" @click="resetContractFilters">
+        Сбросить фильтры
+      </button>
     </form>
 
     <p v-if="error" class="form-error">{{ error }}</p>
@@ -521,7 +500,7 @@ onMounted(loadData)
     </div>
 
     <p class="form-hint">
-    Снятые финансовые колонки исключаются из расчёта.
+      Скрытие колонок не влияет на расчёты. Каждый договор считается отдельно: НДС извлекается из суммы сертификата, эквайринг считается от полной суммы, а УСН — от выручки без НДС за вычетом себестоимости комплектующих и эквайринга.
     </p>
 
     <div class="field-chip-row" aria-label="Настройка колонок бухгалтерии по договорам">
@@ -556,22 +535,39 @@ onMounted(loadData)
       <table>
         <thead>
           <tr>
-            <th v-if="isColumnVisible('client')">Договор / клиент</th>
-            <th v-if="isColumnVisible('certificate')">Сертификат</th>
-            <th v-if="isColumnVisible('modules_cost')">Стоимость комплектующих</th>
-            <th v-for="column in expenseColumns.filter((item) => isColumnVisible(item.key))" :key="column.key">
-              {{ column.label }}
-            </th>
-            <th
+            <SortableFilterHeader v-if="isColumnVisible('client')" label="Договор / клиент" column-key="client" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.client" @sort="sortContracts" @update:filter-value="contractColumnFilters.client = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('certificate')" label="Сертификат" column-key="certificate" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.certificate" @sort="sortContracts" @update:filter-value="contractColumnFilters.certificate = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('modules_cost')" label="Стоимость комплектующих" column-key="modules_cost" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.modules_cost" @sort="sortContracts" @update:filter-value="contractColumnFilters.modules_cost = $event" />
+            <SortableFilterHeader
+              v-for="column in expenseColumns.filter((item) => isColumnVisible(item.key))"
+              :key="column.key"
+              :label="column.label"
+              :column-key="column.key"
+              filter-kind="number"
+              placeholder="Сумма или диапазон"
+              :sort-key="contractSortKey"
+              :sort-direction="contractSortDirection"
+              :filter-value="contractColumnFilters[column.key]"
+              @sort="sortContracts"
+              @update:filter-value="contractColumnFilters[column.key] = $event"
+            />
+            <SortableFilterHeader
               v-for="field in customFields.filter((item) => isColumnVisible(getCustomColumnKey(item)))"
               :key="field.key"
-            >
-              {{ field.label }}
-            </th>
-            <th v-if="isColumnVisible('vat')">НДС</th>
-            <th v-if="isColumnVisible('tax')">Налог</th>
-            <th v-if="isColumnVisible('acquiring')">Эквайринг</th>
-            <th v-if="isColumnVisible('profit')">Прибыль</th>
+              :label="field.label"
+              :column-key="getCustomColumnKey(field)"
+              :filter-kind="isNumericField(field) ? 'number' : 'text'"
+              :placeholder="isNumericField(field) ? 'Сумма или диапазон' : 'Фильтр…'"
+              :sort-key="contractSortKey"
+              :sort-direction="contractSortDirection"
+              :filter-value="contractColumnFilters[getCustomColumnKey(field)]"
+              @sort="sortContracts"
+              @update:filter-value="contractColumnFilters[getCustomColumnKey(field)] = $event"
+            />
+            <SortableFilterHeader v-if="isColumnVisible('vat')" label="НДС" column-key="vat" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.vat" @sort="sortContracts" @update:filter-value="contractColumnFilters.vat = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('tax')" label="Налог" column-key="tax" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.tax" @sort="sortContracts" @update:filter-value="contractColumnFilters.tax = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('acquiring')" label="Эквайринг" column-key="acquiring" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.acquiring" @sort="sortContracts" @update:filter-value="contractColumnFilters.acquiring = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('profit')" label="Прибыль" column-key="profit" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.profit" @sort="sortContracts" @update:filter-value="contractColumnFilters.profit = $event" />
             <th></th>
           </tr>
         </thead>
@@ -581,17 +577,13 @@ onMounted(loadData)
               <button class="link-button accounting-client-link" type="button" @click="openClientCard(item.row)">
                 <strong>{{ item.row.document.filename }}</strong>
                 <span class="muted">{{ item.row.client.short_name }} · {{ getTaxationSystem(item.row) }}</span>
-                <span v-if="item.row.amounts.contract_count && item.row.amounts.contract_count > 1" class="muted">
-                  Договор {{ item.row.amounts.contract_index }} из {{ item.row.amounts.contract_count }}
-                </span>
+                <span class="muted">Дата пробития: {{ getDocumentDate(item.row) || '—' }}</span>
               </button>
             </td>
             <td
               v-if="isColumnVisible('certificate')"
               class="table-money"
-              :title="item.row.amounts.contract_index && item.row.amounts.contract_index > 1
-                ? 'Остаток сертификата перед расходами по этому договору'
-                : 'Полная стоимость сертификата'"
+              title="Стоимость сертификата, на основании которого создан этот договор"
             >
               {{ formatMoney(item.certificate) }}
             </td>
@@ -620,18 +612,14 @@ onMounted(loadData)
             <td
               v-if="isColumnVisible('vat')"
               class="table-money"
-              :title="item.appliesPercentageExpenses
-                ? `НДС · ${props.vatPercent}%`
-                : 'НДС уже учтён в первом договоре этого клиента'"
+              :title="`НДС по этому договору · ${props.vatPercent}%`"
             >
               {{ formatMoney(item.vat) }}
             </td>
             <td
               v-if="isColumnVisible('tax')"
               class="table-money"
-              :title="item.appliesPercentageExpenses
-                ? `${getTaxationSystem(item.row)} · ${item.taxPercent}%`
-                : 'Налог уже учтён в первом договоре этого клиента'"
+              :title="`${getTaxationSystem(item.row)} по этому договору`"
             >
               {{ formatMoney(item.tax) }}
             </td>

@@ -6,8 +6,10 @@ import { fetchClients } from '@/shared/api/clients'
 import { fetchEntityAudit } from '@/shared/api/audit'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
+import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
 import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
 import EmptyState from '@/shared/ui/EmptyState.vue'
+import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 
 import {
   fetchAgents,
@@ -63,6 +65,9 @@ const agents = ref<Agent[]>([])
 const linkedClients = ref<Client[]>([])
 const auditItems = ref<AuditLogItem[]>([])
 const query = ref('')
+const agentColumnFilters = reactive<Record<string, string>>({ name: '', inn: '', ogrnip: '', bic: '', account: '' })
+const agentSortKey = ref<string | null>(null)
+const agentSortDirection = ref<SortDirection>(null)
 const page = ref(1)
 const pageSize = ref(20)
 const selectedAgent = ref<Agent | null>(null)
@@ -79,13 +84,45 @@ const error = ref('')
 const successMessage = ref('')
 const clientsError = ref('')
 const auditError = ref('')
-let agentSearchTimer: ReturnType<typeof setTimeout> | undefined
 
 const isEditing = computed(() => Boolean(selectedAgent.value?.agent_id))
 const isAgentPersisted = computed(() => Boolean(selectedAgent.value && getAgentId(selectedAgent.value)))
 const skip = computed(() => (page.value - 1) * pageSize.value)
+
+function agentColumnValue(agent: Agent, key: string) {
+  if (key === 'number') return agent.external_id ?? getAgentId(agent)
+  if (key === 'name') return getAgentName(agent)
+  if (key === 'account') return agent.account_number || ''
+  return agent[key as keyof Agent]
+}
+
+function sortAgents(key: string) {
+  const next = nextSortState({ key: agentSortKey.value, direction: agentSortDirection.value }, key)
+  agentSortKey.value = next.key
+  agentSortDirection.value = next.direction
+  page.value = 1
+}
+
+const filteredAgents = computed(() => {
+  const needle = query.value.trim().toLocaleLowerCase('ru-RU')
+  const filtered = agents.value.filter((agent) => {
+    const searchable = [
+      getAgentName(agent), agent.inn, agent.ogrnip, agent.bic,
+      agent.account_number, agent.correspondent_account,
+      agent.legal_address, agent.actual_address,
+    ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU')
+    if (needle && !searchable.includes(needle)) return false
+    return Object.entries(agentColumnFilters).every(([key, filter]) => {
+      const kind = key === 'number' ? 'number' : 'text'
+      return matchesTableFilter(agentColumnValue(agent, key), filter, kind)
+    })
+  })
+  return sortTableRows(filtered, agentSortKey.value, agentSortDirection.value, agentColumnValue)
+})
+
+const pagedAgents = computed(() => filteredAgents.value.slice(skip.value, skip.value + pageSize.value))
 const canGoBack = computed(() => page.value > 1 && !isLoading.value)
-const canGoForward = computed(() => agents.value.length === pageSize.value && !isLoading.value)
+const canGoForward = computed(() => skip.value + pageSize.value < filteredAgents.value.length && !isLoading.value)
 const confirmAction = useAppConfirm()
 useSuccessToast(successMessage, 'Агенты')
 
@@ -310,9 +347,8 @@ async function loadAgents() {
 
   try {
     agents.value = await fetchAgents({
-      skip: skip.value,
-      limit: pageSize.value,
-      q: query.value.trim() || undefined,
+      skip: 0,
+      limit: 100000,
     })
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -321,38 +357,28 @@ async function loadAgents() {
   }
 }
 
-async function searchAgents() {
+function searchAgents() {
   page.value = 1
-  await loadAgents()
 }
 
-async function resetAgentSearch() {
+function resetAgentSearch() {
   query.value = ''
+  Object.keys(agentColumnFilters).forEach((key) => { agentColumnFilters[key] = '' })
+  agentSortKey.value = null
+  agentSortDirection.value = null
   page.value = 1
-  await loadAgents()
 }
 
-async function changePageSize() {
+function changePageSize() {
   page.value = 1
-  await loadAgents()
 }
 
-async function previousPage() {
-  if (!canGoBack.value) {
-    return
-  }
-
-  page.value -= 1
-  await loadAgents()
+function previousPage() {
+  if (canGoBack.value) page.value -= 1
 }
 
-async function nextPage() {
-  if (!canGoForward.value) {
-    return
-  }
-
-  page.value += 1
-  await loadAgents()
+function nextPage() {
+  if (canGoForward.value) page.value += 1
 }
 
 async function loadLinkedClients() {
@@ -499,17 +525,11 @@ watch(isAgentCardOpen, (isOpen) => {
   window.document.body.classList.toggle('modal-open', isOpen)
 })
 
-watch(query, () => {
-  window.clearTimeout(agentSearchTimer)
-  agentSearchTimer = window.setTimeout(() => {
-    void searchAgents()
-  }, 380)
-})
+watch([query, pageSize, agentColumnFilters], () => { page.value = 1 }, { deep: true })
 
 onMounted(loadAgents)
 
 onBeforeUnmount(() => {
-  window.clearTimeout(agentSearchTimer)
   window.document.body.classList.remove('modal-open')
 })
 </script>
@@ -554,12 +574,12 @@ onBeforeUnmount(() => {
       <table>
         <thead>
           <tr>
-            <th>№</th>
-            <th>Агент</th>
-            <th>ИНН</th>
-            <th>ОГРНИП</th>
-            <th>БИК</th>
-            <th>Расчетный счет</th>
+            <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="agentSortKey" :sort-direction="agentSortDirection" @sort="sortAgents" />
+            <SortableFilterHeader label="Агент" column-key="name" :sort-key="agentSortKey" :sort-direction="agentSortDirection" :filter-value="agentColumnFilters.name" @sort="sortAgents" @update:filter-value="agentColumnFilters.name = $event" />
+            <SortableFilterHeader label="ИНН" column-key="inn" :sort-key="agentSortKey" :sort-direction="agentSortDirection" :filter-value="agentColumnFilters.inn" @sort="sortAgents" @update:filter-value="agentColumnFilters.inn = $event" />
+            <SortableFilterHeader label="ОГРНИП" column-key="ogrnip" :sort-key="agentSortKey" :sort-direction="agentSortDirection" :filter-value="agentColumnFilters.ogrnip" @sort="sortAgents" @update:filter-value="agentColumnFilters.ogrnip = $event" />
+            <SortableFilterHeader label="БИК" column-key="bic" :sort-key="agentSortKey" :sort-direction="agentSortDirection" :filter-value="agentColumnFilters.bic" @sort="sortAgents" @update:filter-value="agentColumnFilters.bic = $event" />
+            <SortableFilterHeader label="Расчетный счет" column-key="account" :sort-key="agentSortKey" :sort-direction="agentSortDirection" :filter-value="agentColumnFilters.account" @sort="sortAgents" @update:filter-value="agentColumnFilters.account = $event" />
             <th aria-label="Действия"></th>
           </tr>
         </thead>
@@ -570,7 +590,7 @@ onBeforeUnmount(() => {
           </tr>
 
           <tr
-            v-for="(agent, index) in agents"
+            v-for="(agent, index) in pagedAgents"
             v-else
             :key="getAgentId(agent)"
             :class="{ selected: selectedAgent && getAgentId(selectedAgent) === getAgentId(agent) }"
@@ -578,7 +598,7 @@ onBeforeUnmount(() => {
             @click="selectAgent(agent)"
             @keydown.enter="selectAgent(agent)"
           >
-            <td>{{ skip + index + 1 }}</td>
+            <td>{{ agent.external_id ?? skip + index + 1 }}</td>
 
             <td class="entity-cell">
               <div class="entity-primary">
@@ -605,7 +625,7 @@ onBeforeUnmount(() => {
 
     <div v-if="!isLoading" class="mobile-entity-list">
       <article
-        v-for="agent in agents"
+        v-for="agent in pagedAgents"
         :key="getAgentId(agent)"
         class="mobile-entity-card"
         @click="selectAgent(agent)"
@@ -629,15 +649,15 @@ onBeforeUnmount(() => {
     </div>
 
     <EmptyState
-      v-if="!isLoading && agents.length === 0"
+      v-if="!isLoading && filteredAgents.length === 0"
       title="Агенты не найдены"
       :description="query ? 'Измените поисковый запрос или сбросьте его.' : 'Создайте первую карточку агента.'"
     />
 
     <div class="pagination-bar" aria-label="Пагинация агентов">
       <span>
-        Страница {{ page }} · показано {{ agents.length }} · записи
-        {{ agents.length === 0 ? 0 : skip + 1 }}–{{ skip + agents.length }}
+        Страница {{ page }} · показано {{ pagedAgents.length }} из {{ filteredAgents.length }} · записи
+        {{ pagedAgents.length === 0 ? 0 : skip + 1 }}–{{ skip + pagedAgents.length }}
       </span>
 
       <div class="row-actions">

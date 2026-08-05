@@ -6,6 +6,7 @@ import { createUser, deleteUser, fetchUsers, updateUser } from '@/shared/api/aut
 import { fetchEntityAudit } from '@/shared/api/audit'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
+import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
 import {
   formatAuditAction,
   formatAuditActor,
@@ -14,6 +15,7 @@ import {
 } from '@/shared/lib/audit'
 import type { AuditLogItem } from '@/shared/types/entities'
 import type { User } from '@/shared/types/auth'
+import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 
 type UserForm = {
   role: 'user' | 'admin'
@@ -23,6 +25,9 @@ type UserForm = {
 const authStore = useAuthStore()
 const users = ref<User[]>([])
 const userSearch = ref('')
+const userColumnFilters = reactive<Record<string, string>>({ username: '', role: '', active: '', created_at: '' })
+const userSortKey = ref<string | null>(null)
+const userSortDirection = ref<SortDirection>(null)
 const selectedUser = ref<User | null>(null)
 const userAuditItems = ref<AuditLogItem[]>([])
 const isLoading = ref(false)
@@ -49,19 +54,34 @@ const isSelfSelected = computed(() => {
   return Boolean(selectedUser.value && authStore.user?.user_id === selectedUser.value.user_id)
 })
 
+function userColumnValue(user: User, key: string) {
+  if (key === 'active') return user.is_active ? 'Активен' : 'Заблокирован'
+  if (key === 'created_at') return user.created_at
+  return user[key as keyof User]
+}
+
+function sortUsers(key: string) {
+  const next = nextSortState({ key: userSortKey.value, direction: userSortDirection.value }, key)
+  userSortKey.value = next.key
+  userSortDirection.value = next.direction
+}
+
 const visibleUsers = computed(() => {
-  const needle = userSearch.value.trim().toLowerCase()
-
-  if (!needle) {
-    return users.value
-  }
-
-  return users.value.filter((user) => {
-    return (
-      user.username.toLowerCase().includes(needle) ||
-      user.role.toLowerCase().includes(needle)
-    )
+  const needle = userSearch.value.trim().toLocaleLowerCase('ru-RU')
+  const filtered = users.value.filter((user) => {
+    const matchesSearch = !needle || [
+      user.username,
+      user.role,
+      user.is_active ? 'Активен' : 'Заблокирован',
+      formatDateTime(user.created_at),
+    ].join(' ').toLocaleLowerCase('ru-RU').includes(needle)
+    if (!matchesSearch) return false
+    return Object.entries(userColumnFilters).every(([key, filter]) => {
+      const kind = key === 'created_at' ? 'date' : key === 'role' || key === 'active' ? 'select' : 'text'
+      return matchesTableFilter(userColumnValue(user, key), filter, kind)
+    })
   })
+  return sortTableRows(filtered, userSortKey.value, userSortDirection.value, userColumnValue)
 })
 
 function formatDateTime(value?: string | null) {
@@ -333,10 +353,48 @@ onMounted(loadUsers)
         <table>
           <thead>
             <tr>
-              <th>Логин</th>
-              <th>Роль</th>
-              <th>Активен</th>
-              <th>Создан</th>
+              <SortableFilterHeader
+                label="Логин"
+                column-key="username"
+                :sort-key="userSortKey"
+                :sort-direction="userSortDirection"
+                :filter-value="userColumnFilters.username"
+                @sort="sortUsers"
+                @update:filter-value="userColumnFilters.username = $event"
+              />
+              <SortableFilterHeader
+                label="Роль"
+                column-key="role"
+                filter-kind="select"
+                :options="[{ value: 'admin', label: 'admin' }, { value: 'user', label: 'user' }]"
+                :sort-key="userSortKey"
+                :sort-direction="userSortDirection"
+                :filter-value="userColumnFilters.role"
+                @sort="sortUsers"
+                @update:filter-value="userColumnFilters.role = $event"
+              />
+              <SortableFilterHeader
+                label="Активен"
+                column-key="active"
+                filter-kind="select"
+                :options="[{ value: 'Активен', label: 'Активен' }, { value: 'Заблокирован', label: 'Заблокирован' }]"
+                :sort-key="userSortKey"
+                :sort-direction="userSortDirection"
+                :filter-value="userColumnFilters.active"
+                @sort="sortUsers"
+                @update:filter-value="userColumnFilters.active = $event"
+              />
+              <SortableFilterHeader
+                label="Создан"
+                column-key="created_at"
+                filter-kind="date"
+                placeholder="дд.мм.гггг"
+                :sort-key="userSortKey"
+                :sort-direction="userSortDirection"
+                :filter-value="userColumnFilters.created_at"
+                @sort="sortUsers"
+                @update:filter-value="userColumnFilters.created_at = $event"
+              />
               <th></th>
             </tr>
           </thead>

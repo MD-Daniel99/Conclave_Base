@@ -111,7 +111,7 @@ const FIELD_LABELS: Record<string, string> = {
   field_type: 'Тип поля',
   tax_percent: 'Налог при ставке 6%, %',
   tax_usn_percent: 'Налог при ставке 6%, %',
-  tax_osno_percent: 'Налог при ставке 12%, %',
+  tax_osno_percent: 'Налог по второй ставке, %',
   acq_percent: 'Эквайринг, %',
   custom_values: 'Дополнительные поля',
 }

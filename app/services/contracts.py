@@ -403,7 +403,10 @@ def select_llc_tsr_items(
                 if str(module.get("tsr_id") or (module.get("tsr") or {}).get("id") or "")
             }
     if not selected_assignment_ids and not selected_tsr_ids:
-        raise ValueError("Для договора ООО выберите хотя бы один ТСР клиента")
+        raise ValueError("Для договора ООО выберите один сертификат пациента")
+
+    if len(selected_assignment_ids) > 1 or len(selected_tsr_ids) > 1:
+        raise ValueError("Один договор можно сформировать только по одному сертификату")
 
     if selected_assignment_ids:
         missing_ids = selected_assignment_ids.difference(attached_by_assignment_id)
@@ -421,12 +424,17 @@ def select_llc_tsr_items(
         missing_ids = selected_tsr_ids.difference(attached_tsr_ids)
         if missing_ids:
             raise ValueError("Один или несколько выбранных ТСР не прикреплены к клиенту")
-        # A legacy request selecting a code includes all duplicate instances of
-        # that code, which is the least surprising backward-compatible result.
         selected_items = [
             item for item in attached_items
             if str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or "") in selected_tsr_ids
         ]
+        if len(selected_items) != 1:
+            raise ValueError(
+                "У пациента есть несколько одинаковых ТСР. Выберите конкретный сертификат по дате пробития"
+            )
+
+    if len(selected_items) != 1:
+        raise ValueError("Один договор можно сформировать только по одному сертификату")
 
     selected_item_ids = {str(item.get("client_tsr_id") or "") for item in selected_items}
     selected_item_tsr_ids = {
@@ -578,6 +586,70 @@ def validate_template_context(doc: DocxTemplate, context: dict[str, Any]) -> Non
         raise ValueError(f"В шаблоне есть переменные без значения: {', '.join(missing)}")
 
 
+def _metadata_certificate_ids(metadata: Any) -> set[str]:
+    if not isinstance(metadata, dict):
+        return set()
+    ids: set[str] = set()
+    direct_id = str(metadata.get("certificate_id") or "").strip()
+    if direct_id:
+        ids.add(direct_id)
+    snapshots = metadata.get("selected_tsr_components")
+    if isinstance(snapshots, list):
+        for snapshot in snapshots:
+            if isinstance(snapshot, dict):
+                value = str(snapshot.get("client_tsr_id") or "").strip()
+                if value:
+                    ids.add(value)
+    return ids
+
+
+def _document_matches_certificate(
+    document: models.Document,
+    certificate: dict[str, Any],
+) -> bool:
+    certificate_id = str(certificate.get("client_tsr_id") or "").strip()
+    if not certificate_id:
+        return False
+    if document.certificate_id and str(document.certificate_id) == certificate_id:
+        return True
+    if certificate_id in _metadata_certificate_ids(document.contract_metadata):
+        return True
+
+    # Compatibility for documents generated before CLIENT_TSR ids were stored.
+    metadata = document.contract_metadata if isinstance(document.contract_metadata, dict) else {}
+    snapshots = metadata.get("selected_tsr_components")
+    if not isinstance(snapshots, list) or len(snapshots) != 1 or not isinstance(snapshots[0], dict):
+        return False
+    snapshot = snapshots[0]
+    certificate_tsr_id = str(certificate.get("tsr_id") or (certificate.get("tsr") or {}).get("id") or "")
+    snapshot_tsr_id = str(snapshot.get("tsr_id") or "")
+    if certificate_tsr_id and snapshot_tsr_id and certificate_tsr_id != snapshot_tsr_id:
+        return False
+    snapshot_date = str(snapshot.get("check_date") or "")[:10]
+    certificate_date = str(certificate.get("check_date") or "")[:10]
+    if snapshot_date and certificate_date and snapshot_date != certificate_date:
+        return False
+    snapshot_amount = parse_money(snapshot.get("certificate_price") or document.certificate_amount)
+    certificate_amount = parse_money(certificate.get("certificate_price"))
+    return snapshot_amount > 0 and abs(snapshot_amount - certificate_amount) < 0.01
+
+
+def _accounting_snapshot(document: models.Document) -> dict[str, Any] | None:
+    row = document.contract_accounting
+    if not row:
+        return None
+    return {
+        "prosthetist_work": row.prosthetist_work,
+        "patient_travel": row.patient_travel,
+        "patient_accommodation": row.patient_accommodation,
+        "patient_meals": row.patient_meals,
+        "patient_payment": row.patient_payment,
+        "other_expenses": row.other_expenses,
+        "agency_expenses": row.agency_expenses,
+        "custom_values": dict(row.custom_values or {}),
+    }
+
+
 def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     template_key = normalize_template_key(getattr(payload, "template_type", "llc_contract"))
     template_config = TEMPLATES_CONFIG[template_key]
@@ -586,6 +658,23 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     client = crud.get_client(db, client_id)
     if not client:
         raise ValueError("Клиент не найден")
+
+    selected_document_components = (
+        select_llc_modules(client, payload)
+        if template_key == "llc_contract"
+        else (client.get("modules") or [])
+    )
+    selected_document_tsr_items = (
+        select_llc_tsr_items(client, payload, selected_document_components)
+        if template_key == "llc_contract"
+        else []
+    )
+    selected_certificate = selected_document_tsr_items[0] if selected_document_tsr_items else None
+    certificate_id = (
+        uuid.UUID(str(selected_certificate.get("client_tsr_id")))
+        if selected_certificate and selected_certificate.get("client_tsr_id")
+        else None
+    )
 
     if template_key in {"llc_contract", "dmk_contract"}:
         # Serialize number allocation inside the current DB transaction. The UI
@@ -612,16 +701,6 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     save_path = os.path.join(STORAGE_DIR, unique_name)
     doc.save(save_path)
 
-    selected_document_components = (
-        select_llc_modules(client, payload)
-        if template_key == "llc_contract"
-        else (client.get("modules") or [])
-    )
-    selected_document_tsr_items = (
-        select_llc_tsr_items(client, payload, selected_document_components)
-        if template_key == "llc_contract"
-        else []
-    )
     component_snapshot = [
         {
             "component_id": str(component.get("module_id")),
@@ -644,42 +723,67 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
             or ""
         )
         components_by_client_tsr.setdefault(component_key, []).append(component)
-    tsr_component_snapshot = (
-        [
-            {
-                "client_tsr_id": str(item.get("client_tsr_id") or ""),
-                "tsr_id": str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or ""),
-                "tsr": (item.get("tsr") or {}).get("full_tsr_code"),
-                "certificate_price": parse_money(item.get("certificate_price")),
-                "check_date": str(item.get("check_date") or ""),
-                "components": [
-                    {
-                        "component_id": str(component.get("module_id")),
-                        "component_name": component.get("module_name_index"),
-                        "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
-                        "price": parse_money(component.get("price")),
-                    }
-                    for component in components_by_client_tsr.get(
-                        str(
-                            item.get("client_tsr_id")
-                            or item.get("tsr_id")
-                            or (item.get("tsr") or {}).get("id")
-                            or ""
-                        ),
-                        [],
-                    )
-                ],
-            }
-            for item in selected_document_tsr_items
-        ]
-        if template_key == "llc_contract"
-        else []
+    tsr_component_snapshot = [
+        {
+            "client_tsr_id": str(item.get("client_tsr_id") or ""),
+            "tsr_id": str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or ""),
+            "tsr": (item.get("tsr") or {}).get("full_tsr_code"),
+            "certificate_price": parse_money(item.get("certificate_price")),
+            "check_date": str(item.get("check_date") or ""),
+            "components": [
+                {
+                    "component_id": str(component.get("module_id")),
+                    "component_name": component.get("module_name_index"),
+                    "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
+                    "price": parse_money(component.get("price")),
+                    "cost": parse_money(component.get("cost")),
+                }
+                for component in components_by_client_tsr.get(
+                    str(
+                        item.get("client_tsr_id")
+                        or item.get("tsr_id")
+                        or (item.get("tsr") or {}).get("id")
+                        or ""
+                    ),
+                    [],
+                )
+            ],
+        }
+        for item in selected_document_tsr_items
+    ] if template_key == "llc_contract" else []
+
+    components_cost = sum(parse_money(component.get("cost")) for component in selected_document_components)
+    certificate_amount = (
+        parse_money(selected_certificate.get("certificate_price"))
+        if selected_certificate
+        else parse_money(context.get("Сумма"))
     )
 
-    components_cost = sum(
-    parse_money(component.get("cost"))
-    for component in selected_document_components
-)
+    old_documents: list[models.Document] = []
+    old_paths: list[str] = []
+    preserved_accounting: dict[str, Any] | None = None
+    if selected_certificate:
+        candidates = (
+            db.query(models.Document)
+            .filter(
+                models.Document.client_id == client_id,
+                models.Document.document_type.in_(("llc_contract", "dmk_contract", "sdv_contract")),
+            )
+            .order_by(models.Document.created_at.desc(), models.Document.document_id.desc())
+            .all()
+        )
+        old_documents = [
+            candidate for candidate in candidates
+            if _document_matches_certificate(candidate, selected_certificate)
+        ]
+        for old_document in old_documents:
+            if preserved_accounting is None:
+                preserved_accounting = _accounting_snapshot(old_document)
+            if old_document.storage_path:
+                old_paths.append(old_document.storage_path)
+            db.delete(old_document)
+        if old_documents:
+            db.flush()
 
     db_doc = models.Document(
         client_id=client_id,
@@ -689,9 +793,11 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         size=os.path.getsize(save_path),
         document_type=template_key,
         document_number=str(getattr(payload, "document_number", "") or "").strip(),
-        
-        certificate_amount=parse_money(context.get("Сумма")),
+        contract_total=components_cost,
+        certificate_amount=certificate_amount,
+        certificate_id=certificate_id,
         contract_metadata={
+            "certificate_id": str(certificate_id or ""),
             "selected_components": component_snapshot,
             "selected_tsr_components": tsr_component_snapshot,
             "components_cost": components_cost,
@@ -702,6 +808,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
                     "module_name": component.get("module_name_index"),
                     "tsr": (component.get("tsr") or {}).get("full_tsr_code"),
                     "price": parse_money(component.get("price")),
+                    "cost": parse_money(component.get("cost")),
                 }
                 for component in selected_document_components
             ],
@@ -709,9 +816,30 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         },
     )
     db.add(db_doc)
-    db.flush()
-    if template_key in {"llc_contract", "dmk_contract"}:
-        db.add(models.ContractAccounting(document_id=db_doc.document_id))
-    db.commit()
-    db.refresh(db_doc)
+    try:
+        db.flush()
+        if template_key in {"llc_contract", "dmk_contract"}:
+            db.add(models.ContractAccounting(
+                document_id=db_doc.document_id,
+                **(preserved_accounting or {}),
+            ))
+        db.commit()
+        db.refresh(db_doc)
+    except Exception:
+        db.rollback()
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
+        raise
+
+    # Remove replaced files only after the database transaction succeeded.
+    for old_path in old_paths:
+        if old_path == save_path:
+            continue
+        try:
+            os.remove(old_path)
+        except OSError:
+            pass
     return db_doc
+

@@ -604,6 +604,7 @@ class DocumentRead(BaseModel):
     document_number: Optional[str] = None
     contract_total: Optional[float] = None
     certificate_amount: Optional[float] = None
+    certificate_id: Optional[UUID] = None
     contract_metadata: Optional[Dict[str, Any]] = None
     
     model_config = ConfigDict(from_attributes=True)

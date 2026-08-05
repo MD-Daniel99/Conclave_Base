@@ -650,7 +650,12 @@ select {
 }
 
 .table-wrap {
-  overflow: auto;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
   border-radius: var(--radius-lg);
 }
 
@@ -1700,13 +1705,6 @@ tr.selected td:first-child {
   }
 }
 
-@media (max-width: 1500px) and (min-width: 761px) {
-  .client-col-prosthetist,
-  .client-col-check-date {
-    display: none;
-  }
-}
-
 @media (max-width: 900px) {
   .app-shell,
   .app-shell.sidebar-collapsed {
@@ -1809,13 +1807,14 @@ tr.selected td:first-child {
     width: 100%;
   }
 
+  /* Do not replace data tables with reduced mobile cards. All columns stay
+     available; narrow screens use the table wrapper's horizontal scroll. */
   .desktop-entity-table {
-    display: none;
+    display: block;
   }
 
   .mobile-entity-list {
-    display: grid;
-    gap: 10px;
+    display: none;
   }
 
   .metric-grid,
@@ -1984,4 +1983,60 @@ tr.selected td:first-child {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* Унифицированные фильтры и сортировка для всех нативных таблиц. */
+.filterable-table-header {
+  min-width: 9.5rem;
+  vertical-align: top;
+}
+
+.table-sort-button {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.45rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.table-sort-button:hover,
+.table-sort-button:focus-visible,
+.table-sort-button.is-sorted {
+  color: var(--accent-dark);
+}
+
+.table-sort-indicator {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  opacity: 0.75;
+}
+
+.table-column-filter {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 5.8rem;
+  height: 2rem;
+  margin-top: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  padding: 0 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+.table-column-filter:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  outline-offset: 0;
 }

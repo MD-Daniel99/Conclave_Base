@@ -13,10 +13,12 @@ import {
 import { getApiErrorMessage } from '@/shared/api/http'
 import { fetchNameIndexReferences, fetchTsrReferences } from '@/shared/api/references'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
+import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
 import { formatMoney, formatMoneyInput } from '@/shared/lib/money'
 import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
 import EmptyState from '@/shared/ui/EmptyState.vue'
 import StatusPill from '@/shared/ui/StatusPill.vue'
+import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 import type {
   Client,
   ComponentCreatePayload,
@@ -75,22 +77,61 @@ const tsrReferences = ref<ReferenceItem[]>([])
 const selectedComponent = ref<ComponentItem | null>(null)
 const isComponentCardOpen = ref(false)
 const query = ref('')
-const supplierQuery = ref('')
-const ownerFilter = ref('')
+const warehouseColumnFilters = reactive<Record<string, string>>({ name: '', supplier: '', quantity: '', cost: '', price: '', order: '', owner: '' })
+const warehouseSortKey = ref<string | null>(null)
+const warehouseSortDirection = ref<SortDirection>(null)
 const pageLimit = ref(100)
 const currentPage = ref(1)
-const hasMore = ref(false)
 const activeWarehouseListMode = ref<WarehouseListMode>('active')
 const componentForm = reactive<ComponentForm>({ ...emptyComponentForm })
 const isLoading = ref(false)
 const isSaving = ref(false)
 const error = ref('')
 const successMessage = ref('')
-let warehouseFilterTimer: ReturnType<typeof setTimeout> | undefined
 
 const isEditingComponent = computed(() => Boolean(selectedComponent.value?.module_id))
 const currentSkip = computed(() => (currentPage.value - 1) * pageLimit.value)
 const hasPreviousPage = computed(() => currentPage.value > 1)
+
+function warehouseRowNumber(item: ComponentItem) {
+  const index = components.value.findIndex((candidate) => getComponentId(candidate) === getComponentId(item))
+  return index >= 0 ? index + 1 : 0
+}
+
+function warehouseColumnValue(item: ComponentItem, key: string) {
+  if (key === 'number') return warehouseRowNumber(item)
+  if (key === 'name') return `${getComponentName(item)} ${item.tsr?.full_tsr_code || ''}`
+  if (key === 'cost') return item.cost ?? 0
+  if (key === 'price') return item.price ?? 0
+  if (key === 'order') return `Заказано ${item.ordered ?? 0} Получено ${item.recd ?? 0} Ожидается ${item.pending ?? 0}`
+  if (key === 'owner') return getClientLabel(item.client_id)
+  return item[key as keyof ComponentItem]
+}
+
+function sortWarehouse(key: string) {
+  const next = nextSortState({ key: warehouseSortKey.value, direction: warehouseSortDirection.value }, key)
+  warehouseSortKey.value = next.key
+  warehouseSortDirection.value = next.direction
+  currentPage.value = 1
+}
+
+const filteredComponents = computed(() => {
+  const needle = query.value.trim().toLocaleLowerCase('ru-RU')
+  const filtered = components.value.filter((item) => {
+    const searchable = [
+      getComponentName(item), item.tsr?.full_tsr_code, item.supplier,
+      item.order_date_acc_num, item.properties, item.notes, getClientLabel(item.client_id),
+    ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU')
+    if (needle && !searchable.includes(needle)) return false
+    return Object.entries(warehouseColumnFilters).every(([key, filter]) => {
+      const kind = ['number', 'quantity', 'cost', 'price'].includes(key) ? 'number' : 'text'
+      return matchesTableFilter(warehouseColumnValue(item, key), filter, kind)
+    })
+  })
+  return sortTableRows(filtered, warehouseSortKey.value, warehouseSortDirection.value, warehouseColumnValue)
+})
+const pagedComponents = computed(() => filteredComponents.value.slice(currentSkip.value, currentSkip.value + pageLimit.value))
+const hasMore = computed(() => currentSkip.value + pageLimit.value < filteredComponents.value.length)
 const componentQuantity = computed(() => Math.max(1, Math.trunc(toNumber(componentForm.quantity, 1))))
 const componentTotalCost = computed(() => (toOptionalNumber(componentForm.unit_cost) ?? 0) * componentQuantity.value)
 const componentTotalPrice = computed(() => (toOptionalNumber(componentForm.unit_price) ?? 0) * componentQuantity.value)
@@ -107,8 +148,7 @@ const tsrOptions = computed(() => tsrReferences.value
   .filter((item) => item.value && item.label))
 const activeWarehouseFilterCount = computed(() => [
   query.value.trim(),
-  supplierQuery.value.trim(),
-  ownerFilter.value,
+  ...Object.values(warehouseColumnFilters).map((value) => value.trim()),
 ].filter(Boolean).length)
 const confirmAction = useAppConfirm()
 useSuccessToast(successMessage, 'Склад')
@@ -296,21 +336,13 @@ async function loadData() {
   error.value = ''
 
   try {
-    const data = await fetchComponents({
-      skip: currentSkip.value,
-      limit: pageLimit.value + 1,
-      q: query.value.trim() || undefined,
-      supplier: supplierQuery.value.trim() || undefined,
-      client_id: ownerFilter.value && ownerFilter.value !== '__stock__' ? ownerFilter.value : undefined,
-      unassigned: ownerFilter.value === '__stock__' || undefined,
+    components.value = await fetchComponents({
+      skip: 0,
+      limit: 100000,
       archived: activeWarehouseListMode.value === 'archive',
     })
-
-    hasMore.value = data.length > pageLimit.value
-    components.value = data.slice(0, pageLimit.value)
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
-    hasMore.value = false
   } finally {
     isLoading.value = false
   }
@@ -318,14 +350,14 @@ async function loadData() {
 
 function applyFilters() {
   currentPage.value = 1
-  void loadData()
 }
 
 function resetFilters() {
   query.value = ''
-  supplierQuery.value = ''
-  ownerFilter.value = ''
-  applyFilters()
+  Object.keys(warehouseColumnFilters).forEach((key) => { warehouseColumnFilters[key] = '' })
+  warehouseSortKey.value = null
+  warehouseSortDirection.value = null
+  currentPage.value = 1
 }
 
 function switchWarehouseListMode(mode: WarehouseListMode) {
@@ -335,7 +367,6 @@ function switchWarehouseListMode(mode: WarehouseListMode) {
 
   activeWarehouseListMode.value = mode
   currentPage.value = 1
-  ownerFilter.value = ''
   isComponentCardOpen.value = false
   resetMessages()
   void loadData()
@@ -444,7 +475,6 @@ function goToPreviousPage() {
   }
 
   currentPage.value -= 1
-  void loadData()
 }
 
 function goToNextPage() {
@@ -453,17 +483,13 @@ function goToNextPage() {
   }
 
   currentPage.value += 1
-  void loadData()
 }
 
 watch(isComponentCardOpen, (isOpen) => {
   window.document.body.classList.toggle('modal-open', isOpen)
 })
 
-watch([query, supplierQuery], () => {
-  window.clearTimeout(warehouseFilterTimer)
-  warehouseFilterTimer = window.setTimeout(applyFilters, 380)
-})
+watch([query, pageLimit, warehouseColumnFilters], () => { currentPage.value = 1 }, { deep: true })
 
 onMounted(async () => {
   const [activeClientResult, archivedClientResult, nameResult, tsrResult] = await Promise.allSettled([
@@ -482,7 +508,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.clearTimeout(warehouseFilterTimer)
   window.document.body.classList.remove('modal-open')
 })
 </script>
@@ -515,22 +540,8 @@ onBeforeUnmount(() => {
     <form class="toolbar-form warehouse-toolbar" @submit.prevent="applyFilters">
       <div class="toolbar-search-wrap">
         <Search :size="17" aria-hidden="true" />
-        <input v-model="query" aria-label="Поиск комплектующей" placeholder="Индекс или название" />
+        <input v-model="query" aria-label="Поиск комплектующей" placeholder="Название, ТСР, поставщик, владелец или примечание" />
       </div>
-      <label class="filter-label">
-        <span>Поставщик</span>
-        <input v-model="supplierQuery" placeholder="Все поставщики" />
-      </label>
-      <label class="filter-label">
-        <span>Владелец</span>
-        <select v-model="ownerFilter" @change="applyFilters">
-          <option value="">Все владельцы</option>
-          <option v-if="activeWarehouseListMode === 'active'" value="__stock__">На складе</option>
-          <option v-for="client in visibleOwnerClients" :key="String(client.client_id)" :value="client.client_id">
-            {{ getClientName(client) }}
-          </option>
-        </select>
-      </label>
       <label class="filter-label">
         <span>На странице</span>
         <select v-model.number="pageLimit" @change="applyFilters">
@@ -560,14 +571,14 @@ onBeforeUnmount(() => {
       <table>
         <thead>
           <tr>
-            <th>№</th>
-            <th>Комплектующая</th>
-            <th>Поставщик</th>
-            <th>Кол-во</th>
-            <th>Себестоимость</th>
-            <th>Цена</th>
-            <th>Заказ</th>
-            <th>Владелец</th>
+            <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" @sort="sortWarehouse" />
+            <SortableFilterHeader label="Комплектующая" column-key="name" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.name" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.name = $event" />
+            <SortableFilterHeader label="Поставщик" column-key="supplier" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.supplier" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.supplier = $event" />
+            <SortableFilterHeader label="Кол-во" column-key="quantity" filter-kind="number" placeholder=">= 1 или 1..10" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.quantity" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.quantity = $event" />
+            <SortableFilterHeader label="Себестоимость" column-key="cost" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.cost" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.cost = $event" />
+            <SortableFilterHeader label="Цена" column-key="price" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.price" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.price = $event" />
+            <SortableFilterHeader label="Заказ" column-key="order" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.order" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.order = $event" />
+            <SortableFilterHeader label="Владелец" column-key="owner" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.owner" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.owner = $event" />
             <th aria-label="Действия"></th>
           </tr>
         </thead>
@@ -576,7 +587,7 @@ onBeforeUnmount(() => {
             <td colspan="9">Загружаем комплектующие...</td>
           </tr>
           <tr
-            v-for="(item, index) in components"
+            v-for="item in pagedComponents"
             v-else
             :key="item.module_id"
             :tabindex="activeWarehouseListMode === 'active' ? 0 : undefined"
@@ -584,7 +595,7 @@ onBeforeUnmount(() => {
             @click="activeWarehouseListMode === 'active' && selectComponent(item)"
             @keydown.enter="activeWarehouseListMode === 'active' && selectComponent(item)"
           >
-            <td>{{ currentSkip + index + 1 }}</td>
+            <td>{{ warehouseRowNumber(item) }}</td>
             <td class="entity-cell">
               <div class="entity-primary">
                 <span class="entity-avatar">ТС</span>
@@ -623,7 +634,7 @@ onBeforeUnmount(() => {
 
     <div v-if="!isLoading" class="mobile-entity-list">
       <article
-        v-for="item in components"
+        v-for="item in pagedComponents"
         :key="item.module_id"
         class="mobile-entity-card"
         @click="activeWarehouseListMode === 'active' && selectComponent(item)"
@@ -648,13 +659,13 @@ onBeforeUnmount(() => {
     </div>
 
     <EmptyState
-      v-if="!isLoading && components.length === 0"
+      v-if="!isLoading && filteredComponents.length === 0"
       title="Комплектующие не найдены"
       :description="activeWarehouseFilterCount ? 'Измените или сбросьте фильтры.' : 'Добавьте первую комплектующую на склад.'"
     />
 
     <div class="pagination-bar">
-      <span>Страница {{ currentPage }}</span>
+      <span>Страница {{ currentPage }} · показано {{ pagedComponents.length }} из {{ filteredComponents.length }}</span>
       <div class="row-actions">
         <button class="secondary-button" :disabled="!hasPreviousPage" type="button" @click="goToPreviousPage">
           Назад

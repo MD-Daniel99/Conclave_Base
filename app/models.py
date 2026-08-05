@@ -210,11 +210,21 @@ class Document(Base):
     document_number = Column(String(64), nullable=True)
     contract_total = Column(Float, nullable=True)
     certificate_amount = Column(Float, nullable=True)
+    # Конкретный сертификат (экземпляр CLIENT_TSR), на основании которого
+    # сформирован договор. Один сертификат может иметь только один актуальный
+    # договор; повторная генерация заменяет предыдущий документ.
+    certificate_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("CLIENT_TSR.client_tsr_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     contract_metadata = Column(JSON, nullable=True)
     
     created_at = Column(DateTime(timezone=True), default=datetime.now, server_default=func.now())
 
     client = relationship("Client", back_populates="documents")
+    certificate = relationship("ClientTsr", back_populates="documents")
     contract_accounting = relationship(
         "ContractAccounting",
         back_populates="document",
@@ -413,6 +423,7 @@ class ClientTsr(Base):
     client = relationship("Client", back_populates="tsr_items")
     tsr = relationship("TstCodeRef", back_populates="client_links")
     modules = relationship("Module", back_populates="client_tsr", passive_deletes=True)
+    documents = relationship("Document", back_populates="certificate", passive_deletes=True)
 
 
 class ModuleNameIndex(Base):

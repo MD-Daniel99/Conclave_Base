@@ -17,6 +17,8 @@ import { fetchUserSettings, updateUserSettings } from '@/shared/api/auth'
 import { fetchClients, updateClient } from '@/shared/api/clients'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
+import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection, type TableFilterKind } from '@/shared/lib/table'
+import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 import type {
   AccountingCustomField,
   Client,
@@ -48,7 +50,7 @@ const expenseColumns: Array<{ key: ExpenseKey; label: string }> = [
 ]
 
 const leadingColumns = [
-  { key: 'client', label: 'Договор / клиент' },
+  { key: 'client', label: 'Клиент' },
   { key: 'certificate', label: 'Сертификат' },
   { key: 'modules_cost', label: 'Стоимость комплектующих' },
 ]
@@ -71,7 +73,7 @@ const startDate = ref('')
 const endDate = ref('')
 const hideFailed = ref(true)
 const taxUsnPercent = ref(6)
-const taxOsnoPercent = ref(20)
+const taxOsnoPercent = ref(15)
 const acquiringPercent = ref(1)
 const vatPercent = ref(20)
 const newFieldName = ref('')
@@ -80,6 +82,9 @@ const pageLimit = ref(50)
 const currentPage = ref(1)
 const selectedColumnKeys = ref<string[]>([])
 const knownColumnKeys = ref<string[]>([])
+const accountingColumnFilters = reactive<Record<string, string>>({})
+const accountingSortKey = ref<string | null>(null)
+const accountingSortDirection = ref<SortDirection>(null)
 const editableRows = reactive<Record<string, EditableRow>>({})
 const isLoading = ref(false)
 const isSaving = ref(false)
@@ -109,81 +114,141 @@ const coverageByClientId = computed(() => new Map(
   contractCoverage.value.map((coverage) => [coverage.client_id, coverage]),
 ))
 
+type CertificateSlice = { id: string; date: string; amount: number }
+
+function getCertificateSlices(client: Client): CertificateSlice[] {
+  const normalized = (client.tsr_items ?? [])
+    .map((item) => ({
+      id: String(item.client_tsr_id ?? ''),
+      date: String(item.check_date ?? '').slice(0, 10),
+      amount: parseMoney(item.certificate_price),
+    }))
+    .filter((item) => item.amount > 0)
+
+  if (normalized.length > 0) return normalized
+  return [{
+    id: '',
+    date: String(client.check_date ?? '').slice(0, 10),
+    amount: parseMoney(client.certificate_price),
+  }]
+}
+
+function getVisibleCertificateSlices(client: Client) {
+  return getCertificateSlices(client).filter((item) => {
+    if (!startDate.value && !endDate.value) return true
+    if (!item.date) return false
+    if (startDate.value && item.date < startDate.value) return false
+    if (endDate.value && item.date > endDate.value) return false
+    return true
+  })
+}
+
+function clientSearchText(client: Client) {
+  return [
+    getClientName(client), getAgentName(client), client.external_id,
+    client.notes, client.ipra_code, client.place_of_residence,
+    ...(client.phones ?? []).map((phone) => phone.number),
+    ...(client.passports ?? []).flatMap((passport) => [
+      passport.full_name, passport.series_number, passport.registration_address,
+    ]),
+    ...(client.snils ?? []).map((snils) => snils.number),
+    ...(client.tsr_items ?? []).flatMap((item) => [
+      item.tsr?.full_tsr_code, item.certificate_price, item.check_date,
+    ]),
+  ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU')
+}
+
 const filteredClients = computed(() => {
-  const normalizedQuery = query.value.trim().toLowerCase()
-
+  const normalizedQuery = query.value.trim().toLocaleLowerCase('ru-RU')
   return clients.value.filter((client) => {
-    if (hideFailed.value && isFailedClient(client)) {
-      return false
-    }
-
-    const date = getCheckDate(client)
-
-    if ((startDate.value || endDate.value) && !date) {
-      return false
-    }
-
-    if (startDate.value && date && date < startDate.value) {
-      return false
-    }
-
-    if (endDate.value && date && date > endDate.value) {
-      return false
-    }
-
-    if (!normalizedQuery) {
-      return true
-    }
-
-    return `${getClientName(client)} ${getAgentName(client)}`.toLowerCase().includes(normalizedQuery)
+    if (hideFailed.value && isFailedClient(client)) return false
+    if ((startDate.value || endDate.value) && getVisibleCertificateSlices(client).length === 0) return false
+    return !normalizedQuery || clientSearchText(client).includes(normalizedQuery)
   })
 })
 
-const rows = computed(() =>
+const calculatedRows = computed(() =>
   filteredClients.value.map((client) => {
-    const rawCertificate = parseMoney(client.certificate_price)
-    const rawModulesCost = getModulesCost(client)
+    const certificateSlices = getVisibleCertificateSlices(client)
+    const certificateIds = new Set(certificateSlices.map((item) => item.id).filter(Boolean))
+    const rawCertificate = certificateSlices.reduce((sum, item) => sum + item.amount, 0)
+    const rawModulesCost = getModulesCost(client, certificateIds)
     const editable = ensureEditableRow(client)
-    const fixedExpenses = expenseColumns.reduce((sum, column) => (
-      sum + (isColumnVisible(column.key) ? parseMoney(editable[column.key]) : 0)
-    ), 0)
-    const customExpenses = numericCustomFields.value.reduce((sum, field) => {
-      if (!isColumnVisible(getCustomColumnKey(field))) {
-        return sum
-      }
-
-      return sum + parseMoney(getCustomEditableValue(client, field))
-    }, 0)
-
-    const certificate = isColumnVisible('certificate') ? rawCertificate : 0
-    const modulesCost = isColumnVisible('modules_cost') ? rawModulesCost : 0
+    const fixedExpenses = expenseColumns.reduce((sum, column) => sum + parseMoney(editable[column.key]), 0)
+    const customExpenses = numericCustomFields.value.reduce(
+      (sum, field) => sum + parseMoney(getCustomEditableValue(client, field)),
+      0,
+    )
     const taxPercent = getClientTaxPercent(client)
-    const vat = isColumnVisible('vat')
-      ? certificate * (vatPercent.value / (100 + vatPercent.value))
-      : 0
-    const tax = isColumnVisible('tax') ? (certificate - vat) * (taxPercent / 100) : 0
-    const acquiring = isColumnVisible('acquiring')
-      ? certificate * (acquiringPercent.value / 100)
-      : 0
-    const hasNoAccountingBasis = rawModulesCost === 0 && !getCheckDate(client)
-    const profit = hasNoAccountingBasis
-      ? 0
-      : certificate - modulesCost - fixedExpenses - customExpenses - vat - tax - acquiring
+    const vat = rawCertificate * (vatPercent.value / (100 + vatPercent.value))
+    const revenueWithoutVat = rawCertificate - vat
+    const acquiring = rawCertificate * (acquiringPercent.value / 100)
+    const taxBase = Math.max(
+      0,
+      revenueWithoutVat - rawModulesCost - fixedExpenses - customExpenses - acquiring,
+    )
+    const tax = taxBase * (taxPercent / 100)
+    const profit = revenueWithoutVat - rawModulesCost - fixedExpenses - customExpenses - acquiring - tax
 
     return {
       client,
-      certificate,
-      modulesCost,
+      certificateDates: certificateSlices.map((item) => item.date).filter(Boolean),
+      certificate: rawCertificate,
+      modulesCost: rawModulesCost,
       fixedExpenses,
       customExpenses,
       vat,
       tax,
-      taxPercent,
       acquiring,
       profit,
     }
   }),
 )
+
+function accountingColumnValue(row: (typeof calculatedRows.value)[number], key: string): unknown {
+  if (key === 'client') return `${getClientName(row.client)} ${getAgentName(row.client)} ${row.certificateDates.join(' ')}`
+  if (key === 'certificate') return row.certificate
+  if (key === 'modules_cost') return row.modulesCost
+  if (key === 'vat') return row.vat
+  if (key === 'tax') return row.tax
+  if (key === 'acquiring') return row.acquiring
+  if (key === 'profit') return row.profit
+  if (key.startsWith('custom:')) {
+    const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
+    return field ? getCustomEditableValue(row.client, field) : ''
+  }
+  if (expenseColumns.some((column) => column.key === key)) {
+    return parseMoney(getExpenseValue(row.client, key as ExpenseKey))
+  }
+  return ''
+}
+
+function accountingFilterKind(key: string): TableFilterKind {
+  if (key === 'client') return 'text'
+  if (key.startsWith('custom:')) {
+    const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
+    return field && getFieldType(field) === 'text' ? 'text' : 'number'
+  }
+  return 'number'
+}
+
+function sortAccounting(key: string) {
+  const next = nextSortState({ key: accountingSortKey.value, direction: accountingSortDirection.value }, key)
+  accountingSortKey.value = next.key
+  accountingSortDirection.value = next.direction
+  currentPage.value = 1
+}
+
+const rows = computed(() => {
+  const filtered = calculatedRows.value.filter((row) => availableColumns.value.every((column) => (
+    matchesTableFilter(
+      accountingColumnValue(row, column.key),
+      accountingColumnFilters[column.key] ?? '',
+      accountingFilterKind(column.key),
+    )
+  )))
+  return sortTableRows(filtered, accountingSortKey.value, accountingSortDirection.value, accountingColumnValue)
+})
 
 const pagedRows = computed(() => {
   const start = (currentPage.value - 1) * pageLimit.value
@@ -196,6 +261,12 @@ const visibleRangeStart = computed(() => (
   rows.value.length === 0 ? 0 : (currentPage.value - 1) * pageLimit.value + 1
 ))
 const visibleRangeEnd = computed(() => Math.min(currentPage.value * pageLimit.value, rows.value.length))
+const activeAccountingFilterCount = computed(() => [
+  query.value.trim(),
+  startDate.value,
+  endDate.value,
+  ...Object.values(accountingColumnFilters).map((value) => value.trim()),
+].filter(Boolean).length)
 
 const totals = computed(() =>
   rows.value.reduce(
@@ -249,11 +320,12 @@ function getAgentName(client: Client) {
 }
 
 function getCheckDate(client: Client) {
-  return String(client.check_date ?? '').slice(0, 10)
+  const dates = getVisibleCertificateSlices(client).map((item) => item.date).filter(Boolean).sort()
+  return dates.length > 0 ? dates[dates.length - 1] : ''
 }
 
-function getTaxationSystem(client: Client): '6%' | '12%' {
-  return client.taxation_system === 'ОСНО' ? '12%' : '6%'
+function getTaxationSystem(client: Client) {
+  return `УСН ${getClientTaxPercent(client)}%`
 }
 
 function getClientTaxPercent(client: Client) {
@@ -271,10 +343,14 @@ function isFailedClient(client: Client) {
   return ['fail', 'hold', 'cancel', 'отказ', 'отлож', 'отмен'].some((token) => text.includes(token))
 }
 
-function getModulesCost(client: Client) {
+function getModulesCost(client: Client, visibleCertificateIds: Set<string>) {
+  const dateFilterActive = Boolean(startDate.value || endDate.value)
+  const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
   return (client.modules ?? []).reduce((sum, component) => {
-    if (component.is_archived) {
-      return sum
+    if (component.is_archived) return sum
+    if (dateFilterActive && hasNormalizedCertificates) {
+      const certificateId = String(component.client_tsr_id ?? '')
+      if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
     }
     return sum + parseMoney(component.cost)
   }, 0)
@@ -332,6 +408,16 @@ function syncSelectedColumns() {
 
 function resetAccountingPage() {
   currentPage.value = 1
+}
+
+function resetAccountingFilters() {
+  query.value = ''
+  startDate.value = ''
+  endDate.value = ''
+  Object.keys(accountingColumnFilters).forEach((key) => { accountingColumnFilters[key] = '' })
+  accountingSortKey.value = null
+  accountingSortDirection.value = null
+  resetAccountingPage()
 }
 
 function ensureEditableRow(client: Client) {
@@ -577,7 +663,7 @@ async function removeCustomField(field: AccountingCustomField) {
   }
 }
 
-watch([query, startDate, endDate, hideFailed, pageLimit], resetAccountingPage)
+watch([query, startDate, endDate, hideFailed, pageLimit, accountingColumnFilters], resetAccountingPage, { deep: true })
 watch([taxUsnPercent, taxOsnoPercent, acquiringPercent, vatPercent], queuePercentSettingsSave)
 watch(activeAccountingTab, (tab) => {
   if (tab === 'clients') {
@@ -610,11 +696,11 @@ onMounted(async () => {
 
     <div class="toolbar-form accounting-percent-toolbar">
       <label>
-        УСН 6%,
+        УСН · первая ставка, %
         <input v-model.number="taxUsnPercent" min="0" step="0.1" type="number" />
       </label>
       <label>
-        УСН 15%,
+        УСН · вторая ставка, %
         <input v-model.number="taxOsnoPercent" min="0" step="0.1" type="number" />
       </label>
       <label>
@@ -632,10 +718,13 @@ onMounted(async () => {
 
     <template v-if="activeAccountingTab === 'clients'">
       <form class="inline-search wide-search contract-accounting-search" @submit.prevent="loadData">
-        <input v-model="query" placeholder="Клиент или агент" />
+        <input v-model="query" placeholder="ФИО, телефон, паспорт, СНИЛС, ТСР или агент" />
         <DateInput v-model="startDate" aria-label="Дата начала" />
         <DateInput v-model="endDate" aria-label="Дата окончания" />
         <button class="secondary-button" type="submit">Обновить</button>
+        <button v-if="activeAccountingFilterCount" class="ghost-button" type="button" @click="resetAccountingFilters">
+          Сбросить фильтры
+        </button>
       </form>
 
       <p v-if="error" class="form-error">{{ error }}</p>
@@ -682,7 +771,7 @@ onMounted(async () => {
         </label>
       </div>
 
-      <p class="form-hint">Снятые финансовые колонки исключаются из расчёта расходов и чистой прибыли.</p>
+      <p class="form-hint">Скрытие колонок не влияет на расчёты. НДС извлекается из суммы сертификата, эквайринг считается от полной суммы, а УСН — от выручки без НДС за вычетом себестоимости комплектующих и эквайринга.</p>
 
       <div class="field-chip-row" aria-label="Настройка колонок бухгалтерии">
         <button
@@ -716,22 +805,39 @@ onMounted(async () => {
         <table>
           <thead>
             <tr>
-              <th v-if="isColumnVisible('client')">Договор / клиент</th>
-              <th v-if="isColumnVisible('certificate')">Сертификат</th>
-              <th v-if="isColumnVisible('modules_cost')">Стоимость комплектующих</th>
-              <th v-for="column in expenseColumns.filter((item) => isColumnVisible(item.key))" :key="column.key">
-                {{ column.label }}
-              </th>
-              <th
+              <SortableFilterHeader v-if="isColumnVisible('client')" label="Клиент" column-key="client" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.client" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.client = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('certificate')" label="Сертификат" column-key="certificate" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.certificate" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.certificate = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('modules_cost')" label="Стоимость комплектующих" column-key="modules_cost" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.modules_cost" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.modules_cost = $event" />
+              <SortableFilterHeader
+                v-for="column in expenseColumns.filter((item) => isColumnVisible(item.key))"
+                :key="column.key"
+                :label="column.label"
+                :column-key="column.key"
+                filter-kind="number"
+                placeholder="Сумма или диапазон"
+                :sort-key="accountingSortKey"
+                :sort-direction="accountingSortDirection"
+                :filter-value="accountingColumnFilters[column.key]"
+                @sort="sortAccounting"
+                @update:filter-value="accountingColumnFilters[column.key] = $event"
+              />
+              <SortableFilterHeader
                 v-for="field in customFields.filter((item) => isColumnVisible(getCustomColumnKey(item)))"
                 :key="getFieldId(field)"
-              >
-                {{ getFieldName(field) }}
-              </th>
-              <th v-if="isColumnVisible('vat')">НДС</th>
-              <th v-if="isColumnVisible('tax')">Налог</th>
-              <th v-if="isColumnVisible('acquiring')">Эквайринг</th>
-              <th v-if="isColumnVisible('profit')">Прибыль</th>
+                :label="getFieldName(field)"
+                :column-key="getCustomColumnKey(field)"
+                :filter-kind="getFieldType(field) === 'number' ? 'number' : 'text'"
+                :placeholder="getFieldType(field) === 'number' ? 'Сумма или диапазон' : 'Фильтр…'"
+                :sort-key="accountingSortKey"
+                :sort-direction="accountingSortDirection"
+                :filter-value="accountingColumnFilters[getCustomColumnKey(field)]"
+                @sort="sortAccounting"
+                @update:filter-value="accountingColumnFilters[getCustomColumnKey(field)] = $event"
+              />
+              <SortableFilterHeader v-if="isColumnVisible('vat')" label="НДС" column-key="vat" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.vat" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.vat = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('tax')" label="Налог" column-key="tax" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.tax" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.tax = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('acquiring')" label="Эквайринг" column-key="acquiring" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.acquiring" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.acquiring = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('profit')" label="Прибыль" column-key="profit" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.profit" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.profit = $event" />
               <th></th>
             </tr>
           </thead>
@@ -744,7 +850,7 @@ onMounted(async () => {
               <td v-if="isColumnVisible('client')" class="accounting-identity-cell">
                 <button class="link-button accounting-client-link" type="button" @click="openClientCard(row.client)">
                   <strong>{{ getClientName(row.client) }}</strong>
-                  <span class="muted">{{ getTaxationSystem(row.client) }}</span>
+                  <span class="muted">{{ getTaxationSystem(row.client) }} · дата пробития {{ getCheckDate(row.client) || '—' }}</span>
                   <span v-if="clientRequiresContract(row.client)" class="contract-warning">
                     Необходимо сделать договор
                   </span>
@@ -777,7 +883,7 @@ onMounted(async () => {
               <td
                 v-if="isColumnVisible('tax')"
                 class="table-money"
-                :title="`${getTaxationSystem(row.client)} · ${row.taxPercent}%`"
+                :title="getTaxationSystem(row.client)"
               >
                 {{ formatMoney(row.tax) }}
               </td>

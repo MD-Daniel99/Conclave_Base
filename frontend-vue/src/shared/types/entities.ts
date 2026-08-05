@@ -86,7 +86,7 @@ export type ClientUpdatePayload = ClientUpdate & {
   other_expenses?: number | null
   agency_expenses?: number | null
 }
-export type ClientDocument = DocumentRead
+export type ClientDocument = DocumentRead & { certificate_id?: string | null }
 export type ContractGenerationPayload = ContractGeneration & {
   selected_client_tsr_ids?: string[]
   selected_tsr_ids?: string[]
@@ -174,10 +174,13 @@ export interface AccountingReportAmounts {
   cost: number
   salary: number
   custom_expenses: number
+  revenue_without_vat?: number
+  tax_base?: number
   vat: number
   tax: number
   acquiring: number
   profit: number
+  tax_percent?: number
 }
 
 export interface AccountingReportField {
@@ -189,7 +192,9 @@ export interface AccountingReportField {
 export interface AccountingReportRow {
   client: AccountingReportClient
   amounts: AccountingReportAmounts
-  custom_values: Record<string, number>
+  expenses?: Record<string, number>
+  certificates?: Array<{ certificate_id?: string | null; amount: number; date?: string | null; tsr?: string | null }>
+  custom_values: Record<string, number | string>
 }
 
 export interface AccountingReport {
@@ -210,8 +215,6 @@ export interface AccountingReport {
 
 export interface ContractAccountingAmounts {
   certificate: number
-  certificate_original?: number
-  certificate_remaining?: number
   modules_cost: number
   prosthetist_work: number
   patient_travel: number
@@ -221,14 +224,13 @@ export interface ContractAccountingAmounts {
   other_expenses: number
   agency_expenses: number
   custom_expenses: number
+  revenue_without_vat?: number
+  tax_base?: number
   vat: number
   tax: number
   tax_percent?: number
   acquiring: number
   profit: number
-  applies_percentage_expenses?: boolean
-  contract_index?: number
-  contract_count?: number
 }
 
 export interface ContractAccountingRow {
@@ -239,6 +241,8 @@ export interface ContractAccountingRow {
     document_type?: string | null
     date?: string | null
     created_at?: string | null
+    certificate_id?: string | null
+    certificate_date?: string | null
   }
   client: {
     client_id: string
@@ -263,6 +267,8 @@ export interface ClientContractCoverage {
   is_working: boolean
   requires_contract: boolean
   contract_count: number
+  total_certificates?: number
+  covered_certificates?: number
   total_modules: number
   covered_modules: number
   latest_contract_date?: string | null

@@ -730,6 +730,7 @@ export type DocumentRead = {
     document_number?: string | null;
     contract_total?: number | null;
     certificate_amount?: number | null;
+    certificate_id?: string | null;
     contract_metadata?: Record<string, unknown> | null;
 };
 

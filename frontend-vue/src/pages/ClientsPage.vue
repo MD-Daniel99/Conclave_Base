@@ -26,6 +26,8 @@ import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
 import EmptyState from '@/shared/ui/EmptyState.vue'
 import StatusPill from '@/shared/ui/StatusPill.vue'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
+import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
+import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
 import { fetchAgents } from '@/shared/api/agents'
 import { fetchEntityAudit } from '@/shared/api/audit'
@@ -235,12 +237,11 @@ const clientModules = ref<ModuleItem[]>([])
 const warehouseModules = ref<ModuleItem[]>([])
 const auditItems = ref<AuditLogItem[]>([])
 const query = ref('')
-const statusFilter = ref('')
-const stageFilter = ref('')
-const agentFilter = ref('')
+const clientColumnFilters = reactive<Record<string, string>>({ patient: '', prosthetist: '', tsr: '', check_date: '', certificate: '', status: '', stage: '', agent: '', repeat_visit: '' })
+const clientSortKey = ref<string | null>(null)
+const clientSortDirection = ref<SortDirection>(null)
 const pageLimit = ref(100)
 const currentPage = ref(1)
-const hasMoreClients = ref(false)
 const activeClientListMode = ref<ClientListMode>('active')
 const selectedClient = ref<Client | null>(null)
 const isClientCardOpen = ref(false)
@@ -312,16 +313,13 @@ const passportFormExpanded = ref(false)
 const snilsFormExpanded = ref(false)
 const componentFormExpanded = ref(false)
 const componentEntryMode = ref<ComponentEntryMode>('new')
-let clientFilterTimer: ReturnType<typeof setTimeout> | undefined
 
 const isEditing = computed(() => Boolean(selectedClient.value?.client_id))
 const isClientPersisted = computed(() => Boolean(selectedClient.value && getClientId(selectedClient.value)))
 const modalMessageId = computed(() => (error.value ? 'client-modal-error' : successMessage.value ? 'client-modal-success' : undefined))
 const activeClientFilterCount = computed(() => [
   query.value.trim(),
-  statusFilter.value,
-  stageFilter.value,
-  agentFilter.value,
+  ...Object.values(clientColumnFilters).map((value) => value.trim()),
 ].filter(Boolean).length)
 const CLIENT_TAB_LABELS: Record<ClientTab, string> = {
   main: 'Основное',
@@ -478,9 +476,55 @@ const prosthesisOptions = computed(() => DIAGNOSIS_OPTIONS)
 const nameIndexOptions = computed(() => nameIndexReferences.value.map(normalizeReferenceOption))
 const passportItems = computed(() => latestSingleItem(selectedClient.value?.passports ?? []))
 const snilsItems = computed(() => latestSingleItem(selectedClient.value?.snils ?? []))
-const hasPreviousPage = computed(() => currentPage.value > 1)
-const hasNextPage = computed(() => hasMoreClients.value)
 const currentSkip = computed(() => (currentPage.value - 1) * pageLimit.value)
+const clientAgentFilterOptions = computed(() => agents.value.map((agent) => ({
+  value: getAgentName(agent),
+  label: getAgentName(agent),
+})))
+const clientStatusFilterOptions = computed(() => statusOptions.value.map((option) => ({ value: option.label, label: option.label })))
+const clientStageFilterOptions = computed(() => stageOptions.value.map((option) => ({ value: option.label, label: option.label })))
+
+function clientColumnValue(client: Client, key: string): unknown {
+  if (key === 'number') return client.external_id ?? getClientId(client)
+  if (key === 'patient') return `${getClientName(client)} ${getClientPrimaryPhone(client)}`
+  if (key === 'prosthetist') return getClientProsthetistLabel(client)
+  if (key === 'tsr') return getClientTsrLabel(client)
+  if (key === 'check_date') return getClientCheckDates(client)
+  if (key === 'certificate') return getClientCertificateTotal(client)
+  if (key === 'status') return getClientStatusLabel(client)
+  if (key === 'stage') return getClientStageLabel(client)
+  if (key === 'agent') return getAgentLabel(client.agent_id)
+  if (key === 'repeat_visit') return getClientRepeatVisitDates(client)
+  return ''
+}
+
+function sortClients(key: string) {
+  const next = nextSortState({ key: clientSortKey.value, direction: clientSortDirection.value }, key)
+  clientSortKey.value = next.key
+  clientSortDirection.value = next.direction
+  currentPage.value = 1
+}
+
+const filteredClients = computed(() => {
+  const needle = query.value.trim().toLocaleLowerCase('ru-RU')
+  const filtered = clients.value.filter((client) => {
+    if (needle && !getClientSearchText(client).includes(needle)) return false
+    return Object.entries(clientColumnFilters).every(([key, filter]) => {
+      const kind = key === 'number' || key === 'certificate'
+        ? 'number'
+        : key === 'check_date' || key === 'repeat_visit'
+          ? 'date'
+          : key === 'status' || key === 'stage' || key === 'agent'
+            ? 'select'
+            : 'text'
+      return matchesTableFilter(clientColumnValue(client, key), filter, kind)
+    })
+  })
+  return sortTableRows(filtered, clientSortKey.value, clientSortDirection.value, clientColumnValue)
+})
+const pagedClients = computed(() => filteredClients.value.slice(currentSkip.value, currentSkip.value + pageLimit.value))
+const hasPreviousPage = computed(() => currentPage.value > 1)
+const hasNextPage = computed(() => currentSkip.value + pageLimit.value < filteredClients.value.length)
 const attachedTsrOptions = computed(() => {
   const items = [...(selectedClient.value?.tsr_items ?? [])].sort((left, right) => {
     const createdCompare = String(left.created_at ?? '').localeCompare(String(right.created_at ?? ''))
@@ -935,12 +979,53 @@ function getClientPrimaryPhone(client: Client) {
   return String(client.phones?.[0]?.number ?? '-')
 }
 
-function getClientDate(client: Client) {
-  const tsrDates = (client.tsr_items ?? [])
+function getClientCheckDates(client: Client) {
+  const dates = (client.tsr_items ?? [])
     .map((item) => String(item.check_date || '').slice(0, 10))
     .filter(Boolean)
-    .sort()
-  return formatShortDate(tsrDates[tsrDates.length - 1] || String(client.check_date ?? client.created_at ?? ''))
+  if (dates.length > 0) return dates
+  const legacy = String(client.check_date ?? '').slice(0, 10)
+  return legacy ? [legacy] : []
+}
+
+function getClientRepeatVisitDates(client: Client) {
+  const dates = (client.tsr_items ?? [])
+    .map((item) => String(item.repeat_visit_date || '').slice(0, 10))
+    .filter(Boolean)
+  if (dates.length > 0) return dates
+  const legacy = String(client.deadline ?? '').slice(0, 10)
+  return legacy ? [legacy] : []
+}
+
+function getClientCertificateTotal(client: Client) {
+  const items = client.tsr_items ?? []
+  if (items.length > 0) {
+    return items.reduce((sum, item) => sum + parseMoney(item.certificate_price), 0)
+  }
+  return parseMoney(client.certificate_price)
+}
+
+function getClientSearchText(client: Client) {
+  return [
+    getClientName(client), client.external_id, getClientStatusLabel(client), getClientStageLabel(client),
+    getAgentLabel(client.agent_id), client.notes, client.ipra_code, client.place_of_residence,
+    ...(client.phones ?? []).map((phone) => phone.number),
+    ...(client.passports ?? []).flatMap((passport) => [
+      passport.full_name, passport.series_number, passport.birth_place,
+      passport.issued_by, passport.department_code, passport.registration_address,
+    ]),
+    ...(client.snils ?? []).map((snils) => snils.number),
+    ...(client.tsr_items ?? []).flatMap((item) => [
+      item.tsr?.full_tsr_code, item.certificate_price, item.check_date,
+      item.prosthetist, item.place_of_residence, item.repeat_visit_date,
+    ]),
+  ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU')
+}
+
+function getClientDate(client: Client) {
+  const dates = getClientCheckDates(client)
+    .map(formatShortDate)
+  return getCountedLabels(dates) || '—'
 }
 
 function getClientDeadline(client: Client) {
@@ -952,6 +1037,26 @@ function getClientDeadline(client: Client) {
     return getCountedLabels(values) || '—'
   }
   return formatShortDate(String(client.deadline ?? ''))
+}
+
+function getClientTsrCardStyle(index: number) {
+  // A fixed stepped palette keeps neighbouring TSR cards visibly different
+  // even when a patient has many records. All shades stay inside the
+  // purple/blue/teal palette used by the application.
+  const accents = [
+    '158 105 247', // violet
+    '55 196 214',  // cyan-teal
+    '92 126 250',  // indigo-blue
+    '50 211 154',  // green-teal
+    '202 92 232',  // magenta-violet
+    '58 165 246',  // sky blue
+    '123 101 245', // indigo
+    '40 190 181',  // teal
+  ]
+
+  return {
+    '--tsr-card-accent-rgb': accents[index % accents.length],
+  }
 }
 
 function getProsthetistAddress(prosthetist: string, fallback = '') {
@@ -1071,45 +1176,32 @@ function isContractGroupPartiallySelected(group: ClientTsrGroup) {
   const ids = getContractGroupIds(group)
   if (ids.length === 0) return false
   const selectedCount = ids.filter((id) => selectedContractModuleIds.value.includes(id)).length
-  return selectedCount < ids.length
+  return selectedCount > 0 && selectedCount < ids.length
 }
 
 function toggleContractGroup(group: ClientTsrGroup, event: Event) {
   const checked = (event.target as HTMLInputElement).checked
-  const groupIds = getContractGroupIds(group)
-  const selectedTsr = new Set(selectedContractClientTsrIds.value)
-  const selected = new Set(selectedContractModuleIds.value)
-
-  if (group.clientTsrId) {
-    if (checked) selectedTsr.add(group.clientTsrId)
-    else selectedTsr.delete(group.clientTsrId)
+  if (!checked || !group.clientTsrId) {
+    selectedContractClientTsrIds.value = []
+    selectedContractModuleIds.value = []
+    return
   }
 
-  for (const id of groupIds) {
-    if (checked) {
-      selected.add(id)
-    } else {
-      selected.delete(id)
-    }
-  }
-
-  selectedContractClientTsrIds.value = [...selectedTsr]
-  selectedContractModuleIds.value = [...selected]
+  // Один сертификат является основанием ровно для одного актуального договора.
+  selectedContractClientTsrIds.value = [group.clientTsrId]
+  selectedContractModuleIds.value = getContractGroupIds(group)
 }
 
 function toggleContractComponent(group: ClientTsrGroup, componentId: string, event: Event) {
   const checked = (event.target as HTMLInputElement).checked
-  const selectedTsr = new Set(selectedContractClientTsrIds.value)
-  const selected = new Set(selectedContractModuleIds.value)
+  if (!group.clientTsrId) return
 
-  if (checked) {
-    selected.add(componentId)
-    if (group.clientTsrId) selectedTsr.add(group.clientTsrId)
-  } else {
-    selected.delete(componentId)
-  }
+  const sameCertificateSelected = selectedContractClientTsrIds.value[0] === group.clientTsrId
+  const selected = new Set(sameCertificateSelected ? selectedContractModuleIds.value : [])
+  if (checked) selected.add(componentId)
+  else selected.delete(componentId)
 
-  selectedContractClientTsrIds.value = [...selectedTsr]
+  selectedContractClientTsrIds.value = [group.clientTsrId]
   selectedContractModuleIds.value = [...selected]
 }
 
@@ -1673,20 +1765,12 @@ async function loadClients() {
   error.value = ''
 
   try {
-    const fetchedClients = await fetchClients({
-      skip: currentSkip.value,
-      limit: pageLimit.value + 1,
-      q: query.value.trim() || undefined,
-      status: statusFilter.value.trim() || undefined,
-      current_stage: stageFilter.value.trim() || undefined,
-      agent_id: agentFilter.value.trim() || undefined,
+    clients.value = await fetchClients({
+      skip: 0,
+      limit: 100000,
       archived: activeClientListMode.value === 'archive',
     })
-
-    hasMoreClients.value = fetchedClients.length > pageLimit.value
-    clients.value = fetchedClients.slice(0, pageLimit.value)
   } catch (caughtError) {
-    hasMoreClients.value = false
     error.value = getApiErrorMessage(caughtError)
   } finally {
     isLoading.value = false
@@ -1695,15 +1779,14 @@ async function loadClients() {
 
 function applyClientFilters() {
   currentPage.value = 1
-  void loadClients()
 }
 
 function resetClientFilters() {
   query.value = ''
-  statusFilter.value = ''
-  stageFilter.value = ''
-  agentFilter.value = ''
-  applyClientFilters()
+  Object.keys(clientColumnFilters).forEach((key) => { clientColumnFilters[key] = '' })
+  clientSortKey.value = null
+  clientSortDirection.value = null
+  currentPage.value = 1
 }
 
 function switchClientListMode(mode: ClientListMode) {
@@ -1725,7 +1808,6 @@ async function goToPreviousClientsPage() {
   }
 
   currentPage.value -= 1
-  await loadClients()
 }
 
 async function goToNextClientsPage() {
@@ -1734,7 +1816,6 @@ async function goToNextClientsPage() {
   }
 
   currentPage.value += 1
-  await loadClients()
 }
 
 async function loadReferences() {
@@ -2669,8 +2750,8 @@ async function generateContract() {
     return
   }
 
-  if (showExtendedContractDates.value && selectedContractClientTsrIds.value.length === 0) {
-    error.value = 'Для договора ООО выбери хотя бы один ТСР пациента.'
+  if (showExtendedContractDates.value && selectedContractClientTsrIds.value.length !== 1) {
+    error.value = 'Для договора ООО выберите ровно один сертификат пациента. Один сертификат — один договор.'
     return
   }
 
@@ -2765,10 +2846,7 @@ watch(isClientCardOpen, (isOpen) => {
   setBodyModalLock(isOpen)
 })
 
-watch(query, () => {
-  window.clearTimeout(clientFilterTimer)
-  clientFilterTimer = window.setTimeout(applyClientFilters, 380)
-})
+watch([query, pageLimit, clientColumnFilters], () => { currentPage.value = 1 }, { deep: true })
 
 watch(
   () => route.query.client_id,
@@ -2816,7 +2894,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.clearTimeout(clientFilterTimer)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   setBodyModalLock(false)
 })
@@ -2855,35 +2932,8 @@ onBeforeUnmount(() => {
     <form class="toolbar-form clients-toolbar" @submit.prevent="applyClientFilters">
       <div class="toolbar-search-wrap">
         <Search :size="17" aria-hidden="true" />
-        <input v-model="query" aria-label="Поиск пациента" placeholder="ФИО, телефон или данные пациента" />
+        <input v-model="query" aria-label="Поиск пациента" placeholder="ФИО, телефон, паспорт, СНИЛС, ТСР или данные пациента" />
       </div>
-      <label class="filter-label">
-        <span>Статус</span>
-        <select v-model="statusFilter" @change="applyClientFilters">
-          <option value="">Все статусы</option>
-          <option v-for="option in statusOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-label">
-        <span>Этап</span>
-        <select v-model="stageFilter" @change="applyClientFilters">
-          <option value="">Все этапы</option>
-          <option v-for="option in stageOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-label">
-        <span>Агент</span>
-        <select v-model="agentFilter" @change="applyClientFilters">
-          <option value="">Все агенты</option>
-          <option v-for="agent in agents" :key="String(agent.agent_id)" :value="agent.agent_id">
-            {{ getAgentName(agent) }}
-          </option>
-        </select>
-      </label>
       <label class="filter-label">
         <span>На странице</span>
         <select v-model.number="pageLimit" @change="applyClientFilters">
@@ -2898,18 +2948,11 @@ onBeforeUnmount(() => {
           <Search :size="15" aria-hidden="true" />
           Применить
         </button>
-        <button
-          v-if="activeClientFilterCount"
-          class="ghost-button"
-          type="button"
-          @click="resetClientFilters"
-        >
+        <button v-if="activeClientFilterCount" class="ghost-button" type="button" @click="resetClientFilters">
           <X :size="15" aria-hidden="true" />
           Сбросить
         </button>
-        <span v-if="activeClientFilterCount" class="filter-count">
-          {{ activeClientFilterCount }}
-        </span>
+        <span v-if="activeClientFilterCount" class="filter-count">{{ activeClientFilterCount }}</span>
       </div>
     </form>
 
@@ -2920,16 +2963,16 @@ onBeforeUnmount(() => {
       <table>
         <thead>
           <tr>
-            <th>№</th>
-            <th>Пациент</th>
-            <th class="client-col-prosthetist">Протезист</th>
-            <th>ТСР</th>
-            <th class="client-col-check-date">Дата пробития</th>
-            <th>Сертификат</th>
-            <th>Статус</th>
-            <th>Этап</th>
-            <th>Агент</th>
-            <th>Повторное</th>
+            <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="clientSortKey" :sort-direction="clientSortDirection" @sort="sortClients" />
+            <SortableFilterHeader label="Пациент" column-key="patient" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.patient" @sort="sortClients" @update:filter-value="clientColumnFilters.patient = $event" />
+            <SortableFilterHeader class="client-col-prosthetist" label="Протезист" column-key="prosthetist" placeholder="Имя протезиста" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.prosthetist" @sort="sortClients" @update:filter-value="clientColumnFilters.prosthetist = $event" />
+            <SortableFilterHeader label="ТСР" column-key="tsr" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.tsr" @sort="sortClients" @update:filter-value="clientColumnFilters.tsr = $event" />
+            <SortableFilterHeader class="client-col-check-date" label="Дата пробития" column-key="check_date" filter-kind="date" placeholder="дд.мм.гггг или от..до" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.check_date" @sort="sortClients" @update:filter-value="clientColumnFilters.check_date = $event" />
+            <SortableFilterHeader label="Сертификат" column-key="certificate" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.certificate" @sort="sortClients" @update:filter-value="clientColumnFilters.certificate = $event" />
+            <SortableFilterHeader label="Статус" column-key="status" filter-kind="select" :options="clientStatusFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.status" @sort="sortClients" @update:filter-value="clientColumnFilters.status = $event" />
+            <SortableFilterHeader label="Этап" column-key="stage" filter-kind="select" :options="clientStageFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.stage" @sort="sortClients" @update:filter-value="clientColumnFilters.stage = $event" />
+            <SortableFilterHeader label="Агент" column-key="agent" filter-kind="select" :options="clientAgentFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.agent" @sort="sortClients" @update:filter-value="clientColumnFilters.agent = $event" />
+            <SortableFilterHeader label="Повторное" column-key="repeat_visit" filter-kind="date" placeholder="дд.мм.гггг или от..до" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.repeat_visit" @sort="sortClients" @update:filter-value="clientColumnFilters.repeat_visit = $event" />
             <th aria-label="Действия"></th>
           </tr>
         </thead>
@@ -2938,7 +2981,7 @@ onBeforeUnmount(() => {
             <td colspan="11">Загружаем пациентов...</td>
           </tr>
           <tr
-            v-for="(client, index) in clients"
+            v-for="(client, index) in pagedClients"
             v-else
             :key="String(client.client_id ?? client.external_id)"
             :class="{ selected: selectedClient && getClientId(selectedClient) === getClientId(client) }"
@@ -2946,7 +2989,7 @@ onBeforeUnmount(() => {
             @click="selectClient(client)"
             @keydown.enter="selectClient(client)"
           >
-            <td>{{ currentSkip + index + 1 }}</td>
+            <td>{{ client.external_id ?? currentSkip + index + 1 }}</td>
             <td class="entity-cell">
               <div class="entity-primary">
                 <span class="entity-avatar">{{ getClientInitials(client) }}</span>
@@ -2959,7 +3002,7 @@ onBeforeUnmount(() => {
             <td class="client-col-prosthetist">{{ getClientProsthetistLabel(client) }}</td>
             <td class="table-tsr">{{ getClientTsrLabel(client) }}</td>
             <td class="client-col-check-date">{{ getClientDate(client) }}</td>
-            <td class="table-money">{{ formatMoney(client.certificate_price) }}</td>
+            <td class="table-money">{{ formatMoney(getClientCertificateTotal(client)) }}</td>
             <td><StatusPill :label="getClientStatusLabel(client)" kind="status" /></td>
             <td><StatusPill :label="getClientStageLabel(client)" kind="stage" /></td>
             <td>{{ getAgentLabel(client.agent_id) }}</td>
@@ -2974,7 +3017,7 @@ onBeforeUnmount(() => {
 
     <div v-if="!isLoading" class="mobile-entity-list">
       <article
-        v-for="client in clients"
+        v-for="client in pagedClients"
         :key="String(client.client_id ?? client.external_id)"
         class="mobile-entity-card"
         @click="selectClient(client)"
@@ -2990,16 +3033,17 @@ onBeforeUnmount(() => {
           <ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" />
         </div>
         <div class="mobile-entity-card-details">
+          <span>Дата пробития <strong>{{ getClientDate(client) }}</strong></span>
           <span>Статус <strong><StatusPill :label="getClientStatusLabel(client)" kind="status" /></strong></span>
           <span>Этап <strong><StatusPill :label="getClientStageLabel(client)" kind="stage" /></strong></span>
           <span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span>
-          <span>Повторное <strong>{{ getClientDeadline(client) }}</strong></span>
+          <span>Повторное протезирование<strong>{{ getClientDeadline(client) }}</strong></span>
         </div>
       </article>
     </div>
 
     <EmptyState
-      v-if="!isLoading && clients.length === 0"
+      v-if="!isLoading && filteredClients.length === 0"
       title="Пациенты не найдены"
       :description="activeClientFilterCount ? 'Измените или сбросьте фильтры.' : 'Создайте первую карточку пациента.'"
     >
@@ -3009,7 +3053,7 @@ onBeforeUnmount(() => {
     </EmptyState>
 
     <div class="pagination-bar" aria-label="Пагинация пациентов">
-      <span>Страница {{ currentPage }} · показано {{ clients.length }} · записи {{ currentSkip + 1 }}–{{ currentSkip + clients.length }}</span>
+      <span>Страница {{ currentPage }} · показано {{ pagedClients.length }} из {{ filteredClients.length }} · записи {{ pagedClients.length ? currentSkip + 1 : 0 }}–{{ currentSkip + pagedClients.length }}</span>
       <div class="row-actions">
         <button class="secondary-button" type="button" :disabled="isLoading || !hasPreviousPage" @click="goToPreviousClientsPage">
           Назад
@@ -3183,9 +3227,10 @@ onBeforeUnmount(() => {
           <div class="detail-panel tsr-module-panel">
             <div v-if="clientTsrGroups.some((group) => group.clientTsrId)" class="tsr-component-groups">
               <article
-                v-for="group in clientTsrGroups.filter((item) => item.clientTsrId)"
+                v-for="(group, groupIndex) in clientTsrGroups.filter((item) => item.clientTsrId)"
                 :key="group.key"
-                class="tsr-component-group"
+                class="tsr-component-group client-tsr-gradient-card"
+                :style="getClientTsrCardStyle(groupIndex)"
               >
                 <header class="tsr-component-header">
                   <div>
@@ -3228,7 +3273,7 @@ onBeforeUnmount(() => {
                   </section>
 
                   <section class="client-tsr-info-section client-tsr-assignment-section" aria-label="Протезист и повторное обращение">
-                    <span class="client-tsr-section-title">Протезист и повторное обращение</span>
+                    <span class="client-tsr-section-title">Протезист и повторное протезирование</span>
                     <div class="client-tsr-field-grid client-tsr-assignment-fields">
                       <label class="client-tsr-prosthetist-field">
                         <span class="client-tsr-field-label">Протезист</span>
@@ -3246,10 +3291,10 @@ onBeforeUnmount(() => {
                         <strong>{{ getProsthetistAddress(getClientTsrDraft(group).prosthetist, group.placeOfResidence) }}</strong>
                       </div>
                       <label class="client-tsr-repeat-field">
-                        <span class="client-tsr-field-label">Повторное обращение</span>
+                        <span class="client-tsr-field-label">Повторное протезирование</span>
                         <DateInput
                           :model-value="getClientTsrDraft(group).repeatVisitDate"
-                          :aria-label="`Повторное обращение для ${group.tsr}`"
+                          :aria-label="`Повторное протезирование для ${group.tsr}`"
                           @update:model-value="setClientTsrDraft(group, 'repeatVisitDate', $event)"
                         />
                       </label>
