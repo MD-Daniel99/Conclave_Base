@@ -2972,7 +2972,7 @@ onBeforeUnmount(() => {
             <SortableFilterHeader label="Статус" column-key="status" filter-kind="select" :options="clientStatusFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.status" @sort="sortClients" @update:filter-value="clientColumnFilters.status = $event" />
             <SortableFilterHeader label="Этап" column-key="stage" filter-kind="select" :options="clientStageFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.stage" @sort="sortClients" @update:filter-value="clientColumnFilters.stage = $event" />
             <SortableFilterHeader label="Агент" column-key="agent" filter-kind="select" :options="clientAgentFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.agent" @sort="sortClients" @update:filter-value="clientColumnFilters.agent = $event" />
-            <SortableFilterHeader label="Повторное" column-key="repeat_visit" filter-kind="date" placeholder="дд.мм.гггг или от..до" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.repeat_visit" @sort="sortClients" @update:filter-value="clientColumnFilters.repeat_visit = $event" />
+            <SortableFilterHeader label="Повторное протезирование" column-key="repeat_visit" filter-kind="date" placeholder="дд.мм.гггг или от..до" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.repeat_visit" @sort="sortClients" @update:filter-value="clientColumnFilters.repeat_visit = $event" />
             <th aria-label="Действия"></th>
           </tr>
         </thead>
@@ -3959,7 +3959,7 @@ onBeforeUnmount(() => {
             <article v-for="(item, index) in filteredReferenceItems" :key="String(getReferenceId(item) || getReferenceLabel(item))" class="reference-list-item" role="listitem">
               <div>
                 <strong>{{ getReferenceLabel(item) }}</strong>
-                <span>№ {{ index + 1 }}</span>
+                <span>№ {{ index }}</span>
               </div>
               <div class="row-actions">
                 <button
