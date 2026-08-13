@@ -37,10 +37,11 @@ def api_list_components(
     client_id: UUID | None = None,
     unassigned: bool = False,
     archived: bool = False,
+    in_stock: bool | None = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return crud.list_modules(db, skip, limit, q, supplier, client_id, unassigned, archived)
+    return crud.list_modules(db, skip, limit, q, supplier, client_id, unassigned, archived, in_stock)
 
 
 @router.get("/stock/count", response_model=int)
@@ -140,6 +141,63 @@ def api_restore_component(
     return _change_component_archive_state(
         component_id,
         is_archived=False,
+        db=db,
+        current_user=current_user,
+    )
+
+
+def _change_component_stock_state(
+    component_id: UUID,
+    *,
+    is_in_stock: bool,
+    db: Session,
+    current_user: models.User,
+):
+    before = crud.get_module(db, component_id)
+    if not before:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Комплектующая не найдена")
+    before_snapshot = snapshot(before)
+
+    try:
+        updated = crud.set_module_stock_state(db, component_id, is_in_stock=is_in_stock)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    log_action(
+        db,
+        entity="component",
+        entity_id=component_id,
+        action="component.stock" if is_in_stock else "component.work_stock",
+        user=current_user,
+        before=before_snapshot,
+        after=updated,
+    )
+    return updated
+
+
+@router.post("/{component_id}/stock", response_model=schemas.ModuleRead)
+def api_move_component_to_stock(
+    component_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return _change_component_stock_state(
+        component_id,
+        is_in_stock=True,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/{component_id}/work-stock", response_model=schemas.ModuleRead)
+def api_move_component_to_work_stock(
+    component_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return _change_component_stock_state(
+        component_id,
+        is_in_stock=False,
         db=db,
         current_user=current_user,
     )

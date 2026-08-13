@@ -9,6 +9,7 @@ export interface ListComponentsParams {
   client_id?: string
   unassigned?: boolean
   archived?: boolean
+  in_stock?: boolean
 }
 
 export async function fetchComponents(params: ListComponentsParams = {}) {
@@ -38,6 +39,16 @@ export async function archiveComponent(componentId: string) {
 
 export async function restoreComponent(componentId: string) {
   const { data } = await api.post<ComponentItem>(`/components/${componentId}/restore`)
+  return data
+}
+
+export async function moveComponentToStock(componentId: string) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/stock`)
+  return data
+}
+
+export async function moveComponentToWorkStock(componentId: string) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/work-stock`)
   return data
 }
 

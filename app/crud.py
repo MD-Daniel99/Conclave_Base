@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from . import models, schemas
+from .services.tsr_repeat_terms import calculate_repeat_visit_date, get_repeat_term_months
 from passlib.context import CryptContext
 
 import os
@@ -497,6 +498,7 @@ def delete_client(db: Session, client_id: UUID) -> bool:
         module.client_id = None
         module.client_tsr_id = None
         module.is_archived = bool(module.is_manually_archived)
+        module.is_in_stock = True
 
     db.flush()
     db.delete(client)
@@ -642,8 +644,10 @@ def create_client_tsr(db: Session, client_id: UUID, payload: schemas.ClientTsrCr
         raise ValueError("Клиент не найден")
     if client.is_archived:
         raise ValueError("Сначала восстановите клиента из архива")
-    if not db.get(models.TstCodeRef, payload.tsr_id):
+    tsr = db.get(models.TstCodeRef, payload.tsr_id)
+    if not tsr:
         raise ValueError("Выбранный ТСР не найден")
+    automatic_repeat_date = calculate_repeat_visit_date(tsr.full_tsr_code, payload.check_date)
     item = models.ClientTsr(
         client_id=client_id,
         tsr_id=payload.tsr_id,
@@ -651,7 +655,9 @@ def create_client_tsr(db: Session, client_id: UUID, payload: schemas.ClientTsrCr
         certificate_price=(payload.certificate_price or None),
         prosthetist=payload.prosthetist,
         place_of_residence=schemas.PROSTHETIST_ADDRESSES.get(payload.prosthetist),
-        repeat_visit_date=payload.repeat_visit_date,
+        # Повторная дата не принимается от клиента вручную: если срок для
+        # выбранного ТСР есть в таблице Excel, вычисляем её; иначе оставляем пустой.
+        repeat_visit_date=automatic_repeat_date,
     )
     db.add(item)
     try:
@@ -683,11 +689,23 @@ def update_client_tsr(
     if not item:
         return None
     values = payload.model_dump(exclude_unset=True)
+    # Поле повторной даты является серверным. Даже прямой API-запрос не должен
+    # позволять вручную менять его. Для ТСР без правила сохраняем историческое
+    # значение, если оно уже было в базе.
+    values.pop("repeat_visit_date", None)
     for key, value in values.items():
         normalized_value = (value or None) if key == "certificate_price" else value
         setattr(item, key, normalized_value)
     if "prosthetist" in values:
         item.place_of_residence = schemas.PROSTHETIST_ADDRESSES.get(values.get("prosthetist"))
+
+    # Для ТСР, которым соответствует нормативный срок из Excel, дата повторного
+    # обращения всегда вычисляется сервером от даты пробития. Нормализация кода
+    # считает 8-*, 8(1)-* и 8.1-* эквивалентными при одинаковой остальной части.
+    # Ручное изменение repeat_visit_date через API игнорируется.
+    tsr = db.get(models.TstCodeRef, item.tsr_id)
+    if tsr and get_repeat_term_months(tsr.full_tsr_code) is not None:
+        item.repeat_visit_date = calculate_repeat_visit_date(tsr.full_tsr_code, item.check_date)
     try:
         db.flush()
         _sync_client_tsr_legacy_fields(db, client_id)
@@ -1150,11 +1168,13 @@ def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module
         if not client:
             raise ValueError(f"Client with id {module_in.client_id} not found")
 
-    if not module_in.tsr_id or not db.get(models.TstCodeRef, module_in.tsr_id):
+    if module_in.tsr_id and not db.get(models.TstCodeRef, module_in.tsr_id):
         raise ValueError("Выбранный ТСР не найден")
 
     data = module_in.model_dump()
-    if client:
+    name_ref = ensure_module_name_index(db, data.get("module_name_index"))
+    data["module_name_index"] = name_ref.name_index
+    if client and module_in.tsr_id:
         assignment = _resolve_module_client_tsr(
             db,
             client_id=client.client_id,
@@ -1170,12 +1190,17 @@ def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module
         **data,
         is_archived=bool(client.is_archived) if client else False,
         is_manually_archived=False,
+        is_in_stock=client is None,
     )
 
     db.add(db_module)
-    db.commit()
-    db.refresh(db_module)
-    return db_module
+    try:
+        db.commit()
+        db.refresh(db_module)
+        return db_module
+    except Exception:
+        db.rollback()
+        raise
 
 def get_module(db: Session, module_id: UUID) -> Optional[models.Module]:
     return db.execute(
@@ -1196,6 +1221,7 @@ def list_modules(
     client_id: Optional[UUID] = None,
     unassigned: bool = False,
     archived: bool = False,
+    in_stock: Optional[bool] = None,
 ) -> List[models.Module]:
     
     stmt = select(models.Module).options(
@@ -1213,6 +1239,8 @@ def list_modules(
         conditions.append(models.Module.client_id == client_id)
     elif unassigned:
         conditions.append(models.Module.client_id.is_(None))
+    if in_stock is not None:
+        conditions.append(models.Module.is_in_stock.is_(in_stock))
     
     if conditions:
         stmt = stmt.where(and_(*conditions))
@@ -1223,7 +1251,7 @@ def list_modules(
 
 
 def count_stock_module_units(db: Session) -> int:
-    """Количество свободных единиц комплектующих на рабочем складе."""
+    """Количество свободных единиц комплектующих на отдельной вкладке «Склад»."""
     quantity = case(
         (models.Module.quantity > 0, models.Module.quantity),
         else_=1,
@@ -1232,6 +1260,7 @@ def count_stock_module_units(db: Session) -> int:
         select(func.coalesce(func.sum(quantity), 0)).where(
             models.Module.client_id.is_(None),
             models.Module.is_archived.is_(False),
+            models.Module.is_in_stock.is_(True),
         )
     )
     return int(value or 0)
@@ -1247,16 +1276,16 @@ def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -
     if 'client_id' in data:
         if data['client_id'] is None:
             data['is_archived'] = bool(db_module.is_manually_archived)
+            data['is_in_stock'] = True
         else:
             client = db.get(models.Client, data['client_id'])
             if not client:
                 raise ValueError("Target client not found")
             data['is_archived'] = bool(client.is_archived or db_module.is_manually_archived)
+            data['is_in_stock'] = False
 
     if 'tsr_id' in data:
-        if data['tsr_id'] is None:
-            raise ValueError("Для комплектующей необходимо выбрать ТСР")
-        if not db.get(models.TstCodeRef, data['tsr_id']):
+        if data['tsr_id'] is not None and not db.get(models.TstCodeRef, data['tsr_id']):
             raise ValueError("Выбранный ТСР не найден")
 
     final_client_id = data.get('client_id', db_module.client_id)
@@ -1272,23 +1301,32 @@ def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -
         data['client_tsr_id'] = None
     else:
         if final_tsr_id is None:
-            raise ValueError("Для комплектующей необходимо выбрать ТСР")
-        assignment = _resolve_module_client_tsr(
-            db,
-            client_id=final_client_id,
-            tsr_id=final_tsr_id,
-            client_tsr_id=assignment_id,
-        )
-        data['client_tsr_id'] = assignment.client_tsr_id
-        data['tsr_id'] = assignment.tsr_id
+            data['client_tsr_id'] = None
+        else:
+            assignment = _resolve_module_client_tsr(
+                db,
+                client_id=final_client_id,
+                tsr_id=final_tsr_id,
+                client_tsr_id=assignment_id,
+            )
+            data['client_tsr_id'] = assignment.client_tsr_id
+            data['tsr_id'] = assignment.tsr_id
+
+    if 'module_name_index' in data:
+        name_ref = ensure_module_name_index(db, data.get('module_name_index'))
+        data['module_name_index'] = name_ref.name_index
 
     for k, v in data.items():
         setattr(db_module, k, v)
     
     db.add(db_module)
-    db.commit()
-    db.refresh(db_module)
-    return db_module
+    try:
+        db.commit()
+        db.refresh(db_module)
+        return db_module
+    except Exception:
+        db.rollback()
+        raise
 
 def delete_module(db: Session, module_id: UUID) -> bool:
     db_module = db.get(models.Module, module_id)
@@ -1317,6 +1355,40 @@ def set_module_archive_state(
 
     db_module.is_manually_archived = is_archived
     db_module.is_archived = is_archived
+
+    try:
+        db.commit()
+        db.refresh(db_module)
+    except Exception:
+        db.rollback()
+        raise
+
+    return get_module(db, module_id)
+
+
+def set_module_stock_state(
+    db: Session,
+    module_id: UUID,
+    *,
+    is_in_stock: bool,
+) -> Optional[models.Module]:
+    """Перемещает активную комплектующую между Рабочим складом и вкладкой «Склад».
+
+    При отправке на «Склад» комплектующая становится бесхозной, но её ТСР (если
+    он был указан) сохраняется. Возврат в Рабочий склад не назначает владельца.
+    """
+    db_module = db.get(models.Module, module_id)
+    if not db_module:
+        return None
+    if db_module.is_archived:
+        raise ValueError("Сначала восстановите комплектующую из Списанных комплектующих")
+
+    if is_in_stock:
+        db_module.client_id = None
+        db_module.client_tsr_id = None
+        db_module.is_in_stock = True
+    else:
+        db_module.is_in_stock = False
 
     try:
         db.commit()
@@ -1605,28 +1677,97 @@ def delete_tsr(db: Session, tsr_id: UUID):
 # ModuleNameIndex
 # -------------------------
 
+def _normalize_module_name_index(value: str | None) -> str:
+    return " ".join(str(value or "").split())
+
 def get_module_name_index(db: Session):
     return db.execute(select(models.ModuleNameIndex).order_by(models.ModuleNameIndex.name_index)).scalars().all()
 
+def _find_module_name_index(db: Session, name_index: str):
+    normalized = _normalize_module_name_index(name_index)
+    if not normalized:
+        return None
+    return db.execute(
+        select(models.ModuleNameIndex).where(
+            func.lower(models.ModuleNameIndex.name_index) == normalized.lower()
+        )
+    ).scalars().first()
+
+def ensure_module_name_index(db: Session, name_index: str) -> models.ModuleNameIndex:
+    """Вернуть запись справочника или создать её внутри текущей транзакции."""
+    normalized = _normalize_module_name_index(name_index)
+    if not normalized:
+        raise ValueError("Название и индекс комплектующей не могут быть пустыми.")
+    existing = _find_module_name_index(db, normalized)
+    if existing:
+        return existing
+    item = models.ModuleNameIndex(name_index=normalized)
+    db.add(item)
+    db.flush()
+    return item
+
 def create_module_name_index(db: Session, name_index: str):
-    exists = db.execute(select(models.ModuleNameIndex).where(models.ModuleNameIndex.name_index == name_index)).scalars().first()
-    if exists:
-        return exists
-    
-    new_module_name_index = models.ModuleNameIndex(name_index=name_index)
-    db.add(new_module_name_index)
-    db.commit()
-    db.refresh(new_module_name_index)
-    return new_module_name_index
+    try:
+        item = ensure_module_name_index(db, name_index)
+        db.commit()
+        db.refresh(item)
+        return item
+    except Exception:
+        db.rollback()
+        raise
+
+def update_module_name_index(db: Session, name_index_id: UUID, name_index: str):
+    item = db.get(models.ModuleNameIndex, name_index_id)
+    if not item:
+        return None
+    normalized = _normalize_module_name_index(name_index)
+    if not normalized:
+        raise ValueError("Название и индекс комплектующей не могут быть пустыми.")
+    old_name = str(item.name_index or "")
+    if old_name == normalized:
+        return item
+
+    try:
+        target = _find_module_name_index(db, normalized)
+        if target and target.name_index_id != name_index_id:
+            replacement = target
+        else:
+            # В MODULES внешний ключ ссылается на текст REF_NameIndex.name_index.
+            # Поэтому сначала создаём новое допустимое значение, затем переводим
+            # связанные комплектующие и только после этого удаляем старую запись.
+            replacement = models.ModuleNameIndex(name_index=normalized)
+            db.add(replacement)
+            db.flush()
+
+        db.execute(
+            update(models.Module)
+            .where(models.Module.module_name_index == old_name)
+            .values(module_name_index=replacement.name_index)
+        )
+        db.delete(item)
+        db.commit()
+        db.refresh(replacement)
+        return replacement
+    except Exception:
+        db.rollback()
+        raise
 
 def delete_module_name_index(db: Session, name_index_id: UUID):
-    module_name_to_delete = db.get(models.ModuleNameIndex, name_index_id)
-    if module_name_to_delete:
-        db.delete(module_name_to_delete)
-        db.commit()
-        return True
-    else:
+    item = db.get(models.ModuleNameIndex, name_index_id)
+    if not item:
         return False
+    linked = db.scalar(
+        select(func.count()).select_from(models.Module).where(
+            models.Module.module_name_index == item.name_index
+        )
+    ) or 0
+    if linked:
+        raise ValueError(
+            f"Нельзя удалить запись: она используется в комплектующих ({linked})."
+        )
+    db.delete(item)
+    db.commit()
+    return True
 
 # -------------------------
 # Accounting Custom Fields

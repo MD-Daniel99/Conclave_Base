@@ -22,6 +22,8 @@ import {
 } from '@lucide/vue'
 import { useAuthStore } from '@/app/stores/auth'
 import DateInput from '@/shared/ui/DateInput.vue'
+import NameIndexAutocomplete from '@/shared/ui/NameIndexAutocomplete.vue'
+import NameIndexManagerModal from '@/shared/ui/NameIndexManagerModal.vue'
 import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
 import EmptyState from '@/shared/ui/EmptyState.vue'
 import StatusPill from '@/shared/ui/StatusPill.vue'
@@ -29,6 +31,7 @@ import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedb
 import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
 import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
+import { calculateTsrRepeatVisitDate, hasAutomaticRepeatVisitTerm } from '@/shared/lib/tsrRepeatTerms'
 import { fetchAgents } from '@/shared/api/agents'
 import { fetchEntityAudit } from '@/shared/api/audit'
 import {
@@ -137,7 +140,7 @@ type ClientTab = 'main' | 'identity' | 'phones' | 'modules' | 'documents' | 'his
 type DetailTab = Exclude<ClientTab, 'main'>
 type ClientListMode = 'active' | 'archive'
 type CountInput = string | number
-type ComponentEntryMode = 'new' | 'warehouse'
+type ComponentEntryMode = 'new' | 'catalog' | 'warehouse'
 
 type ClientModuleForm = {
   tsr_id: string
@@ -234,7 +237,8 @@ const nameIndexReferences = ref<ReferenceItem[]>([])
 const phones = ref<ClientPhone[]>([])
 const documents = ref<ClientDocument[]>([])
 const clientModules = ref<ModuleItem[]>([])
-const warehouseModules = ref<ModuleItem[]>([])
+const workingWarehouseModules = ref<ModuleItem[]>([])
+const stockWarehouseModules = ref<ModuleItem[]>([])
 const auditItems = ref<AuditLogItem[]>([])
 const query = ref('')
 const clientColumnFilters = reactive<Record<string, string>>({ patient: '', prosthetist: '', tsr: '', check_date: '', certificate: '', status: '', stage: '', agent: '', repeat_visit: '' })
@@ -243,6 +247,7 @@ const clientSortDirection = ref<SortDirection>(null)
 const pageLimit = ref(100)
 const currentPage = ref(1)
 const activeClientListMode = ref<ClientListMode>('active')
+const selectedClientIds = ref<string[]>([])
 const selectedClient = ref<Client | null>(null)
 const isClientCardOpen = ref(false)
 const activeTab = ref<ClientTab>('main')
@@ -302,6 +307,7 @@ const lastSavedDetailStates = reactive<Record<DetailTab, string>>({
 const lastSavedIdentityStates = reactive({ passport: '', snils: '' })
 const lastSavedContactStates = reactive({ email: '', phone: '' })
 const isReferenceManagerOpen = ref(false)
+const isNameIndexManagerOpen = ref(false)
 const referenceSearch = ref('')
 const referenceDraft = ref('')
 const referenceEditingId = ref<string | number | null>(null)
@@ -313,6 +319,7 @@ const passportFormExpanded = ref(false)
 const snilsFormExpanded = ref(false)
 const componentFormExpanded = ref(false)
 const componentEntryMode = ref<ComponentEntryMode>('new')
+const componentWarehouseSource = ref<'working' | 'stock'>('working')
 
 const isEditing = computed(() => Boolean(selectedClient.value?.client_id))
 const isClientPersisted = computed(() => Boolean(selectedClient.value && getClientId(selectedClient.value)))
@@ -473,7 +480,12 @@ const isEditingReference = computed(() => referenceEditingId.value !== null)
 const statusOptions = computed(() => statuses.value.map(normalizeReferenceOption))
 const stageOptions = computed(() => stages.value.map(normalizeReferenceOption))
 const prosthesisOptions = computed(() => DIAGNOSIS_OPTIONS)
-const nameIndexOptions = computed(() => nameIndexReferences.value.map(normalizeReferenceOption))
+const nameIndexOptions = computed(() => nameIndexReferences.value
+  .map((item) => {
+    const label = String(item.name_index ?? '').trim()
+    return { value: label, label }
+  })
+  .filter((option) => option.label))
 const passportItems = computed(() => latestSingleItem(selectedClient.value?.passports ?? []))
 const snilsItems = computed(() => latestSingleItem(selectedClient.value?.snils ?? []))
 const currentSkip = computed(() => (currentPage.value - 1) * pageLimit.value)
@@ -523,6 +535,14 @@ const filteredClients = computed(() => {
   return sortTableRows(filtered, clientSortKey.value, clientSortDirection.value, clientColumnValue)
 })
 const pagedClients = computed(() => filteredClients.value.slice(currentSkip.value, currentSkip.value + pageLimit.value))
+const selectedClients = computed(() => {
+  const ids = new Set(selectedClientIds.value)
+  return clients.value.filter((client) => ids.has(getClientId(client)))
+})
+const pagedClientIds = computed(() => pagedClients.value.map(getClientId).filter(Boolean))
+const allPagedClientsSelected = computed(() => (
+  pagedClientIds.value.length > 0 && pagedClientIds.value.every((id) => selectedClientIds.value.includes(id))
+))
 const hasPreviousPage = computed(() => currentPage.value > 1)
 const hasNextPage = computed(() => currentSkip.value + pageLimit.value < filteredClients.value.length)
 const attachedTsrOptions = computed(() => {
@@ -546,6 +566,10 @@ const attachedTsrCounts = computed(() => attachedTsrOptions.value.reduce((result
   result.set(item.tsrId, (result.get(item.tsrId) ?? 0) + 1)
   return result
 }, new Map<string, number>()))
+
+const warehouseModules = computed(() => (
+  componentWarehouseSource.value === 'stock' ? stockWarehouseModules.value : workingWarehouseModules.value
+))
 
 const selectedWarehouseModule = computed(() => warehouseModules.value.find(
   (item) => String(item.module_id ?? '') === selectedModuleId.value,
@@ -697,10 +721,13 @@ function getReferenceValue(item: ReferenceItem | Record<string, unknown> | strin
     record.stage_code ??
     record.full_tsr_code ??
     record.prosthesis_code ??
+    record.name_index ??
+    record.module_name_index ??
+    record.catalogue_index ??
     record.code ??
-    record.id ??
     record.name ??
     record.title ??
+    record.id ??
     ''
 
   return String(value)
@@ -726,6 +753,7 @@ function getReferenceLabel(item: ReferenceItem | Record<string, unknown> | strin
     record.title ??
     record.full_tsr_code ??
     record.prosthesis_code ??
+    record.name_index ??
     record.module_name_index ??
     record.catalogue_index ??
     record.code ??
@@ -1059,6 +1087,13 @@ function getClientTsrCardStyle(index: number) {
   }
 }
 
+function getClientTsrGroupStyle(group: ClientTsrGroup) {
+  const coloredGroups = clientTsrGroups.value.filter((item) => item.clientTsrId)
+  const colorIndex = coloredGroups.findIndex((item) => item.key === group.key)
+
+  return colorIndex >= 0 ? getClientTsrCardStyle(colorIndex) : {}
+}
+
 function getProsthetistAddress(prosthetist: string, fallback = '') {
   if (prosthetist === 'Дмитрий' || prosthetist === 'Никита') {
     return PROSTHETIST_ADDRESSES[prosthetist]
@@ -1145,11 +1180,18 @@ function setClientTsrDraft(
     ? normalizedValue
     : ''
 
+  const nextCheckDate = field === 'checkDate' ? normalizedValue : current.checkDate
+  const automaticRepeat = hasAutomaticRepeatVisitTerm(group.tsr)
+    ? calculateTsrRepeatVisitDate(group.tsr, nextCheckDate)
+    : null
+
   clientTsrDrafts[group.clientTsrId] = {
-    checkDate: field === 'checkDate' ? normalizedValue : current.checkDate,
+    checkDate: nextCheckDate,
     certificatePrice: field === 'certificatePrice' ? normalizedValue : current.certificatePrice,
     prosthetist: field === 'prosthetist' ? prosthetist : current.prosthetist,
-    repeatVisitDate: field === 'repeatVisitDate' ? normalizedValue : current.repeatVisitDate,
+    repeatVisitDate: hasAutomaticRepeatVisitTerm(group.tsr)
+      ? (automaticRepeat ?? '')
+      : current.repeatVisitDate,
   }
 }
 
@@ -1392,6 +1434,13 @@ function setComponentEntryMode(mode: ComponentEntryMode) {
   rememberDetailTabState('modules')
 }
 
+function setComponentWarehouseSource(source: 'working' | 'stock') {
+  if (componentWarehouseSource.value === source) return
+  componentWarehouseSource.value = source
+  selectedModuleId.value = ''
+  resetMessages()
+}
+
 function handleWarehouseModuleChange() {
   const warehouseModule = selectedWarehouseModule.value
   if (!warehouseModule) return
@@ -1515,7 +1564,8 @@ function resetDetailState() {
   phones.value = []
   documents.value = []
   clientModules.value = []
-  warehouseModules.value = []
+  workingWarehouseModules.value = []
+  stockWarehouseModules.value = []
   auditItems.value = []
   selectedContractClientTsrIds.value = []
   selectedContractModuleIds.value = []
@@ -1770,6 +1820,8 @@ async function loadClients() {
       limit: 100000,
       archived: activeClientListMode.value === 'archive',
     })
+    const availableIds = new Set(clients.value.map(getClientId))
+    selectedClientIds.value = selectedClientIds.value.filter((id) => availableIds.has(id))
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -1795,11 +1847,81 @@ function switchClientListMode(mode: ClientListMode) {
   }
 
   activeClientListMode.value = mode
+  selectedClientIds.value = []
   currentPage.value = 1
   selectedClient.value = null
   isClientCardOpen.value = false
   resetMessages()
   void loadClients()
+}
+
+function isClientSelected(client: Client) {
+  return selectedClientIds.value.includes(getClientId(client))
+}
+
+function toggleClientSelection(client: Client, checked: boolean) {
+  const id = getClientId(client)
+  if (!id) return
+  const ids = new Set(selectedClientIds.value)
+  if (checked) ids.add(id)
+  else ids.delete(id)
+  selectedClientIds.value = [...ids]
+}
+
+function toggleAllPagedClients(checked: boolean) {
+  const ids = new Set(selectedClientIds.value)
+  for (const id of pagedClientIds.value) {
+    if (checked) ids.add(id)
+    else ids.delete(id)
+  }
+  selectedClientIds.value = [...ids]
+}
+
+function handleToggleAllClients(event: Event) {
+  toggleAllPagedClients((event.target as HTMLInputElement).checked)
+}
+
+function handleToggleClient(client: Client, event: Event) {
+  toggleClientSelection(client, (event.target as HTMLInputElement).checked)
+}
+
+async function runBulkClientAction(action: 'archive' | 'restore' | 'delete') {
+  const items = selectedClients.value
+  if (!items.length) return
+
+  const actionLabel = action === 'archive'
+    ? 'переместить в Выполненные'
+    : action === 'restore'
+      ? 'восстановить'
+      : 'удалить'
+  if (!(await confirmAction({
+    header: 'Множественная операция',
+    message: `${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} выбранных пациентов (${items.length})?`,
+    acceptLabel: actionLabel,
+    danger: action === 'delete',
+  }))) return
+
+  isSaving.value = true
+  resetMessages()
+  let completed = 0
+  const failures: string[] = []
+  for (const client of items) {
+    const id = getClientId(client)
+    try {
+      if (action === 'archive') await archiveClient(id)
+      else if (action === 'restore') await restoreClient(id)
+      else await deleteClient(id)
+      completed += 1
+    } catch (caughtError) {
+      failures.push(`${getClientName(client)}: ${getApiErrorMessage(caughtError)}`)
+    }
+  }
+
+  selectedClientIds.value = []
+  if (completed) successMessage.value = `Операция выполнена для ${completed} пациентов`
+  if (failures.length) error.value = `Не удалось обработать ${failures.length}: ${failures.join('; ')}`
+  await loadClients()
+  isSaving.value = false
 }
 
 async function goToPreviousClientsPage() {
@@ -1816,6 +1938,10 @@ async function goToNextClientsPage() {
   }
 
   currentPage.value += 1
+}
+
+async function reloadNameIndexReferences() {
+  nameIndexReferences.value = await fetchNameIndexReferences()
 }
 
 async function loadReferences() {
@@ -1850,14 +1976,18 @@ async function loadClientTabData(tab: DetailTab, force = false) {
       phones.value = await fetchClientPhones(clientId)
     } else if (tab === 'modules') {
       const archived = Boolean(selectedClient.value?.is_archived)
-      const [clientModuleResponse, warehouseModuleResponse] = await Promise.all([
+      const [clientModuleResponse, workingWarehouseResponse, stockWarehouseResponse] = await Promise.all([
         fetchModules({ limit: 1000, client_id: clientId, archived }),
         archived
           ? Promise.resolve([])
-          : fetchModules({ limit: 1000, unassigned: true, archived: false }),
+          : fetchModules({ limit: 1000, unassigned: true, archived: false, in_stock: false }),
+        archived
+          ? Promise.resolve([])
+          : fetchModules({ limit: 1000, unassigned: true, archived: false, in_stock: true }),
       ])
       clientModules.value = clientModuleResponse
-      warehouseModules.value = warehouseModuleResponse
+      workingWarehouseModules.value = workingWarehouseResponse
+      stockWarehouseModules.value = stockWarehouseResponse
     } else if (tab === 'documents') {
       const [documentResponse, moduleResponse, nextNumber] = await Promise.all([
         fetchClientDocuments(clientId),
@@ -2482,7 +2612,6 @@ async function saveClientTsrDetails(group: ClientTsrGroup) {
       check_date: draft.checkDate || null,
       certificate_price: draft.certificatePrice.trim() || null,
       prosthetist: draft.prosthetist || null,
-      repeat_visit_date: draft.repeatVisitDate || null,
     })
     delete clientTsrDrafts[group.clientTsrId]
     successMessage.value = 'Данные ТСР сохранены.'
@@ -2543,10 +2672,10 @@ async function assignModule() {
     if (!targetGroup) {
       throw new Error('Сначала выберите ТСР пациента.')
     }
-    if (!warehouseModule || !tsrId) {
-      throw new Error('У складской комплектующей не выбран ТСР.')
+    if (!warehouseModule) {
+      throw new Error('Складская комплектующая не найдена.')
     }
-    if (tsrId !== targetGroup.tsrId) {
+    if (tsrId && tsrId !== targetGroup.tsrId) {
       throw new Error('Выбранная складская комплектующая относится к другому ТСР.')
     }
     await updateModule(selectedModuleId.value, {
@@ -2959,10 +3088,44 @@ onBeforeUnmount(() => {
     <p v-if="error && !isClientCardOpen" class="form-error">{{ error }}</p>
     <p v-if="successMessage && !isClientCardOpen" class="form-success">{{ successMessage }}</p>
 
+    <div v-if="selectedClientIds.length" class="bulk-action-bar">
+      <strong>Выбрано пациентов: {{ selectedClientIds.length }}</strong>
+      <div class="row-actions">
+        <button
+          v-if="activeClientListMode === 'active'"
+          class="secondary-button"
+          type="button"
+          :disabled="isSaving"
+          @click="runBulkClientAction('archive')"
+        >
+          В Выполненные
+        </button>
+        <button
+          v-else
+          class="secondary-button"
+          type="button"
+          :disabled="isSaving"
+          @click="runBulkClientAction('restore')"
+        >
+          Восстановить
+        </button>
+        <button class="ghost-button danger-button" type="button" :disabled="isSaving" @click="runBulkClientAction('delete')">Удалить</button>
+        <button class="ghost-button" type="button" :disabled="isSaving" @click="selectedClientIds = []">Снять выбор</button>
+      </div>
+    </div>
+
     <div class="table-wrap desktop-entity-table">
       <table>
         <thead>
           <tr>
+            <th class="selection-cell">
+              <input
+                type="checkbox"
+                aria-label="Выбрать всех пациентов на странице"
+                :checked="allPagedClientsSelected"
+                @change="handleToggleAllClients"
+              />
+            </th>
             <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="clientSortKey" :sort-direction="clientSortDirection" @sort="sortClients" />
             <SortableFilterHeader label="Пациент" column-key="patient" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.patient" @sort="sortClients" @update:filter-value="clientColumnFilters.patient = $event" />
             <SortableFilterHeader class="client-col-prosthetist" label="Протезист" column-key="prosthetist" placeholder="Имя протезиста" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.prosthetist" @sort="sortClients" @update:filter-value="clientColumnFilters.prosthetist = $event" />
@@ -2978,24 +3141,32 @@ onBeforeUnmount(() => {
         </thead>
         <tbody>
           <tr v-if="isLoading" class="no-row-action">
-            <td colspan="11">Загружаем пациентов...</td>
+            <td colspan="12">Загружаем пациентов...</td>
           </tr>
           <tr
             v-for="(client, index) in pagedClients"
             v-else
             :key="String(client.client_id ?? client.external_id)"
-            :class="{ selected: selectedClient && getClientId(selectedClient) === getClientId(client) }"
+            :class="{ selected: isClientSelected(client) || (selectedClient && getClientId(selectedClient) === getClientId(client)) }"
             tabindex="0"
             @click="selectClient(client)"
             @keydown.enter="selectClient(client)"
           >
-            <td>{{ client.external_id ?? currentSkip + index + 1 }}</td>
+            <td class="selection-cell" @click.stop>
+              <input
+                type="checkbox"
+                :aria-label="`Выбрать пациента: ${getClientName(client)}`"
+                :checked="isClientSelected(client)"
+                @change="handleToggleClient(client, $event)"
+              />
+            </td>
+            <td>{{ currentSkip + index + 1 }}</td>
             <td class="entity-cell">
               <div class="entity-primary">
                 <span class="entity-avatar">{{ getClientInitials(client) }}</span>
                 <span class="entity-copy">
                   <strong>{{ getClientName(client) }}</strong>
-                  <span>{{ getClientPrimaryPhone(client) }} · ID {{ client.external_id || '—' }}</span>
+                  <span>{{ getClientPrimaryPhone(client) }}</span>
                 </span>
               </div>
             </td>
@@ -3295,8 +3466,11 @@ onBeforeUnmount(() => {
                         <DateInput
                           :model-value="getClientTsrDraft(group).repeatVisitDate"
                           :aria-label="`Повторное протезирование для ${group.tsr}`"
+                          disabled
                           @update:model-value="setClientTsrDraft(group, 'repeatVisitDate', $event)"
                         />
+                        <small v-if="hasAutomaticRepeatVisitTerm(group.tsr)" class="form-hint">Рассчитывается автоматически по сроку ТСР.</small>
+                        <small v-else class="form-hint">Для этого кода ТСР срок повторного протезирования отсутствует в таблице сроков. Ручной ввод отключён.</small>
                       </label>
                     </div>
                   </section>
@@ -3547,6 +3721,18 @@ onBeforeUnmount(() => {
                   </button>
                   <button
                     class="component-mode-button"
+                    :class="{ active: componentEntryMode === 'catalog' }"
+                    type="button"
+                    role="tab"
+                    :aria-selected="componentEntryMode === 'catalog'"
+                    @click="setComponentEntryMode('catalog')"
+                  >
+                    <Search :size="16" aria-hidden="true" />
+                    Выбрать из списка
+                    <span class="component-mode-count">{{ nameIndexOptions.length }} записей</span>
+                  </button>
+                  <button
+                    class="component-mode-button"
                     :class="{ active: componentEntryMode === 'warehouse' }"
                     type="button"
                     role="tab"
@@ -3555,13 +3741,35 @@ onBeforeUnmount(() => {
                   >
                     <PackageOpen :size="16" aria-hidden="true" />
                     Выбрать со склада
-                    <span class="component-mode-count">{{ warehouseModules.length }}</span>
+                    <span class="component-mode-count">{{ workingWarehouseModules.length + stockWarehouseModules.length }}</span>
                   </button>
                 </div>
 
                 <div v-if="componentEntryMode === 'warehouse' && !editingModuleId" class="component-stock-panel">
+                  <div class="component-stock-source-switch" role="tablist" aria-label="Источник комплектующей">
+                    <button
+                      class="secondary-button"
+                      :class="{ active: componentWarehouseSource === 'working' }"
+                      type="button"
+                      role="tab"
+                      :aria-selected="componentWarehouseSource === 'working'"
+                      @click="setComponentWarehouseSource('working')"
+                    >
+                      Рабочий склад · {{ workingWarehouseModules.length }}
+                    </button>
+                    <button
+                      class="secondary-button"
+                      :class="{ active: componentWarehouseSource === 'stock' }"
+                      type="button"
+                      role="tab"
+                      :aria-selected="componentWarehouseSource === 'stock'"
+                      @click="setComponentWarehouseSource('stock')"
+                    >
+                      Склад · {{ stockWarehouseModules.length }}
+                    </button>
+                  </div>
                   <label>
-                    Комплектующая на складе *
+                    Комплектующая · {{ componentWarehouseSource === 'stock' ? 'Склад' : 'Рабочий склад' }} *
                     <select v-model="selectedModuleId" required @change="handleWarehouseModuleChange">
                       <option value="">Выберите свободную комплектующую</option>
                       <option
@@ -3574,13 +3782,13 @@ onBeforeUnmount(() => {
                     </select>
                   </label>
                   <p v-if="warehouseModules.length === 0" class="form-hint compact-hint">
-                    На складе нет свободных комплектующих. Переключитесь на «Создать новую».
+                    В выбранном разделе нет свободных комплектующих. Выберите другой раздел или «Создать новую».
                   </p>
                   <p v-else-if="selectedWarehouseTargetMismatch" class="component-inline-note component-inline-error">
                     Код выбранной складской комплектующей не совпадает с выбранным ТСР пациента. Выберите подходящий ТСР или другую позицию.
                   </p>
                   <p v-else class="component-inline-note">
-                    В списке показаны все свободные комплектующие. Код выбранной позиции должен совпадать с выбранным ТСР пациента.
+                    Если у позиции уже указан ТСР, он должен совпадать с ТСР пациента. Позиции без ТСР можно назначить на выбранный ТСР пациента.
                   </p>
                   <div class="component-form-actions">
                     <button class="primary-button" :disabled="isSaving || !selectedModuleId || !moduleForm.client_tsr_id || selectedWarehouseTargetMismatch" type="submit">
@@ -3590,6 +3798,13 @@ onBeforeUnmount(() => {
                 </div>
 
                 <template v-else>
+                  <div v-if="componentEntryMode === 'catalog' && !editingModuleId" class="component-catalog-hint">
+                    <div>
+                      <strong>Справочник комплектующих</strong>
+                      <span>Выберите существующее название/индекс ниже. Остальные поля заполняются вручную.</span>
+                    </div>
+                    <button v-if="canManageReferences" class="ghost-button" type="button" @click="isNameIndexManagerOpen = true">Управление справочником</button>
+                  </div>
                   <div class="component-form-section">
                     <div class="component-section-heading">
                       <strong>Основные данные</strong>
@@ -3598,12 +3813,13 @@ onBeforeUnmount(() => {
                     <div class="form-grid component-primary-grid">
                       <label>
                         Название и индекс *
-                        <input v-model="moduleForm.module_name_index" list="client-module-name-index-list" required />
-                        <datalist id="client-module-name-index-list">
-                          <option v-for="option in nameIndexOptions" :key="option.value" :value="option.value">
-                            {{ option.label }}
-                          </option>
-                        </datalist>
+                        <NameIndexAutocomplete
+                          v-model="moduleForm.module_name_index"
+                          :options="nameIndexOptions"
+                          :required="true"
+                          :show-all-on-focus="componentEntryMode === 'catalog'"
+                          :placeholder="componentEntryMode === 'catalog' ? 'Выберите из справочника' : 'Введите название или индекс'"
+                        />
                       </label>
                       <label>
                         Поставщик *
@@ -3707,7 +3923,13 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="clientTsrGroups.length" class="tsr-component-groups component-groups-modern">
-            <article v-for="group in clientTsrGroups" :key="group.key" class="tsr-component-group">
+            <article
+              v-for="group in clientTsrGroups"
+              :key="group.key"
+              class="tsr-component-group"
+              :class="{ 'client-tsr-gradient-card': Boolean(group.clientTsrId) }"
+              :style="getClientTsrGroupStyle(group)"
+            >
               <header class="tsr-component-header">
                 <div>
                   <strong>{{ group.tsr }}</strong>
@@ -3915,6 +4137,14 @@ onBeforeUnmount(() => {
         </section>
       </div>
     </Teleport>
+
+    <NameIndexManagerModal
+      :open="isNameIndexManagerOpen"
+      :items="nameIndexReferences"
+      :can-manage="canManageReferences"
+      @close="isNameIndexManagerOpen = false"
+      @refresh="reloadNameIndexReferences"
+    />
 
     <Teleport to="body">
       <div

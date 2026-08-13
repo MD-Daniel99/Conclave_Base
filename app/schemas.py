@@ -104,12 +104,6 @@ class ModuleBase(BaseModel):
 class ModuleCreate(ModuleBase):
     # Разрешаем None, чтобы комплектующая могла находиться на складе.
     client_id: Optional[UUID] = None
-
-    @model_validator(mode="after")
-    def _require_tsr(self):
-        if self.tsr_id is None:
-            raise ValueError("Для комплектующей необходимо выбрать ТСР.")
-        return self
     
 
 class ModuleUpdate(BaseModel):
@@ -140,6 +134,7 @@ class ModuleRead(ModuleBase):
     tsr: Optional[TsrSummary] = None
     is_archived: bool = False
     is_manually_archived: bool = False
+    is_in_stock: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -668,7 +663,10 @@ class TstCodeRefRead(BaseModel):
 # ModuleNameIndex
 # -------------------------
 class ModuleNameIndexCreate(BaseModel):
-    name_index: str
+    name_index: str = Field(min_length=1)
+
+class ModuleNameIndexUpdate(BaseModel):
+    name_index: str = Field(min_length=1)
 
 class ModuleNameIndexRead(BaseModel):
     id: UUID = Field(validation_alias="name_index_id")

@@ -70,6 +70,7 @@ const agentSortKey = ref<string | null>(null)
 const agentSortDirection = ref<SortDirection>(null)
 const page = ref(1)
 const pageSize = ref(20)
+const selectedAgentIds = ref<string[]>([])
 const selectedAgent = ref<Agent | null>(null)
 const activeAgentTab = ref<AgentTab>('edit')
 const isAgentCardOpen = ref(false)
@@ -121,6 +122,14 @@ const filteredAgents = computed(() => {
 })
 
 const pagedAgents = computed(() => filteredAgents.value.slice(skip.value, skip.value + pageSize.value))
+const selectedAgents = computed(() => {
+  const ids = new Set(selectedAgentIds.value)
+  return agents.value.filter((agent) => ids.has(getAgentId(agent)))
+})
+const pagedAgentIds = computed(() => pagedAgents.value.map(getAgentId).filter(Boolean))
+const allPagedAgentsSelected = computed(() => (
+  pagedAgentIds.value.length > 0 && pagedAgentIds.value.every((id) => selectedAgentIds.value.includes(id))
+))
 const canGoBack = computed(() => page.value > 1 && !isLoading.value)
 const canGoForward = computed(() => skip.value + pageSize.value < filteredAgents.value.length && !isLoading.value)
 const confirmAction = useAppConfirm()
@@ -350,11 +359,72 @@ async function loadAgents() {
       skip: 0,
       limit: 100000,
     })
+    const availableIds = new Set(agents.value.map(getAgentId))
+    selectedAgentIds.value = selectedAgentIds.value.filter((id) => availableIds.has(id))
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
     isLoading.value = false
   }
+}
+
+function isAgentSelected(agent: Agent) {
+  return selectedAgentIds.value.includes(getAgentId(agent))
+}
+
+function toggleAgentSelection(agent: Agent, checked: boolean) {
+  const id = getAgentId(agent)
+  if (!id) return
+  const ids = new Set(selectedAgentIds.value)
+  if (checked) ids.add(id)
+  else ids.delete(id)
+  selectedAgentIds.value = [...ids]
+}
+
+function toggleAllPagedAgents(checked: boolean) {
+  const ids = new Set(selectedAgentIds.value)
+  for (const id of pagedAgentIds.value) {
+    if (checked) ids.add(id)
+    else ids.delete(id)
+  }
+  selectedAgentIds.value = [...ids]
+}
+
+function handleToggleAllAgents(event: Event) {
+  toggleAllPagedAgents((event.target as HTMLInputElement).checked)
+}
+
+function handleToggleAgent(agent: Agent, event: Event) {
+  toggleAgentSelection(agent, (event.target as HTMLInputElement).checked)
+}
+
+async function removeSelectedAgents() {
+  const items = selectedAgents.value
+  if (!items.length) return
+  if (!(await confirmAction({
+    header: 'Удаление агентов',
+    message: `Удалить выбранных агентов (${items.length})? Агенты со связанными пациентами останутся без изменений.`,
+    acceptLabel: 'Удалить выбранных',
+    danger: true,
+  }))) return
+
+  isSaving.value = true
+  resetMessages()
+  let completed = 0
+  const failures: string[] = []
+  for (const agent of items) {
+    try {
+      await deleteAgent(getAgentId(agent))
+      completed += 1
+    } catch (caughtError) {
+      failures.push(`${getAgentName(agent)}: ${getApiErrorMessage(caughtError)}`)
+    }
+  }
+  selectedAgentIds.value = []
+  if (completed) successMessage.value = `Удалено агентов: ${completed}`
+  if (failures.length) error.value = `Не удалось удалить ${failures.length}: ${failures.join('; ')}`
+  await loadAgents()
+  isSaving.value = false
 }
 
 function searchAgents() {
@@ -570,10 +640,26 @@ onBeforeUnmount(() => {
     <p v-if="error && !isAgentCardOpen" class="form-error">{{ error }}</p>
     <p v-if="successMessage && !isAgentCardOpen" class="form-success">{{ successMessage }}</p>
 
+    <div v-if="selectedAgentIds.length" class="bulk-action-bar">
+      <strong>Выбрано агентов: {{ selectedAgentIds.length }}</strong>
+      <div class="row-actions">
+        <button class="ghost-button danger-button" type="button" :disabled="isSaving" @click="removeSelectedAgents">Удалить выбранных</button>
+        <button class="ghost-button" type="button" :disabled="isSaving" @click="selectedAgentIds = []">Снять выбор</button>
+      </div>
+    </div>
+
     <div class="table-wrap desktop-entity-table">
       <table>
         <thead>
           <tr>
+            <th class="selection-cell">
+              <input
+                type="checkbox"
+                aria-label="Выбрать всех агентов на странице"
+                :checked="allPagedAgentsSelected"
+                @change="handleToggleAllAgents"
+              />
+            </th>
             <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="agentSortKey" :sort-direction="agentSortDirection" @sort="sortAgents" />
             <SortableFilterHeader label="Агент" column-key="name" :sort-key="agentSortKey" :sort-direction="agentSortDirection" :filter-value="agentColumnFilters.name" @sort="sortAgents" @update:filter-value="agentColumnFilters.name = $event" />
             <SortableFilterHeader label="ИНН" column-key="inn" :sort-key="agentSortKey" :sort-direction="agentSortDirection" :filter-value="agentColumnFilters.inn" @sort="sortAgents" @update:filter-value="agentColumnFilters.inn = $event" />
@@ -586,18 +672,26 @@ onBeforeUnmount(() => {
 
         <tbody>
           <tr v-if="isLoading" class="no-row-action">
-            <td colspan="7">Загружаем агентов...</td>
+            <td colspan="8">Загружаем агентов...</td>
           </tr>
 
           <tr
             v-for="(agent, index) in pagedAgents"
             v-else
             :key="getAgentId(agent)"
-            :class="{ selected: selectedAgent && getAgentId(selectedAgent) === getAgentId(agent) }"
+            :class="{ selected: isAgentSelected(agent) || (selectedAgent && getAgentId(selectedAgent) === getAgentId(agent)) }"
             tabindex="0"
             @click="selectAgent(agent)"
             @keydown.enter="selectAgent(agent)"
           >
+            <td class="selection-cell" @click.stop>
+              <input
+                type="checkbox"
+                :aria-label="`Выбрать агента: ${getAgentName(agent)}`"
+                :checked="isAgentSelected(agent)"
+                @change="handleToggleAgent(agent, $event)"
+              />
+            </td>
             <td>{{ agent.external_id ?? skip + index + 1 }}</td>
 
             <td class="entity-cell">

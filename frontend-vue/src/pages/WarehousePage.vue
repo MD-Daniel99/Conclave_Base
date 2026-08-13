@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import NameIndexAutocomplete from '@/shared/ui/NameIndexAutocomplete.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Archive, Eye, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
+import { Archive, Eye, PackageOpen, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
 import { fetchClients } from '@/shared/api/clients'
 import {
   archiveComponent,
   createComponent,
   deleteComponent,
   fetchComponents,
+  moveComponentToStock,
+  moveComponentToWorkStock,
   restoreComponent,
   updateComponent,
 } from '@/shared/api/components'
@@ -28,7 +31,8 @@ import type {
 } from '@/shared/types/entities'
 
 type CountInput = string | number
-type WarehouseListMode = 'active' | 'archive'
+type WarehouseListMode = 'active' | 'stock' | 'archive'
+type WarehouseBulkAction = 'stock' | 'work' | 'archive' | 'restore' | 'delete'
 
 type ComponentForm = {
   tsr_id: string
@@ -83,6 +87,7 @@ const warehouseSortDirection = ref<SortDirection>(null)
 const pageLimit = ref(100)
 const currentPage = ref(1)
 const activeWarehouseListMode = ref<WarehouseListMode>('active')
+const selectedComponentIds = ref<string[]>([])
 const componentForm = reactive<ComponentForm>({ ...emptyComponentForm })
 const isLoading = ref(false)
 const isSaving = ref(false)
@@ -135,6 +140,18 @@ const hasMore = computed(() => currentSkip.value + pageLimit.value < filteredCom
 const componentQuantity = computed(() => Math.max(1, Math.trunc(toNumber(componentForm.quantity, 1))))
 const componentTotalCost = computed(() => (toOptionalNumber(componentForm.unit_cost) ?? 0) * componentQuantity.value)
 const componentTotalPrice = computed(() => (toOptionalNumber(componentForm.unit_price) ?? 0) * componentQuantity.value)
+const stockTotalCost = computed(() => components.value.reduce((sum, item) => sum + Number(item.cost ?? 0), 0))
+const stockTotalPrice = computed(() => components.value.reduce((sum, item) => sum + Number(item.price ?? 0), 0))
+const stockTotalQuantity = computed(() => components.value.reduce((sum, item) => sum + Math.max(0, Number(item.quantity ?? 0)), 0))
+const selectedComponents = computed(() => {
+  const ids = new Set(selectedComponentIds.value)
+  return components.value.filter((item) => ids.has(getComponentId(item)))
+})
+const pagedComponentIds = computed(() => pagedComponents.value.map(getComponentId).filter(Boolean))
+const allPagedComponentsSelected = computed(() => (
+  pagedComponentIds.value.length > 0
+  && pagedComponentIds.value.every((id) => selectedComponentIds.value.includes(id))
+))
 const visibleOwnerClients = computed(() => (
   activeWarehouseListMode.value === 'archive'
     ? clients.value
@@ -165,6 +182,41 @@ function getComponentActions(item: ComponentItem): ActionMenuItem[] {
         label: 'Открыть карточку',
         icon: Eye,
         action: () => selectComponent(item),
+      },
+      {
+        label: 'Переместить на Склад',
+        icon: PackageOpen,
+        disabled: isSaving.value,
+        action: () => changeComponentStockState(item, true),
+      },
+      {
+        label: 'Переместить в Списанные комплектующие',
+        icon: Archive,
+        disabled: isSaving.value,
+        action: () => changeComponentArchiveState(item, true),
+      },
+      {
+        label: 'Удалить',
+        icon: Trash2,
+        danger: true,
+        disabled: isSaving.value,
+        action: () => removeComponent(item),
+      },
+    ]
+  }
+
+  if (activeWarehouseListMode.value === 'stock') {
+    return [
+      {
+        label: 'Открыть карточку',
+        icon: Eye,
+        action: () => selectComponent(item),
+      },
+      {
+        label: 'Вернуть в Рабочий склад',
+        icon: RotateCcw,
+        disabled: isSaving.value,
+        action: () => changeComponentStockState(item, false),
       },
       {
         label: 'Переместить в Списанные комплектующие',
@@ -239,6 +291,14 @@ function getComponentName(item: ComponentItem) {
   return item.module_name_index || item.properties || 'Без названия'
 }
 
+function getComponentAttributes(item: ComponentItem) {
+  return [
+    `Размер: ${item.size || '—'}`,
+    `Жёсткость: ${item.stiffness || '—'}`,
+    `Сторона: ${item.side || '—'}`,
+  ].join(' · ')
+}
+
 function getClientName(client: Client) {
   return [client.last_name, client.first_name, client.middle_name].filter(Boolean).join(' ') || 'Без имени'
 }
@@ -262,9 +322,6 @@ function isComponentOwnerArchived(item: ComponentItem) {
   )
 }
 
-function getReferenceValue(item: ReferenceItem) {
-  return String(item.name_index ?? item.name ?? item.description ?? '')
-}
 
 function resetComponentForm() {
   Object.assign(componentForm, emptyComponentForm)
@@ -311,7 +368,7 @@ function selectComponent(item: ComponentItem) {
 
 function buildComponentPayload(): ComponentCreatePayload {
   return {
-    tsr_id: componentForm.tsr_id,
+    tsr_id: componentForm.tsr_id || null,
     client_id: componentForm.client_id || null,
     module_name_index: componentForm.module_name_index.trim(),
     supplier: componentForm.supplier.trim(),
@@ -340,7 +397,12 @@ async function loadData() {
       skip: 0,
       limit: 100000,
       archived: activeWarehouseListMode.value === 'archive',
+      in_stock: activeWarehouseListMode.value === 'archive'
+        ? undefined
+        : activeWarehouseListMode.value === 'stock',
     })
+    const availableIds = new Set(components.value.map(getComponentId))
+    selectedComponentIds.value = selectedComponentIds.value.filter((id) => availableIds.has(id))
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
   } finally {
@@ -366,6 +428,7 @@ function switchWarehouseListMode(mode: WarehouseListMode) {
   }
 
   activeWarehouseListMode.value = mode
+  selectedComponentIds.value = []
   currentPage.value = 1
   isComponentCardOpen.value = false
   resetMessages()
@@ -374,11 +437,6 @@ function switchWarehouseListMode(mode: WarehouseListMode) {
 
 async function saveComponent() {
   resetMessages()
-
-  if (!componentForm.tsr_id) {
-    error.value = 'Выбери ТСР для комплектующей.'
-    return
-  }
 
   if (!componentForm.module_name_index.trim() || !componentForm.supplier.trim()) {
     error.value = 'Заполни индекс/название и поставщика.'
@@ -390,11 +448,24 @@ async function saveComponent() {
   try {
     const payload = buildComponentPayload()
     const wasEditing = isEditingComponent.value
-    const saved = wasEditing && selectedComponent.value
-      ? await updateComponent(getComponentId(selectedComponent.value), payload as ComponentUpdatePayload)
-      : await createComponent(payload)
+    let saved: ComponentItem
+    if (wasEditing && selectedComponent.value) {
+      const updatePayload: ComponentUpdatePayload = { ...payload }
+      if (String(selectedComponent.value.client_id ?? '') === componentForm.client_id) {
+        delete updatePayload.client_id
+      }
+      saved = await updateComponent(getComponentId(selectedComponent.value), updatePayload)
+    } else {
+      saved = await createComponent(payload)
+    }
 
-    selectComponent(saved)
+    const savedMode: WarehouseListMode = saved.is_archived ? 'archive' : saved.is_in_stock ? 'stock' : 'active'
+    if (savedMode === activeWarehouseListMode.value) {
+      selectComponent(saved)
+    } else {
+      closeComponentCard()
+      resetComponentForm()
+    }
     successMessage.value = wasEditing ? 'Комплектующая обновлена' : 'Комплектующая создана'
     await loadData()
   } catch (caught) {
@@ -429,7 +500,7 @@ async function removeComponent(item: ComponentItem) {
 
 async function changeComponentArchiveState(item: ComponentItem, archive: boolean) {
   const componentId = getComponentId(item)
-  const action = archive ? 'переместить в Списанные комплектующие' : 'восстановить из Списанные комплектующие'
+  const action = archive ? 'Переместить в Списанные комплектующие' : 'восстановить из Списанные комплектующие'
 
   if (!componentId) {
     return
@@ -467,6 +538,114 @@ async function changeComponentArchiveState(item: ComponentItem, archive: boolean
   } finally {
     isSaving.value = false
   }
+}
+
+async function changeComponentStockState(item: ComponentItem, moveToStock: boolean) {
+  const componentId = getComponentId(item)
+  if (!componentId) return
+
+  const target = moveToStock ? 'Склад' : 'Рабочий склад'
+  const note = moveToStock ? ' Владелец будет снят, ТСР сохранится.' : ''
+  if (!(await confirmAction({
+    header: moveToStock ? 'Перемещение на Склад' : 'Возврат в Рабочий склад',
+    message: `Переместить комплектующую «${getComponentName(item)}» в «${target}»?${note}`,
+    acceptLabel: moveToStock ? 'На Склад' : 'В Рабочий склад',
+  }))) return
+
+  isSaving.value = true
+  resetMessages()
+  try {
+    if (moveToStock) {
+      await moveComponentToStock(componentId)
+    } else {
+      await moveComponentToWorkStock(componentId)
+    }
+    if (selectedComponent.value && getComponentId(selectedComponent.value) === componentId) {
+      closeComponentCard()
+      resetComponentForm()
+    }
+    successMessage.value = moveToStock
+      ? 'Комплектующая перемещена на Склад'
+      : 'Комплектующая возвращена в Рабочий склад'
+    await loadData()
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+function isComponentSelected(item: ComponentItem) {
+  return selectedComponentIds.value.includes(getComponentId(item))
+}
+
+function toggleComponentSelection(item: ComponentItem, checked: boolean) {
+  const id = getComponentId(item)
+  if (!id) return
+  const ids = new Set(selectedComponentIds.value)
+  if (checked) ids.add(id)
+  else ids.delete(id)
+  selectedComponentIds.value = [...ids]
+}
+
+function toggleAllPagedComponents(checked: boolean) {
+  const ids = new Set(selectedComponentIds.value)
+  for (const id of pagedComponentIds.value) {
+    if (checked) ids.add(id)
+    else ids.delete(id)
+  }
+  selectedComponentIds.value = [...ids]
+}
+
+function handleToggleAllComponents(event: Event) {
+  toggleAllPagedComponents((event.target as HTMLInputElement).checked)
+}
+
+function handleToggleComponent(item: ComponentItem, event: Event) {
+  toggleComponentSelection(item, (event.target as HTMLInputElement).checked)
+}
+
+async function runBulkWarehouseAction(action: WarehouseBulkAction) {
+  const items = selectedComponents.value
+  if (!items.length) return
+
+  const labels: Record<WarehouseBulkAction, string> = {
+    stock: 'переместить на Склад',
+    work: 'вернуть в Рабочий склад',
+    archive: 'переместить в Списанные комплектующие',
+    restore: 'восстановить',
+    delete: 'удалить',
+  }
+  if (!(await confirmAction({
+    header: 'Множественная операция',
+    message: `${labels[action][0].toUpperCase()}${labels[action].slice(1)} выбранные позиции (${items.length})?`,
+    acceptLabel: labels[action],
+    danger: action === 'delete',
+  }))) return
+
+  isSaving.value = true
+  resetMessages()
+  const failures: string[] = []
+  let completed = 0
+  for (const item of items) {
+    const id = getComponentId(item)
+    try {
+      if (action === 'stock') await moveComponentToStock(id)
+      else if (action === 'work') await moveComponentToWorkStock(id)
+      else if (action === 'archive') await archiveComponent(id)
+      else if (action === 'restore') await restoreComponent(id)
+      else await deleteComponent(id)
+      completed += 1
+    } catch (caught) {
+      failures.push(`${getComponentName(item)}: ${getApiErrorMessage(caught)}`)
+    }
+  }
+
+  selectedComponentIds.value = []
+  if (completed) successMessage.value = `Операция выполнена для ${completed} поз.`
+  if (failures.length) error.value = `Не удалось обработать ${failures.length} поз.: ${failures.join('; ')}`
+  await loadData()
+  isSaving.value = false
 }
 
 function goToPreviousPage() {
@@ -522,7 +701,7 @@ onBeforeUnmount(() => {
           Остатки, закупки, себестоимость и распределение по клиентам.
         </p>
       </div>
-      <button v-if="activeWarehouseListMode === 'active'" class="primary-button" type="button" @click="openNewComponent">
+      <button v-if="activeWarehouseListMode !== 'archive'" class="primary-button" type="button" @click="openNewComponent">
         <Plus :size="16" aria-hidden="true" />
         Добавить комплектующую
       </button>
@@ -532,9 +711,27 @@ onBeforeUnmount(() => {
       <button :class="{ active: activeWarehouseListMode === 'active' }" type="button" @click="switchWarehouseListMode('active')">
         Рабочий склад
       </button>
+      <button :class="{ active: activeWarehouseListMode === 'stock' }" type="button" @click="switchWarehouseListMode('stock')">
+        Склад
+      </button>
       <button :class="{ active: activeWarehouseListMode === 'archive' }" type="button" @click="switchWarehouseListMode('archive')">
         Списанные комплектующие
       </button>
+    </div>
+
+    <div v-if="activeWarehouseListMode === 'stock'" class="stock-summary-grid" aria-label="Итоги склада">
+      <div class="stock-summary-card">
+        <span>Себестоимость на складе</span>
+        <strong>{{ formatMoney(stockTotalCost) }}</strong>
+      </div>
+      <div class="stock-summary-card">
+        <span>Цена комплектующих</span>
+        <strong>{{ formatMoney(stockTotalPrice) }}</strong>
+      </div>
+      <div class="stock-summary-card">
+        <span>Единиц на складе</span>
+        <strong>{{ stockTotalQuantity }}</strong>
+      </div>
     </div>
 
     <form class="toolbar-form warehouse-toolbar" @submit.prevent="applyFilters">
@@ -567,10 +764,30 @@ onBeforeUnmount(() => {
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="successMessage" class="form-success">{{ successMessage }}</p>
 
+    <div v-if="selectedComponentIds.length" class="bulk-action-bar">
+      <strong>Выбрано: {{ selectedComponentIds.length }}</strong>
+      <div class="row-actions">
+        <button v-if="activeWarehouseListMode === 'active'" class="secondary-button" type="button" :disabled="isSaving" @click="runBulkWarehouseAction('stock')">На Склад</button>
+        <button v-if="activeWarehouseListMode === 'stock'" class="secondary-button" type="button" :disabled="isSaving" @click="runBulkWarehouseAction('work')">В Рабочий склад</button>
+        <button v-if="activeWarehouseListMode !== 'archive'" class="secondary-button" type="button" :disabled="isSaving" @click="runBulkWarehouseAction('archive')">В Списанные</button>
+        <button v-else class="secondary-button" type="button" :disabled="isSaving" @click="runBulkWarehouseAction('restore')">Восстановить</button>
+        <button v-if="activeWarehouseListMode !== 'archive'" class="ghost-button danger-button" type="button" :disabled="isSaving" @click="runBulkWarehouseAction('delete')">Удалить</button>
+        <button class="ghost-button" type="button" :disabled="isSaving" @click="selectedComponentIds = []">Снять выбор</button>
+      </div>
+    </div>
+
     <div class="table-wrap desktop-entity-table">
       <table>
         <thead>
           <tr>
+            <th class="selection-cell">
+              <input
+                type="checkbox"
+                aria-label="Выбрать все позиции на странице"
+                :checked="allPagedComponentsSelected"
+                @change="handleToggleAllComponents"
+              />
+            </th>
             <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" @sort="sortWarehouse" />
             <SortableFilterHeader label="Комплектующая" column-key="name" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.name" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.name = $event" />
             <SortableFilterHeader label="Поставщик" column-key="supplier" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.supplier" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.supplier = $event" />
@@ -584,31 +801,48 @@ onBeforeUnmount(() => {
         </thead>
         <tbody>
           <tr v-if="isLoading" class="no-row-action">
-            <td colspan="9">Загружаем комплектующие...</td>
+            <td colspan="10">Загружаем комплектующие...</td>
           </tr>
           <tr
             v-for="item in pagedComponents"
             v-else
             :key="item.module_id"
-            :tabindex="activeWarehouseListMode === 'active' ? 0 : undefined"
-            :class="{ 'no-row-action': activeWarehouseListMode !== 'active' }"
-            @click="activeWarehouseListMode === 'active' && selectComponent(item)"
-            @keydown.enter="activeWarehouseListMode === 'active' && selectComponent(item)"
+            :tabindex="activeWarehouseListMode !== 'archive' ? 0 : undefined"
+            :class="{ 'no-row-action': activeWarehouseListMode === 'archive', selected: isComponentSelected(item) }"
+            @click="activeWarehouseListMode !== 'archive' && selectComponent(item)"
+            @keydown.enter="activeWarehouseListMode !== 'archive' && selectComponent(item)"
           >
+            <td class="selection-cell" @click.stop>
+              <input
+                type="checkbox"
+                :aria-label="`Выбрать: ${getComponentName(item)}`"
+                :checked="isComponentSelected(item)"
+                @change="handleToggleComponent(item, $event)"
+              />
+            </td>
             <td>{{ warehouseRowNumber(item) }}</td>
             <td class="entity-cell">
               <div class="entity-primary">
                 <span class="entity-avatar">ТС</span>
                 <span class="entity-copy">
                   <strong>{{ getComponentName(item) }}</strong>
-                  <span>{{ item.tsr?.full_tsr_code || 'ТСР не указан' }}</span>
+                  <span v-if="activeWarehouseListMode !== 'stock'">{{ item.tsr?.full_tsr_code || 'ТСР не указан' }}</span>
+                  <span class="component-attributes">{{ getComponentAttributes(item) }}</span>
                 </span>
               </div>
             </td>
             <td>{{ item.supplier }}</td>
             <td>{{ item.quantity }}</td>
-            <td class="table-money">{{ formatMoney(item.cost) }}</td>
-            <td class="table-money">{{ formatMoney(item.price) }}</td>
+
+            <td class="table-money">
+              {{ formatMoney(item.cost) }}
+              ({{ formatMoney(Number(item.cost) / Number(item.quantity)) }} /шт.)
+            </td>
+            <td class="table-money">
+              {{ formatMoney(item.price) }}
+              ({{ formatMoney(Number(item.price) / Number(item.quantity)) }} /шт.)
+            </td>
+
             <td class="order-status-cell">
               <span>Заказано <strong>{{ item.ordered }}</strong></span>
               <span>Получено <strong>{{ item.recd }}</strong></span>
@@ -637,14 +871,16 @@ onBeforeUnmount(() => {
         v-for="item in pagedComponents"
         :key="item.module_id"
         class="mobile-entity-card"
-        @click="activeWarehouseListMode === 'active' && selectComponent(item)"
+        @click="activeWarehouseListMode !== 'archive' && selectComponent(item)"
       >
         <div class="mobile-entity-card-header">
           <div class="entity-primary">
             <span class="entity-avatar">ТС</span>
             <span class="entity-copy">
               <strong>{{ getComponentName(item) }}</strong>
-              <span>{{ item.tsr?.full_tsr_code || 'ТСР не указан' }} · {{ item.supplier }}</span>
+              <span v-if="activeWarehouseListMode !== 'stock'">{{ item.tsr?.full_tsr_code || 'ТСР не указан' }} · {{ item.supplier }}</span>
+              <span v-else>{{ item.supplier }}</span>
+              <span class="component-attributes">{{ getComponentAttributes(item) }}</span>
             </span>
           </div>
           <ActionMenu :items="getComponentActions(item)" :label="`Действия: ${getComponentName(item)}`" />
@@ -685,7 +921,16 @@ onBeforeUnmount(() => {
           </div>
           <div class="row-actions">
             <button
-              v-if="selectedComponent && activeWarehouseListMode === 'active'"
+              v-if="selectedComponent && activeWarehouseListMode !== 'archive'"
+              class="secondary-button"
+              type="button"
+              :disabled="isSaving"
+              @click="activeWarehouseListMode === 'stock' ? changeComponentStockState(selectedComponent, false) : changeComponentStockState(selectedComponent, true)"
+            >
+              {{ activeWarehouseListMode === 'stock' ? 'В Рабочий склад' : 'На Склад' }}
+            </button>
+            <button
+              v-if="selectedComponent && activeWarehouseListMode !== 'archive'"
               class="secondary-button"
               type="button"
               :disabled="isSaving"
@@ -700,9 +945,9 @@ onBeforeUnmount(() => {
         <form class="side-form flat-form" @submit.prevent="saveComponent">
           <div class="form-grid">
             <label>
-              ТСР *
-              <select v-model="componentForm.tsr_id" required>
-                <option value="">Выбери ТСР</option>
+              ТСР
+              <select v-model="componentForm.tsr_id">
+                <option value="">Не указан</option>
                 <option v-for="option in tsrOptions" :key="option.value" :value="option.value">
                   {{ option.label }}
                 </option>
@@ -710,14 +955,14 @@ onBeforeUnmount(() => {
             </label>
             <label>
               Индекс / название *
-              <input v-model="componentForm.module_name_index" list="component-index-list" required />
-              <datalist id="component-index-list">
-                <option
-                  v-for="item in nameIndexReferences"
-                  :key="String(item.id ?? item.name_index_id)"
-                  :value="getReferenceValue(item)"
-                />
-              </datalist>
+              <NameIndexAutocomplete
+                v-model="componentForm.module_name_index"
+                :options="nameIndexReferences
+                  .map((item) => ({ value: String(item.name_index ?? '').trim(), label: String(item.name_index ?? '').trim() }))
+                  .filter((option) => option.label)"
+                :required="true"
+                placeholder="Введите название или индекс"
+              />
             </label>
             <label>
               Поставщик *

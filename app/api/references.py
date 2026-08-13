@@ -152,8 +152,40 @@ def add_module_name_index(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_admin),
 ):
-    item = crud.create_module_name_index(db, payload.name_index)
+    try:
+        item = crud.create_module_name_index(db, payload.name_index)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     log_action(db, entity="reference", entity_id=item.name_index_id, action="name_index.upsert", user=current_user, after=item)
+    return item
+
+
+@router.put("/name_index/{name_index_id}", response_model=schemas.ModuleNameIndexRead)
+def update_module_name_index(
+    name_index_id: UUID,
+    payload: schemas.ModuleNameIndexUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    before = db.get(models.ModuleNameIndex, name_index_id)
+    if not before:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Name index reference not found")
+    before_snapshot = snapshot(before)
+    try:
+        item = crud.update_module_name_index(db, name_index_id, payload.name_index)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Name index reference not found")
+    log_action(
+        db,
+        entity="reference",
+        entity_id=item.name_index_id,
+        action="name_index.update",
+        user=current_user,
+        before=before_snapshot,
+        after=item,
+    )
     return item
 
 
@@ -167,7 +199,11 @@ def remove_module_name_index(
     if not before:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Name index reference not found")
     before_snapshot = snapshot(before)
-    if not crud.delete_module_name_index(db, name_index_id):
+    try:
+        deleted = crud.delete_module_name_index(db, name_index_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Name index reference not found")
     log_action(db, entity="reference", entity_id=name_index_id, action="name_index.delete", user=current_user, before=before_snapshot)
     return None

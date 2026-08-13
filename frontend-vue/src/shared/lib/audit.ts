@@ -36,6 +36,7 @@ const ACTION_LABELS: Record<string, string> = {
   'client_tsr.update': 'Изменены данные',
   'client_tsr.delete': 'Удалён у клиента',
   'name_index.upsert': 'Добавлено название комплектующей',
+  'name_index.update': 'Изменено название комплектующей',
   'name_index.delete': 'Удалено название комплектующей',
   'status.create': 'Добавлен статус',
   'stage.create': 'Добавлен этап',

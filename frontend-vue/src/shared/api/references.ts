@@ -69,6 +69,11 @@ export async function createNameIndexReference(payload: Partial<ReferenceItem>) 
   return data
 }
 
+export async function updateNameIndexReference(moduleId: string | number, payload: Partial<ReferenceItem>) {
+  const { data } = await api.put<ReferenceItem>(`/references/name_index/${moduleId}`, payload)
+  return data
+}
+
 export async function deleteNameIndexReference(moduleId: string | number) {
   await api.delete(`/references/name_index/${moduleId}`)
 }

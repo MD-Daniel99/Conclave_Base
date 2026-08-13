@@ -94,6 +94,7 @@ export type ContractGenerationPayload = ContractGeneration & {
 export type ComponentItem = ModuleRead & {
   is_archived?: boolean
   is_manually_archived?: boolean
+  is_in_stock?: boolean
 }
 export type ComponentCreatePayload = ModuleCreate
 export type ComponentUpdatePayload = ModuleUpdate

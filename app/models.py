@@ -340,6 +340,16 @@ class Module(Base):
         default=False,
         server_default=text("false"),
     )
+    # Отдельное состояние для новой вкладки «Склад». Оно не заменяет владельца:
+    # при отправке позиции на склад владелец снимается, а этот флаг позволяет
+    # отличить бесхозную складскую позицию от позиции рабочего склада.
+    is_in_stock = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        index=True,
+    )
 
     client = relationship("Client", back_populates = "modules")
     tsr = relationship("TstCodeRef", back_populates="modules")
