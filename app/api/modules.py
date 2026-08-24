@@ -68,6 +68,7 @@ def api_get_component(
 def api_update_component(
     component_id: UUID,
     payload: schemas.ModuleUpdate,
+    operation_quantity: int | None = Query(None, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -76,7 +77,7 @@ def api_update_component(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Комплектующая не найдена")
     before_snapshot = snapshot(before)
     try:
-        updated = crud.update_module(db, component_id, payload)
+        updated = crud.update_module(db, component_id, payload, operation_quantity=operation_quantity)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     if not updated:
@@ -89,6 +90,7 @@ def _change_component_archive_state(
     component_id: UUID,
     *,
     is_archived: bool,
+    quantity: int,
     db: Session,
     current_user: models.User,
 ):
@@ -102,6 +104,7 @@ def _change_component_archive_state(
             db,
             component_id,
             is_archived=is_archived,
+            quantity=quantity,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -121,12 +124,14 @@ def _change_component_archive_state(
 @router.post("/{component_id}/archive", response_model=schemas.ModuleRead)
 def api_archive_component(
     component_id: UUID,
+    quantity: int = Query(1, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     return _change_component_archive_state(
         component_id,
         is_archived=True,
+        quantity=quantity,
         db=db,
         current_user=current_user,
     )
@@ -135,12 +140,14 @@ def api_archive_component(
 @router.post("/{component_id}/restore", response_model=schemas.ModuleRead)
 def api_restore_component(
     component_id: UUID,
+    quantity: int = Query(1, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     return _change_component_archive_state(
         component_id,
         is_archived=False,
+        quantity=quantity,
         db=db,
         current_user=current_user,
     )
@@ -150,6 +157,7 @@ def _change_component_stock_state(
     component_id: UUID,
     *,
     is_in_stock: bool,
+    quantity: int,
     db: Session,
     current_user: models.User,
 ):
@@ -159,7 +167,7 @@ def _change_component_stock_state(
     before_snapshot = snapshot(before)
 
     try:
-        updated = crud.set_module_stock_state(db, component_id, is_in_stock=is_in_stock)
+        updated = crud.set_module_stock_state(db, component_id, is_in_stock=is_in_stock, quantity=quantity)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -178,12 +186,14 @@ def _change_component_stock_state(
 @router.post("/{component_id}/stock", response_model=schemas.ModuleRead)
 def api_move_component_to_stock(
     component_id: UUID,
+    quantity: int = Query(1, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     return _change_component_stock_state(
         component_id,
         is_in_stock=True,
+        quantity=quantity,
         db=db,
         current_user=current_user,
     )
@@ -192,12 +202,14 @@ def api_move_component_to_stock(
 @router.post("/{component_id}/work-stock", response_model=schemas.ModuleRead)
 def api_move_component_to_work_stock(
     component_id: UUID,
+    quantity: int = Query(1, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     return _change_component_stock_state(
         component_id,
         is_in_stock=False,
+        quantity=quantity,
         db=db,
         current_user=current_user,
     )
@@ -206,6 +218,7 @@ def api_move_component_to_work_stock(
 @router.delete("/{component_id}", status_code=status.HTTP_204_NO_CONTENT)
 def api_delete_component(
     component_id: UUID,
+    quantity: int = Query(1, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -213,7 +226,11 @@ def api_delete_component(
     if not before:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Комплектующая не найдена")
     before_snapshot = snapshot(before)
-    if not crud.delete_module(db, component_id):
+    try:
+        deleted = crud.delete_module(db, component_id, quantity=quantity)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Комплектующая не найдена")
     log_action(db, entity="component", entity_id=component_id, action="delete", user=current_user, before=before_snapshot)
     return None

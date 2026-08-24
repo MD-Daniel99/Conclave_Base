@@ -71,7 +71,7 @@ const contractCoverage = ref<ClientContractCoverage[]>([])
 const query = ref('')
 const startDate = ref('')
 const endDate = ref('')
-const hideFailed = ref(true)
+const hideFailed = ref(false)
 const taxUsnPercent = ref(6)
 const taxOsnoPercent = ref(15)
 const acquiringPercent = ref(1)
@@ -265,6 +265,7 @@ const activeAccountingFilterCount = computed(() => [
   query.value.trim(),
   startDate.value,
   endDate.value,
+  hideFailed.value ? 'hide-failed' : '',
   ...Object.values(accountingColumnFilters).map((value) => value.trim()),
 ].filter(Boolean).length)
 
@@ -414,6 +415,7 @@ function resetAccountingFilters() {
   query.value = ''
   startDate.value = ''
   endDate.value = ''
+  hideFailed.value = false
   Object.keys(accountingColumnFilters).forEach((key) => { accountingColumnFilters[key] = '' })
   accountingSortKey.value = null
   accountingSortDirection.value = null
@@ -547,13 +549,16 @@ async function loadData() {
   error.value = ''
 
   try {
-    const [clientsResponse, fieldsResponse, coverageResponse] = await Promise.all([
-      fetchClients({ limit: 100000 }),
+    const [activeClientsResponse, archivedClientsResponse, fieldsResponse, coverageResponse] = await Promise.all([
+      fetchClients({ limit: 100000, archived: false }),
+      fetchClients({ limit: 100000, archived: true }),
       fetchAccountingCustomFields(),
       fetchClientContractCoverage(),
     ])
 
-    clients.value = clientsResponse
+    // Бухгалтерия должна видеть всю базу пациентов, а не только активных.
+    // Архивность и статусы остаются доступными для фильтрации в интерфейсе.
+    clients.value = [...activeClientsResponse, ...archivedClientsResponse]
     customFields.value = fieldsResponse
     contractCoverage.value = coverageResponse
     syncSelectedColumns()

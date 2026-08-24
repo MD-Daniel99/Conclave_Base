@@ -1159,6 +1159,125 @@ def _resolve_module_client_tsr(
     _sync_client_tsr_legacy_fields(db, client_id)
     return assignment
 
+
+def _validate_module_operation_quantity(source: models.Module, requested_quantity: int | None) -> tuple[int, int]:
+    """Return ``(available, requested)`` for an operation over identical units."""
+    available = max(1, int(source.quantity or 1))
+    requested = 1 if requested_quantity is None else int(requested_quantity)
+    if requested < 1:
+        raise ValueError("Количество для операции должно быть не меньше 1")
+    if requested > available:
+        raise ValueError(f"Доступно только {available} шт.")
+    return available, requested
+
+
+def _split_module_count_value(
+    value: int | None,
+    detached_quantity: int,
+) -> tuple[int, int]:
+    """Split a legacy aggregate counter while preserving its total value.
+
+    Counters such as ``ordered``/``recd`` historically live on the same row as
+    ``quantity``.  Each detached physical unit receives at most one counter unit,
+    which preserves the behaviour of the previous one-unit split and keeps the
+    aggregate totals unchanged.
+    """
+    current = max(0, int(value or 0))
+    detached = min(current, max(0, int(detached_quantity)))
+    return current - detached, detached
+
+
+def _split_module_money_value(
+    value: float | None,
+    total_quantity: int,
+    detached_quantity: int,
+) -> tuple[float | None, float | None]:
+    """Return ``(remaining_total, detached_total)`` for an aggregate money field."""
+    if value is None:
+        return None, None
+    total = float(value)
+    detached = total * detached_quantity / total_quantity
+    return total - detached, detached
+
+
+def _detach_module_units(
+    db: Session,
+    source: models.Module,
+    requested_quantity: int | None = None,
+) -> models.Module:
+    """Detach an arbitrary number of identical physical units from ``source``.
+
+    The selected row keeps its UUID and becomes the detached portion.  When only
+    part of the aggregate is selected, a new row is created for the untouched
+    remainder in exactly the same warehouse/client/archive state.  Money totals
+    are divided proportionally so the sum across both rows remains unchanged.
+    """
+    available, detached_quantity = _validate_module_operation_quantity(source, requested_quantity)
+
+    # Normalize historical rows with quantity 0/NULL before any operation.
+    if int(source.quantity or 0) != available:
+        source.quantity = available
+
+    if detached_quantity == available:
+        return source
+
+    remaining_quantity = available - detached_quantity
+    remaining_cost, detached_cost = _split_module_money_value(source.cost, available, detached_quantity)
+    remaining_price, detached_price = _split_module_money_value(source.price, available, detached_quantity)
+    remaining_ordered, detached_ordered = _split_module_count_value(source.ordered, detached_quantity)
+    remaining_recd, detached_recd = _split_module_count_value(source.recd, detached_quantity)
+    remaining_pending, detached_pending = _split_module_count_value(source.pending, detached_quantity)
+    remaining_keep, detached_keep = _split_module_count_value(source.prosthetist_keep, detached_quantity)
+
+    remainder = models.Module(
+        client_id=source.client_id,
+        tsr_id=source.tsr_id,
+        client_tsr_id=source.client_tsr_id,
+        module_name_index=source.module_name_index,
+        supplier=source.supplier,
+        ordered=remaining_ordered,
+        order_date_acc_num=source.order_date_acc_num,
+        quantity=remaining_quantity,
+        size=source.size,
+        stiffness=source.stiffness,
+        side=source.side,
+        cost=remaining_cost,
+        price=remaining_price,
+        recd=remaining_recd,
+        pending=remaining_pending,
+        prosthetist_keep=remaining_keep,
+        properties=source.properties,
+        notes=source.notes,
+        is_archived=bool(source.is_archived),
+        is_manually_archived=bool(source.is_manually_archived),
+        is_in_stock=bool(source.is_in_stock),
+        created_at=source.created_at,
+        updated_at=source.updated_at,
+    )
+
+    source.quantity = detached_quantity
+    source.cost = detached_cost
+    source.price = detached_price
+    source.ordered = detached_ordered
+    source.recd = detached_recd
+    source.pending = detached_pending
+    source.prosthetist_keep = detached_keep
+
+    db.add(remainder)
+    db.add(source)
+    db.flush()
+    return source
+
+
+def _remove_module_units(
+    db: Session,
+    source: models.Module,
+    requested_quantity: int | None = None,
+) -> None:
+    """Delete the requested number of physical units and preserve the remainder."""
+    target = _detach_module_units(db, source, requested_quantity)
+    db.delete(target)
+
 def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module:
     """Создает комплектующую. Проверяет клиента, если ID передан."""
     # Если client_id передан (не None), проверяем, существует ли такой клиент
@@ -1265,7 +1384,13 @@ def count_stock_module_units(db: Session) -> int:
     )
     return int(value or 0)
 
-def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -> Optional[models.Module]:
+def update_module(
+    db: Session,
+    module_id: UUID,
+    payload: schemas.ModuleUpdate,
+    *,
+    operation_quantity: int | None = None,
+) -> Optional[models.Module]:
     db_module = db.get(models.Module, module_id)
     if not db_module:
         return None
@@ -1316,25 +1441,51 @@ def update_module(db: Session, module_id: UUID, payload: schemas.ModuleUpdate) -
         name_ref = ensure_module_name_index(db, data.get('module_name_index'))
         data['module_name_index'] = name_ref.name_index
 
+    # A warehouse row may represent several identical physical units. When its
+    # owner changes, only the quantity explicitly selected for the operation must
+    # move. Ordinary form edits are applied to the aggregate first, then the
+    # selected portion is detached so money/count totals remain consistent.
+    client_state_changes = (
+        'client_id' in data
+        and data.get('client_id') != db_module.client_id
+    )
+
+    if client_state_changes:
+        state_keys = {'client_id', 'tsr_id', 'client_tsr_id', 'is_archived', 'is_in_stock'}
+        aggregate_data = {key: value for key, value in data.items() if key not in state_keys}
+        state_data = {key: value for key, value in data.items() if key in state_keys}
+
+        for key, value in aggregate_data.items():
+            setattr(db_module, key, value)
+
+        target_module = _detach_module_units(db, db_module, operation_quantity)
+        data = state_data
+    else:
+        target_module = db_module
+
     for k, v in data.items():
-        setattr(db_module, k, v)
+        setattr(target_module, k, v)
     
-    db.add(db_module)
+    db.add(target_module)
     try:
         db.commit()
-        db.refresh(db_module)
-        return db_module
+        db.refresh(target_module)
+        return get_module(db, target_module.module_id)
     except Exception:
         db.rollback()
         raise
 
-def delete_module(db: Session, module_id: UUID) -> bool:
+def delete_module(db: Session, module_id: UUID, *, quantity: int = 1) -> bool:
     db_module = db.get(models.Module, module_id)
     if not db_module:
         return False
-    db.delete(db_module)
-    db.commit()
-    return True
+    try:
+        _remove_module_units(db, db_module, quantity)
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
 
 
 def set_module_archive_state(
@@ -1342,6 +1493,7 @@ def set_module_archive_state(
     module_id: UUID,
     *,
     is_archived: bool,
+    quantity: int = 1,
 ) -> Optional[models.Module]:
     """Архивирует комплектующую независимо от состояния карточки клиента."""
     db_module = db.get(models.Module, module_id)
@@ -1353,17 +1505,18 @@ def set_module_archive_state(
         if owner and owner.is_archived:
             raise ValueError("Сначала восстановите клиента из архива")
 
-    db_module.is_manually_archived = is_archived
-    db_module.is_archived = is_archived
+    target_module = _detach_module_units(db, db_module, quantity)
+    target_module.is_manually_archived = is_archived
+    target_module.is_archived = is_archived
 
     try:
         db.commit()
-        db.refresh(db_module)
+        db.refresh(target_module)
     except Exception:
         db.rollback()
         raise
 
-    return get_module(db, module_id)
+    return get_module(db, target_module.module_id)
 
 
 def set_module_stock_state(
@@ -1371,6 +1524,7 @@ def set_module_stock_state(
     module_id: UUID,
     *,
     is_in_stock: bool,
+    quantity: int = 1,
 ) -> Optional[models.Module]:
     """Перемещает активную комплектующую между Рабочим складом и вкладкой «Склад».
 
@@ -1383,21 +1537,23 @@ def set_module_stock_state(
     if db_module.is_archived:
         raise ValueError("Сначала восстановите комплектующую из Списанных комплектующих")
 
+    target_module = _detach_module_units(db, db_module, quantity)
+
     if is_in_stock:
-        db_module.client_id = None
-        db_module.client_tsr_id = None
-        db_module.is_in_stock = True
+        target_module.client_id = None
+        target_module.client_tsr_id = None
+        target_module.is_in_stock = True
     else:
-        db_module.is_in_stock = False
+        target_module.is_in_stock = False
 
     try:
         db.commit()
-        db.refresh(db_module)
+        db.refresh(target_module)
     except Exception:
         db.rollback()
         raise
 
-    return get_module(db, module_id)
+    return get_module(db, target_module.module_id)
 
 
 # Documents storage CRUD

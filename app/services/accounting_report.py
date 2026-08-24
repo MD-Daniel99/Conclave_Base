@@ -110,7 +110,6 @@ def build_accounting_report(
     effective_usn_percent = resolve_usn_percent(tax_percent, tax_usn_percent)
     clients = (
         db.query(models.Client)
-        .filter(models.Client.is_archived.is_(False))
         .options(
             selectinload(models.Client.agent),
             selectinload(models.Client.modules),
@@ -286,7 +285,7 @@ def build_contract_accounting_report(
         if str(document.document_type or "").strip().lower() not in CONTRACT_DOCUMENT_TYPES:
             continue
         client = document.client
-        if client.is_archived or (hide_failed and is_failed_client(client)):
+        if hide_failed and is_failed_client(client):
             continue
 
         certificate = resolve_contract_certificate(document, client)
@@ -385,6 +384,56 @@ def build_contract_accounting_report(
 
 def resolve_contract_certificate(document: models.Document, client: models.Client) -> dict[str, Any]:
     metadata = document.contract_metadata if isinstance(document.contract_metadata, dict) else {}
+    snapshots = [
+        item for item in (metadata.get("selected_tsr_components") or [])
+        if isinstance(item, dict)
+    ] if isinstance(metadata.get("selected_tsr_components"), list) else []
+
+    # A single generated contract may cover several concrete client↔TSR
+    # certificates. Keep it as one accounting operation, but use the sum of
+    # all selected certificate prices and expose every covered certificate id.
+    if len(snapshots) > 1:
+        linked_by_id = {str(item.client_tsr_id): item for item in (client.tsr_items or [])}
+        certificate_ids: list[str] = []
+        amounts: list[float] = []
+        dates: list[date] = []
+        for item in snapshots:
+            certificate_id = str(item.get("client_tsr_id") or "").strip()
+            linked = linked_by_id.get(certificate_id) if certificate_id else None
+            if certificate_id:
+                certificate_ids.append(certificate_id)
+
+            amount = parse_number(linked.certificate_price) if linked else 0.0
+            if amount <= 0:
+                amount = parse_number(item.get("certificate_price"))
+            amounts.append(amount)
+
+            certificate_date = normalize_date(linked.check_date) if linked else None
+            if certificate_date is None:
+                certificate_date = normalize_date(item.get("check_date"))
+            if certificate_date is not None:
+                dates.append(certificate_date)
+
+        amount = sum(amounts)
+        if amount <= 0:
+            amount = parse_number(document.certificate_amount)
+        if amount <= 0:
+            amount = parse_number(client.certificate_price)
+
+        unique_ids = sorted(set(certificate_ids))
+        key = (
+            f"certificates:{','.join(unique_ids)}"
+            if unique_ids
+            else f"document:{document.document_id}"
+        )
+        return {
+            "certificate_id": None,
+            "certificate_ids": unique_ids,
+            "amount": amount,
+            "date": max(dates) if dates else normalize_date(document.created_at),
+            "key": key,
+        }
+
     snapshot = single_tsr_snapshot(metadata)
     linked = document.certificate
     certificate_id = str(document.certificate_id or "") or str(snapshot.get("client_tsr_id") or "")
@@ -431,6 +480,7 @@ def resolve_contract_certificate(document: models.Document, client: models.Clien
         key = f"document:{document.document_id}"
     return {
         "certificate_id": certificate_id or None,
+        "certificate_ids": [certificate_id] if certificate_id else [],
         "amount": amount,
         "date": certificate_date,
         "key": key,
@@ -613,8 +663,9 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
             if certificate["key"] in distinct_contract_keys:
                 continue
             distinct_contract_keys.add(certificate["key"])
-            if certificate["certificate_id"]:
-                covered_certificate_ids.add(str(certificate["certificate_id"]))
+            for certificate_id in certificate.get("certificate_ids", []):
+                if certificate_id:
+                    covered_certificate_ids.add(str(certificate_id))
             contract_date = normalize_date(metadata.get("document_date")) or normalize_date(document.created_at)
             if contract_date:
                 contract_dates.append(contract_date)

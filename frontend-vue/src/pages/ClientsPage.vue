@@ -274,6 +274,8 @@ const snilsForm = reactive({
   ipra_date: '',
 })
 const selectedModuleId = ref('')
+const warehouseAssignQuantity = ref('1')
+const moduleOperationQuantities = reactive<Record<string, string>>({})
 const selectedContractClientTsrIds = ref<string[]>([])
 const selectedContractModuleIds = ref<string[]>([])
 const editingModuleId = ref<string | null>(null)
@@ -571,9 +573,27 @@ const warehouseModules = computed(() => (
   componentWarehouseSource.value === 'stock' ? stockWarehouseModules.value : workingWarehouseModules.value
 ))
 
+const workingWarehouseUnitCount = computed(() => workingWarehouseModules.value.reduce(
+  (sum, item) => sum + Math.max(1, Number(item.quantity ?? 1)),
+  0,
+))
+
+const stockWarehouseUnitCount = computed(() => stockWarehouseModules.value.reduce(
+  (sum, item) => sum + Math.max(1, Number(item.quantity ?? 1)),
+  0,
+))
+
+const clientModuleUnitCount = computed(() => clientModules.value.reduce(
+  (sum, item) => sum + Math.max(1, Number(item.quantity ?? 1)),
+  0,
+))
+
 const selectedWarehouseModule = computed(() => warehouseModules.value.find(
   (item) => String(item.module_id ?? '') === selectedModuleId.value,
 ) ?? null)
+const selectedWarehouseAvailableQuantity = computed(() => (
+  selectedWarehouseModule.value ? getModuleUnitCount(selectedWarehouseModule.value) : 1
+))
 
 const selectedWarehouseTargetMismatch = computed(() => {
   const warehouseModule = selectedWarehouseModule.value
@@ -1141,14 +1161,57 @@ function getModuleName(moduleItem: ModuleItem) {
   return moduleItem.module_name_index ?? moduleItem.module_id ?? 'Комплектующая'
 }
 
-function getGroupTotalPrice(group: ClientTsrGroup) {
-  return group.components.reduce((sum, component) => sum + parseMoney(component.price), 0)
+function getModuleUnitCount(moduleItem: ModuleItem) {
+  return Math.max(1, Math.trunc(Number(moduleItem.quantity ?? 1) || 1))
+}
+
+function getModuleOperationQuantity(moduleItem: ModuleItem) {
+  const id = String(moduleItem.module_id ?? '')
+  return id ? (moduleOperationQuantities[id] ?? '1') : '1'
+}
+
+function setModuleOperationQuantity(moduleItem: ModuleItem, value: string | number) {
+  const id = String(moduleItem.module_id ?? '')
+  if (!id) return
+  const available = getModuleUnitCount(moduleItem)
+  const parsed = Math.max(1, Math.min(available, Math.trunc(Number(value) || 1)))
+  moduleOperationQuantities[id] = String(parsed)
+}
+
+function handleModuleOperationQuantityInput(moduleItem: ModuleItem, event: Event) {
+  setModuleOperationQuantity(moduleItem, (event.target as HTMLInputElement).value)
+}
+
+function parseModuleOperationQuantity(moduleItem: ModuleItem, value: string | number) {
+  const available = getModuleUnitCount(moduleItem)
+  const parsed = Math.trunc(Number(value))
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > available) {
+    throw new Error(`Укажите количество от 1 до ${available}.`)
+  }
+  return parsed
+}
+
+function getGroupComponentUnitCount(group: ClientTsrGroup) {
+  return group.components.reduce((sum, component) => sum + getModuleUnitCount(component), 0)
+}
+
+function getModuleWarehouseAttributes(moduleItem: ModuleItem) {
+  return [
+    `Размер: ${moduleItem.size || '—'}`,
+    `Жёсткость: ${moduleItem.stiffness || '—'}`,
+    `Сторона: ${moduleItem.side || '—'}`,
+  ].join(' · ')
+}
+
+function getGroupTotalCost(group: ClientTsrGroup) {
+  return group.components.reduce((sum, component) => sum + parseMoney(component.cost), 0)
 }
 
 function getGroupCertificatePrice(group: ClientTsrGroup) {
-  // The contract is generated from persisted server data. Do not display an
-  // unsaved draft here, otherwise the previewed price could differ from DOCX.
-  return parseMoney(group.certificatePrice)
+  // Contract generation now saves selected TSR drafts automatically, so the
+  // selector may safely preview the same certificate price the user entered.
+  const draft = group.clientTsrId ? clientTsrDrafts[group.clientTsrId] : undefined
+  return parseMoney(draft?.certificatePrice ?? group.certificatePrice)
 }
 
 function getClientTsrDraft(group: ClientTsrGroup): ClientTsrDraft {
@@ -1223,28 +1286,72 @@ function isContractGroupPartiallySelected(group: ClientTsrGroup) {
 
 function toggleContractGroup(group: ClientTsrGroup, event: Event) {
   const checked = (event.target as HTMLInputElement).checked
-  if (!checked || !group.clientTsrId) {
-    selectedContractClientTsrIds.value = []
-    selectedContractModuleIds.value = []
-    return
+  if (!group.clientTsrId) return
+
+  const selectedTsr = new Set(selectedContractClientTsrIds.value)
+  const selectedModules = new Set(selectedContractModuleIds.value)
+  const groupModuleIds = getContractGroupIds(group)
+
+  if (checked) {
+    selectedTsr.add(group.clientTsrId)
+    groupModuleIds.forEach((id) => selectedModules.add(id))
+  } else {
+    selectedTsr.delete(group.clientTsrId)
+    groupModuleIds.forEach((id) => selectedModules.delete(id))
   }
 
-  // Один сертификат является основанием ровно для одного актуального договора.
-  selectedContractClientTsrIds.value = [group.clientTsrId]
-  selectedContractModuleIds.value = getContractGroupIds(group)
+  selectedContractClientTsrIds.value = [...selectedTsr]
+  selectedContractModuleIds.value = [...selectedModules]
 }
 
 function toggleContractComponent(group: ClientTsrGroup, componentId: string, event: Event) {
   const checked = (event.target as HTMLInputElement).checked
   if (!group.clientTsrId) return
 
-  const sameCertificateSelected = selectedContractClientTsrIds.value[0] === group.clientTsrId
-  const selected = new Set(sameCertificateSelected ? selectedContractModuleIds.value : [])
-  if (checked) selected.add(componentId)
-  else selected.delete(componentId)
+  const selectedTsr = new Set(selectedContractClientTsrIds.value)
+  const selectedModules = new Set(selectedContractModuleIds.value)
 
-  selectedContractClientTsrIds.value = [group.clientTsrId]
-  selectedContractModuleIds.value = [...selected]
+  if (checked) {
+    selectedTsr.add(group.clientTsrId)
+    selectedModules.add(componentId)
+  } else {
+    selectedModules.delete(componentId)
+  }
+
+  selectedContractClientTsrIds.value = [...selectedTsr]
+  selectedContractModuleIds.value = [...selectedModules]
+}
+
+function selectAllContractTsrGroups() {
+  selectedContractClientTsrIds.value = contractTsrGroups.value.map((group) => group.clientTsrId).filter(Boolean)
+  selectedContractModuleIds.value = [...new Set(contractTsrGroups.value.flatMap(getContractGroupIds))]
+}
+
+function clearContractTsrSelection() {
+  selectedContractClientTsrIds.value = []
+  selectedContractModuleIds.value = []
+}
+
+async function persistSelectedContractTsrDrafts(clientId: string) {
+  const selectedGroups = contractTsrGroups.value.filter(
+    (group) => group.clientTsrId && selectedContractClientTsrIds.value.includes(group.clientTsrId),
+  )
+
+  for (const group of selectedGroups) {
+    if (getGroupCertificatePrice(group) <= 0) {
+      throw new Error(`Для ТСР «${group.tsr}» укажите стоимость сертификата.`)
+    }
+
+    const draft = clientTsrDrafts[group.clientTsrId]
+    if (!draft) continue
+
+    await updateClientTsr(clientId, group.clientTsrId, {
+      check_date: draft.checkDate || null,
+      certificate_price: draft.certificatePrice.trim() || null,
+      prosthetist: draft.prosthetist || null,
+    })
+    delete clientTsrDrafts[group.clientTsrId]
+  }
 }
 
 function formatDate(value?: string) {
@@ -1376,6 +1483,7 @@ function resetModuleForm(preserveTarget = true) {
     moduleForm.client_tsr_id = target.clientTsrId
   }
   selectedModuleId.value = ''
+  warehouseAssignQuantity.value = '1'
   editingModuleId.value = null
   rememberDetailTabState('modules')
 }
@@ -1386,6 +1494,7 @@ function prepareNewComponentForTsr(group: ClientTsrGroup) {
   moduleForm.client_tsr_id = group.clientTsrId
   editingModuleId.value = null
   selectedModuleId.value = ''
+  warehouseAssignQuantity.value = '1'
   componentEntryMode.value = 'new'
   componentFormExpanded.value = true
   resetMessages()
@@ -1427,6 +1536,7 @@ function setComponentEntryMode(mode: ComponentEntryMode) {
     moduleForm.client_tsr_id = target.clientTsrId
   }
   selectedModuleId.value = ''
+  warehouseAssignQuantity.value = '1'
   editingModuleId.value = null
   componentEntryMode.value = mode
   componentFormExpanded.value = true
@@ -1438,11 +1548,13 @@ function setComponentWarehouseSource(source: 'working' | 'stock') {
   if (componentWarehouseSource.value === source) return
   componentWarehouseSource.value = source
   selectedModuleId.value = ''
+  warehouseAssignQuantity.value = '1'
   resetMessages()
 }
 
 function handleWarehouseModuleChange() {
   const warehouseModule = selectedWarehouseModule.value
+  warehouseAssignQuantity.value = '1'
   if (!warehouseModule) return
 
   const warehouseTsrId = String(warehouseModule.tsr_id ?? warehouseModule.tsr?.id ?? '')
@@ -1988,6 +2100,7 @@ async function loadClientTabData(tab: DetailTab, force = false) {
       clientModules.value = clientModuleResponse
       workingWarehouseModules.value = workingWarehouseResponse
       stockWarehouseModules.value = stockWarehouseResponse
+      Object.keys(moduleOperationQuantities).forEach((key) => delete moduleOperationQuantities[key])
     } else if (tab === 'documents') {
       const [documentResponse, moduleResponse, nextNumber] = await Promise.all([
         fetchClientDocuments(clientId),
@@ -2678,13 +2791,15 @@ async function assignModule() {
     if (tsrId && tsrId !== targetGroup.tsrId) {
       throw new Error('Выбранная складская комплектующая относится к другому ТСР.')
     }
+    const operationQuantity = parseModuleOperationQuantity(warehouseModule, warehouseAssignQuantity.value)
     await updateModule(selectedModuleId.value, {
       client_id: clientId,
       tsr_id: targetGroup.tsrId,
       client_tsr_id: targetGroup.clientTsrId,
-    })
+    }, operationQuantity)
     selectedModuleId.value = ''
-    successMessage.value = 'Комплектующая привязана к пациенту'
+    warehouseAssignQuantity.value = '1'
+    successMessage.value = `К пациенту привязано: ${operationQuantity} шт.`
     await loadClientTabData('modules', true)
     await loadClients()
   } catch (caughtError) {
@@ -2699,9 +2814,17 @@ async function unassignModule(moduleItem: ModuleItem) {
     return
   }
 
+  let operationQuantity: number
+  try {
+    operationQuantity = parseModuleOperationQuantity(moduleItem, getModuleOperationQuantity(moduleItem))
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : 'Проверьте количество.'
+    return
+  }
+
   if (!(await confirmAction({
     header: 'Вернуть на склад',
-    message: `Отвязать комплектующую «${getModuleName(moduleItem)}» от пациента и вернуть на склад?`,
+    message: `Отвязать ${operationQuantity} шт. «${getModuleName(moduleItem)}» от пациента и вернуть на склад?`,
     acceptLabel: 'Вернуть на склад',
   }))) {
     return
@@ -2711,8 +2834,8 @@ async function unassignModule(moduleItem: ModuleItem) {
   resetMessages()
 
   try {
-    await updateModule(moduleItem.module_id, { client_id: null })
-    successMessage.value = 'Комплектующая отвязана и возвращена на склад'
+    await updateModule(moduleItem.module_id, { client_id: null }, operationQuantity)
+    successMessage.value = `На склад возвращено: ${operationQuantity} шт.`
     await loadClientTabData('modules', true)
     await loadClients()
   } catch (caughtError) {
@@ -2786,8 +2909,16 @@ async function removeClientModule(moduleItem: ModuleItem) {
     return
   }
 
+  let operationQuantity: number
+  try {
+    operationQuantity = parseModuleOperationQuantity(moduleItem, getModuleOperationQuantity(moduleItem))
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : 'Проверьте количество.'
+    return
+  }
+
   if (!(await confirmAction({
-    message: `Удалить комплектующую «${getModuleName(moduleItem)}»?`,
+    message: `Удалить ${operationQuantity} шт. комплектующей «${getModuleName(moduleItem)}»?`,
     danger: true,
   }))) {
     return
@@ -2798,8 +2929,8 @@ async function removeClientModule(moduleItem: ModuleItem) {
 
   try {
     const clientId = getClientId(selectedClient.value)
-    await deleteModule(moduleItem.module_id)
-    successMessage.value = 'Комплектующая удалена'
+    await deleteModule(moduleItem.module_id, operationQuantity)
+    successMessage.value = `Удалено комплектующих: ${operationQuantity} шт.`
     resetModuleForm()
     await refreshSelectedClient(clientId, false)
     await loadClientTabData('modules', true)
@@ -2879,8 +3010,8 @@ async function generateContract() {
     return
   }
 
-  if (showExtendedContractDates.value && selectedContractClientTsrIds.value.length !== 1) {
-    error.value = 'Для договора ООО выберите ровно один сертификат пациента. Один сертификат — один договор.'
+  if (showExtendedContractDates.value && selectedContractClientTsrIds.value.length === 0) {
+    error.value = 'Для договора ООО выберите хотя бы один ТСР пациента.'
     return
   }
 
@@ -2891,6 +3022,14 @@ async function generateContract() {
 
     if (!clientId) {
       return
+    }
+
+    if (showExtendedContractDates.value) {
+      // Стоимость сертификата редактируется в карточке ТСР как черновик.
+      // Перед генерацией сохраняем выбранные черновики автоматически, чтобы
+      // договор всегда использовал именно те значения, которые видит пользователь.
+      await persistSelectedContractTsrDrafts(clientId)
+      await refreshSelectedClient(clientId, false)
     }
 
     const payload: ContractGenerationPayload = {
@@ -3408,7 +3547,7 @@ onBeforeUnmount(() => {
                     <button class="link-button tsr-title-link" type="button" @click="openNewComponentFromTsr(group)">
                       <strong>{{ group.tsr }}</strong>
                     </button>
-                    <span>Комплектующих: {{ group.components.length }}</span>
+                    <span>Комплектующих: {{ getGroupComponentUnitCount(group) }}</span>
                   </div>
                   <div class="row-actions">
                     <button class="ghost-button" type="button" :disabled="isSaving" @click="openNewComponentFromTsr(group)">
@@ -3702,7 +3841,7 @@ onBeforeUnmount(() => {
                     <div>
                       <span>{{ formatShortDate(selectedComponentTsrGroup.checkDate) }}</span>
                       <span>{{ formatMoney(getGroupCertificatePrice(selectedComponentTsrGroup)) }}</span>
-                      <span>{{ selectedComponentTsrGroup.components.length }} компл.</span>
+                      <span>{{ getGroupComponentUnitCount(selectedComponentTsrGroup) }} компл.</span>
                     </div>
                   </div>
                 </div>
@@ -3741,7 +3880,7 @@ onBeforeUnmount(() => {
                   >
                     <PackageOpen :size="16" aria-hidden="true" />
                     Выбрать со склада
-                    <span class="component-mode-count">{{ workingWarehouseModules.length + stockWarehouseModules.length }}</span>
+                    <span class="component-mode-count">{{ workingWarehouseUnitCount + stockWarehouseUnitCount }}</span>
                   </button>
                 </div>
 
@@ -3755,7 +3894,7 @@ onBeforeUnmount(() => {
                       :aria-selected="componentWarehouseSource === 'working'"
                       @click="setComponentWarehouseSource('working')"
                     >
-                      Рабочий склад · {{ workingWarehouseModules.length }}
+                      Рабочий склад · {{ workingWarehouseUnitCount }}
                     </button>
                     <button
                       class="secondary-button"
@@ -3765,7 +3904,7 @@ onBeforeUnmount(() => {
                       :aria-selected="componentWarehouseSource === 'stock'"
                       @click="setComponentWarehouseSource('stock')"
                     >
-                      Склад · {{ stockWarehouseModules.length }}
+                      Склад · {{ stockWarehouseUnitCount }}
                     </button>
                   </div>
                   <label>
@@ -3777,9 +3916,24 @@ onBeforeUnmount(() => {
                         :key="String(moduleItem.module_id)"
                         :value="moduleItem.module_id"
                       >
-                        {{ moduleItem.tsr?.full_tsr_code || 'ТСР не выбран' }} — {{ getModuleName(moduleItem) }} — {{ moduleItem.supplier || 'поставщик не указан' }}
+                        {{ moduleItem.tsr?.full_tsr_code || 'ТСР не выбран' }} — {{ getModuleName(moduleItem) }} — {{ getModuleWarehouseAttributes(moduleItem) }} — Количество: {{ getModuleUnitCount(moduleItem) }} шт. — {{ moduleItem.supplier || 'поставщик не указан' }}
                       </option>
                     </select>
+                  </label>
+                  <label v-if="selectedWarehouseModule" class="warehouse-assign-quantity-field">
+                    Количество для назначения *
+                    <div class="inline-quantity-picker">
+                      <input
+                        v-model="warehouseAssignQuantity"
+                        type="number"
+                        min="1"
+                        :max="selectedWarehouseAvailableQuantity"
+                        step="1"
+                      />
+                      <button class="ghost-button" type="button" @click="warehouseAssignQuantity = '1'">1</button>
+                      <button class="ghost-button" type="button" @click="warehouseAssignQuantity = String(selectedWarehouseAvailableQuantity)">Все</button>
+                      <span class="muted">из {{ selectedWarehouseAvailableQuantity }} шт.</span>
+                    </div>
                   </label>
                   <p v-if="warehouseModules.length === 0" class="form-hint compact-hint">
                     В выбранном разделе нет свободных комплектующих. Выберите другой раздел или «Создать новую».
@@ -3792,7 +3946,7 @@ onBeforeUnmount(() => {
                   </p>
                   <div class="component-form-actions">
                     <button class="primary-button" :disabled="isSaving || !selectedModuleId || !moduleForm.client_tsr_id || selectedWarehouseTargetMismatch" type="submit">
-                      {{ isSaving ? 'Привязываем...' : 'Привязать со склада' }}
+                      {{ isSaving ? 'Привязываем...' : `Привязать со склада · ${warehouseAssignQuantity || 1} шт.` }}
                     </button>
                   </div>
                 </div>
@@ -3919,7 +4073,7 @@ onBeforeUnmount(() => {
               <h2>Комплектующие пациента</h2>
               <p class="muted">Позиции сгруппированы по назначенному ТСР.</p>
             </div>
-            <span class="component-total-badge">{{ clientModules.length }} поз.</span>
+            <span class="component-total-badge">{{ clientModuleUnitCount }} шт.</span>
           </div>
 
           <div v-if="clientTsrGroups.length" class="tsr-component-groups component-groups-modern">
@@ -3935,11 +4089,11 @@ onBeforeUnmount(() => {
                   <strong>{{ group.tsr }}</strong>
                   <span>
                     {{ formatShortDate(group.checkDate) }} · {{ formatMoney(getGroupCertificatePrice(group)) }} ·
-                    {{ group.components.length }} компл.
+                    {{ getGroupComponentUnitCount(group) }} компл.
                   </span>
                 </div>
                 <div class="row-actions">
-                  <strong>{{ formatMoney(getGroupTotalPrice(group)) }}</strong>
+                  <strong title="Суммарная себестоимость комплектующих ТСР">{{ formatMoney(getGroupTotalCost(group)) }}</strong>
                   <button
                     v-if="group.clientTsrId && !selectedClient?.is_archived"
                     class="ghost-button"
@@ -3963,6 +4117,20 @@ onBeforeUnmount(() => {
                     </span>
                   </div>
                   <div v-if="!selectedClient?.is_archived" class="row-actions component-actions">
+                    <label v-if="getModuleUnitCount(moduleItem) > 1" class="component-row-quantity-picker" @click.stop>
+                      <span>Для операции</span>
+                      <input
+                        :value="getModuleOperationQuantity(moduleItem)"
+                        type="number"
+                        min="1"
+                        :max="getModuleUnitCount(moduleItem)"
+                        step="1"
+                        @input="handleModuleOperationQuantityInput(moduleItem, $event)"
+                      />
+                      <button class="ghost-button compact-quantity-button" type="button" @click.stop="setModuleOperationQuantity(moduleItem, 1)">1</button>
+                      <button class="ghost-button compact-quantity-button" type="button" @click.stop="setModuleOperationQuantity(moduleItem, getModuleUnitCount(moduleItem))">Все</button>
+                      <span>из {{ getModuleUnitCount(moduleItem) }}</span>
+                    </label>
                     <button
                       class="ghost-button"
                       type="button"
@@ -4032,7 +4200,16 @@ onBeforeUnmount(() => {
             </button>
           </form>
           <div v-if="showExtendedContractDates" class="contract-module-selector">
-            <p class="eyebrow">ТСР и комплектующие для договора</p>
+            <div class="contract-selector-heading">
+              <div>
+                <p class="eyebrow">ТСР и комплектующие для договора</p>
+                <span class="muted">Выбрано ТСР: {{ selectedContractClientTsrIds.length }} из {{ contractTsrGroups.length }}</span>
+              </div>
+              <div v-if="contractTsrGroups.length" class="row-actions">
+                <button class="ghost-button" type="button" @click="selectAllContractTsrGroups">Выбрать все</button>
+                <button class="ghost-button" type="button" @click="clearContractTsrSelection">Снять выбор</button>
+              </div>
+            </div>
             <article v-for="group in contractTsrGroups" :key="group.key" class="contract-tsr-group">
               <label class="checkbox-label contract-tsr-heading">
                 <input
@@ -4043,7 +4220,7 @@ onBeforeUnmount(() => {
                 />
                 <span>
                   <strong>{{ group.tsr }}</strong>
-                  · {{ group.components.length }} комплектующих
+                  · {{ getGroupComponentUnitCount(group) }} комплектующих
                   · сертификат: {{ formatMoney(getGroupCertificatePrice(group)) }}
                 </span>
               </label>

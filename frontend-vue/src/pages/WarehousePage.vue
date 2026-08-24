@@ -33,9 +33,12 @@ import type {
 type CountInput = string | number
 type WarehouseListMode = 'active' | 'stock' | 'archive'
 type WarehouseBulkAction = 'stock' | 'work' | 'archive' | 'restore' | 'delete'
+type WarehouseQuantityEntry = { item: ComponentItem; quantity: string }
+type ClientTsrItem = NonNullable<Client['tsr_items']>[number]
 
 type ComponentForm = {
   tsr_id: string
+  client_tsr_id: string
   module_name_index: string
   supplier: string
   ordered: CountInput
@@ -56,6 +59,7 @@ type ComponentForm = {
 
 const emptyComponentForm: ComponentForm = {
   tsr_id: '',
+  client_tsr_id: '',
   module_name_index: '',
   supplier: '',
   ordered: '0',
@@ -88,6 +92,12 @@ const pageLimit = ref(100)
 const currentPage = ref(1)
 const activeWarehouseListMode = ref<WarehouseListMode>('active')
 const selectedComponentIds = ref<string[]>([])
+const componentCardOperationQuantity = ref('1')
+const quantityActionDialog = reactive<{ open: boolean; action: WarehouseBulkAction; entries: WarehouseQuantityEntry[] }>({
+  open: false,
+  action: 'stock',
+  entries: [],
+})
 const componentForm = reactive<ComponentForm>({ ...emptyComponentForm })
 const isLoading = ref(false)
 const isSaving = ref(false)
@@ -147,6 +157,39 @@ const selectedComponents = computed(() => {
   const ids = new Set(selectedComponentIds.value)
   return components.value.filter((item) => ids.has(getComponentId(item)))
 })
+const selectedComponentAvailableQuantity = computed(() => (
+  selectedComponent.value ? getAvailableComponentQuantity(selectedComponent.value) : 1
+))
+const componentOwnerChanged = computed(() => Boolean(
+  selectedComponent.value
+  && String(selectedComponent.value.client_id ?? '') !== String(componentForm.client_id ?? ''),
+))
+const selectedOwnerClient = computed(() => (
+  clients.value.find((client) => String(client.client_id) === String(componentForm.client_id)) ?? null
+))
+const selectedOwnerClientTsrItems = computed<ClientTsrItem[]>(() => (
+  [...(selectedOwnerClient.value?.tsr_items ?? [])].sort((left, right) => {
+    const leftCreated = String(left.created_at ?? '')
+    const rightCreated = String(right.created_at ?? '')
+    return leftCreated.localeCompare(rightCreated)
+      || String(left.client_tsr_id).localeCompare(String(right.client_tsr_id))
+  })
+))
+const selectedOwnerClientTsr = computed(() => (
+  selectedOwnerClientTsrItems.value.find(
+    (item) => String(item.client_tsr_id) === String(componentForm.client_tsr_id),
+  ) ?? null
+))
+const componentAssignmentChanged = computed(() => Boolean(
+  selectedComponent.value
+  && (
+    componentOwnerChanged.value
+    || (
+      componentForm.client_id
+      && String(selectedComponent.value.client_tsr_id ?? '') !== String(componentForm.client_tsr_id ?? '')
+    )
+  ),
+))
 const pagedComponentIds = computed(() => pagedComponents.value.map(getComponentId).filter(Boolean))
 const allPagedComponentsSelected = computed(() => (
   pagedComponentIds.value.length > 0
@@ -187,20 +230,20 @@ function getComponentActions(item: ComponentItem): ActionMenuItem[] {
         label: 'Переместить на Склад',
         icon: PackageOpen,
         disabled: isSaving.value,
-        action: () => changeComponentStockState(item, true),
+        action: () => requestWarehouseItemAction(item, 'stock'),
       },
       {
         label: 'Переместить в Списанные комплектующие',
         icon: Archive,
         disabled: isSaving.value,
-        action: () => changeComponentArchiveState(item, true),
+        action: () => requestWarehouseItemAction(item, 'archive'),
       },
       {
         label: 'Удалить',
         icon: Trash2,
         danger: true,
         disabled: isSaving.value,
-        action: () => removeComponent(item),
+        action: () => requestWarehouseItemAction(item, 'delete'),
       },
     ]
   }
@@ -216,20 +259,20 @@ function getComponentActions(item: ComponentItem): ActionMenuItem[] {
         label: 'Вернуть в Рабочий склад',
         icon: RotateCcw,
         disabled: isSaving.value,
-        action: () => changeComponentStockState(item, false),
+        action: () => requestWarehouseItemAction(item, 'work'),
       },
       {
         label: 'Переместить в Списанные комплектующие',
         icon: Archive,
         disabled: isSaving.value,
-        action: () => changeComponentArchiveState(item, true),
+        action: () => requestWarehouseItemAction(item, 'archive'),
       },
       {
         label: 'Удалить',
         icon: Trash2,
         danger: true,
         disabled: isSaving.value,
-        action: () => removeComponent(item),
+        action: () => requestWarehouseItemAction(item, 'delete'),
       },
     ]
   }
@@ -240,7 +283,7 @@ function getComponentActions(item: ComponentItem): ActionMenuItem[] {
         label: 'Восстановить',
         icon: RotateCcw,
         disabled: isSaving.value,
-        action: () => changeComponentArchiveState(item, false),
+        action: () => requestWarehouseItemAction(item, 'restore'),
       },
     ]
   }
@@ -250,6 +293,46 @@ function getComponentActions(item: ComponentItem): ActionMenuItem[] {
     disabled: true,
     action: () => undefined,
   }]
+}
+
+function getAvailableComponentQuantity(item: ComponentItem) {
+  return Math.max(1, Math.trunc(Number(item.quantity ?? 1) || 1))
+}
+
+function getComponentUnitMoney(total: unknown, item: ComponentItem) {
+  if (total === null || total === undefined || total === '') return '—'
+  return formatMoney(Number(total) / getAvailableComponentQuantity(item))
+}
+
+function parseOperationQuantity(value: string | number, item: ComponentItem) {
+  const available = getAvailableComponentQuantity(item)
+  const parsed = Math.trunc(Number(value))
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > available) {
+    throw new Error(`Укажите количество от 1 до ${available}.`)
+  }
+  return parsed
+}
+
+function getWarehouseActionLabel(action: WarehouseBulkAction) {
+  const labels: Record<WarehouseBulkAction, string> = {
+    stock: 'Переместить на Склад',
+    work: 'Вернуть в Рабочий склад',
+    archive: 'Переместить в Списанные комплектующие',
+    restore: 'Восстановить',
+    delete: 'Удалить',
+  }
+  return labels[action]
+}
+
+function setQuantityDialogEntry(entry: WarehouseQuantityEntry, value: string | number) {
+  const available = getAvailableComponentQuantity(entry.item)
+  const parsed = Math.max(1, Math.min(available, Math.trunc(Number(value) || 1)))
+  entry.quantity = String(parsed)
+}
+
+function closeQuantityActionDialog() {
+  quantityActionDialog.open = false
+  quantityActionDialog.entries = []
 }
 
 function toNumber(value: CountInput, fallback = 0) {
@@ -312,6 +395,62 @@ function getClientLabel(clientId?: string | null) {
   return client ? getClientName(client) : String(clientId)
 }
 
+function getClientTsrId(item: ClientTsrItem) {
+  return String(item.tsr_id ?? item.tsr?.id ?? item.tsr?.tsr_id ?? '')
+}
+
+function formatClientTsrDate(value?: string | null) {
+  if (!value) return 'дата не указана'
+  const [year, month, day] = String(value).slice(0, 10).split('-')
+  if (!year || !month || !day) return String(value)
+  return `${day}.${month}.${year}`
+}
+
+function getClientTsrOptionLabel(item: ClientTsrItem) {
+  const code = String(item.tsr?.full_tsr_code ?? 'ТСР без кода')
+  const details = [`пробитие ${formatClientTsrDate(item.check_date)}`]
+  if (item.certificate_price != null && String(item.certificate_price).trim()) {
+    details.push(`сертификат ${formatMoney(Number(item.certificate_price))}`)
+  }
+  return `${code} · ${details.join(' · ')}`
+}
+
+function applyClientTsrSelection(item: ClientTsrItem) {
+  componentForm.client_tsr_id = String(item.client_tsr_id)
+  const tsrId = getClientTsrId(item)
+  if (tsrId) componentForm.tsr_id = tsrId
+}
+
+function handleComponentOwnerChange() {
+  componentForm.client_tsr_id = ''
+  if (!componentForm.client_id) return
+
+  const options = selectedOwnerClientTsrItems.value
+  const matchingCurrentTsr = componentForm.tsr_id
+    ? options.filter((item) => getClientTsrId(item) === componentForm.tsr_id)
+    : []
+
+  if (matchingCurrentTsr.length === 1) {
+    applyClientTsrSelection(matchingCurrentTsr[0])
+  } else if (!componentForm.tsr_id && options.length === 1) {
+    applyClientTsrSelection(options[0])
+  }
+}
+
+function handleComponentClientTsrChange() {
+  const assignment = selectedOwnerClientTsr.value
+  if (!assignment) return
+  const tsrId = getClientTsrId(assignment)
+  if (tsrId) componentForm.tsr_id = tsrId
+}
+
+function handleComponentTsrChange() {
+  const assignment = selectedOwnerClientTsr.value
+  if (assignment && getClientTsrId(assignment) !== componentForm.tsr_id) {
+    componentForm.client_tsr_id = ''
+  }
+}
+
 function isComponentOwnerArchived(item: ComponentItem) {
   if (!item.client_id) {
     return false
@@ -326,6 +465,7 @@ function isComponentOwnerArchived(item: ComponentItem) {
 function resetComponentForm() {
   Object.assign(componentForm, emptyComponentForm)
   selectedComponent.value = null
+  componentCardOperationQuantity.value = '1'
   resetMessages()
 }
 
@@ -340,10 +480,12 @@ function closeComponentCard() {
 
 function selectComponent(item: ComponentItem) {
   selectedComponent.value = item
+  componentCardOperationQuantity.value = '1'
   const quantity = Number(item.quantity ?? 1) || 1
 
   Object.assign(componentForm, {
     tsr_id: String(item.tsr_id ?? item.tsr?.id ?? ''),
+    client_tsr_id: String(item.client_tsr_id ?? ''),
     module_name_index: item.module_name_index ?? '',
     supplier: item.supplier ?? '',
     order_date_acc_num: item.order_date_acc_num ?? '-',
@@ -369,6 +511,9 @@ function selectComponent(item: ComponentItem) {
 function buildComponentPayload(): ComponentCreatePayload {
   return {
     tsr_id: componentForm.tsr_id || null,
+    client_tsr_id: componentForm.client_id && componentForm.client_tsr_id
+      ? componentForm.client_tsr_id
+      : null,
     client_id: componentForm.client_id || null,
     module_name_index: componentForm.module_name_index.trim(),
     supplier: componentForm.supplier.trim(),
@@ -443,6 +588,15 @@ async function saveComponent() {
     return
   }
 
+  if (
+    componentForm.client_id
+    && selectedOwnerClientTsrItems.value.length > 0
+    && !componentForm.client_tsr_id
+  ) {
+    error.value = 'Выберите ТСР пациента для привязки комплектующей.'
+    return
+  }
+
   isSaving.value = true
 
   try {
@@ -454,7 +608,11 @@ async function saveComponent() {
       if (String(selectedComponent.value.client_id ?? '') === componentForm.client_id) {
         delete updatePayload.client_id
       }
-      saved = await updateComponent(getComponentId(selectedComponent.value), updatePayload)
+      let operationQuantity: number | undefined
+      if (componentAssignmentChanged.value) {
+        operationQuantity = parseOperationQuantity(componentCardOperationQuantity.value, selectedComponent.value)
+      }
+      saved = await updateComponent(getComponentId(selectedComponent.value), updatePayload, operationQuantity)
     } else {
       saved = await createComponent(payload)
     }
@@ -475,104 +633,95 @@ async function saveComponent() {
   }
 }
 
-async function removeComponent(item: ComponentItem) {
-  if (!(await confirmAction({
-    message: `Удалить комплектующую «${getComponentName(item)}»? Это действие нельзя отменить.`,
-    danger: true,
-  }))) {
-    return
-  }
+async function performWarehouseItemAction(item: ComponentItem, action: WarehouseBulkAction, quantity: number) {
+  const id = getComponentId(item)
+  if (!id) return
 
-  isSaving.value = true
-  resetMessages()
-
-  try {
-    await deleteComponent(getComponentId(item))
-    closeComponentCard()
-    successMessage.value = 'Комплектующая удалена'
-    await loadData()
-  } catch (caught) {
-    error.value = getApiErrorMessage(caught)
-  } finally {
-    isSaving.value = false
-  }
+  if (action === 'stock') await moveComponentToStock(id, quantity)
+  else if (action === 'work') await moveComponentToWorkStock(id, quantity)
+  else if (action === 'archive') await archiveComponent(id, quantity)
+  else if (action === 'restore') await restoreComponent(id, quantity)
+  else await deleteComponent(id, quantity)
 }
 
-async function changeComponentArchiveState(item: ComponentItem, archive: boolean) {
-  const componentId = getComponentId(item)
-  const action = archive ? 'Переместить в Списанные комплектующие' : 'восстановить из Списанные комплектующие'
-
-  if (!componentId) {
-    return
-  }
-
+async function executeSingleWarehouseAction(item: ComponentItem, action: WarehouseBulkAction, quantity = 1) {
+  const label = getWarehouseActionLabel(action)
+  const suffix = quantity > 1 ? ` (${quantity} шт.)` : ''
   if (!(await confirmAction({
-    header: archive ? 'Перемещение в Списанные комплектующие' : 'Восстановление',
-    message: `${action[0].toUpperCase()}${action.slice(1)} комплектующую «${getComponentName(item)}»?`,
-    acceptLabel: archive ? 'В Списанные комплектующие' : 'Восстановить',
-  }))) {
-    return
-  }
-
-  isSaving.value = true
-  resetMessages()
-
-  try {
-    if (archive) {
-      await archiveComponent(componentId)
-    } else {
-      await restoreComponent(componentId)
-    }
-
-    if (selectedComponent.value && getComponentId(selectedComponent.value) === componentId) {
-      closeComponentCard()
-      resetComponentForm()
-    }
-
-    successMessage.value = archive
-      ? 'Комплектующая перемещена в Списанные комплектующие'
-      : 'Комплектующая восстановлена из Списанные комплектующие'
-    await loadData()
-  } catch (caught) {
-    error.value = getApiErrorMessage(caught)
-  } finally {
-    isSaving.value = false
-  }
-}
-
-async function changeComponentStockState(item: ComponentItem, moveToStock: boolean) {
-  const componentId = getComponentId(item)
-  if (!componentId) return
-
-  const target = moveToStock ? 'Склад' : 'Рабочий склад'
-  const note = moveToStock ? ' Владелец будет снят, ТСР сохранится.' : ''
-  if (!(await confirmAction({
-    header: moveToStock ? 'Перемещение на Склад' : 'Возврат в Рабочий склад',
-    message: `Переместить комплектующую «${getComponentName(item)}» в «${target}»?${note}`,
-    acceptLabel: moveToStock ? 'На Склад' : 'В Рабочий склад',
+    header: label,
+    message: `${label} «${getComponentName(item)}»${suffix}?`,
+    acceptLabel: label,
+    danger: action === 'delete',
   }))) return
 
   isSaving.value = true
   resetMessages()
   try {
-    if (moveToStock) {
-      await moveComponentToStock(componentId)
-    } else {
-      await moveComponentToWorkStock(componentId)
-    }
-    if (selectedComponent.value && getComponentId(selectedComponent.value) === componentId) {
+    await performWarehouseItemAction(item, action, quantity)
+    if (selectedComponent.value && getComponentId(selectedComponent.value) === getComponentId(item)) {
       closeComponentCard()
       resetComponentForm()
     }
-    successMessage.value = moveToStock
-      ? 'Комплектующая перемещена на Склад'
-      : 'Комплектующая возвращена в Рабочий склад'
+    successMessage.value = `${label}: ${quantity} шт.`
     await loadData()
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
   } finally {
     isSaving.value = false
   }
+}
+
+function requestWarehouseItemAction(item: ComponentItem, action: WarehouseBulkAction) {
+  const available = getAvailableComponentQuantity(item)
+  if (available <= 1) {
+    void executeSingleWarehouseAction(item, action, 1)
+    return
+  }
+
+  quantityActionDialog.action = action
+  quantityActionDialog.entries = [{ item, quantity: '1' }]
+  quantityActionDialog.open = true
+}
+
+async function executeWarehouseQuantityDialog() {
+  const action = quantityActionDialog.action
+  const entries = [...quantityActionDialog.entries]
+  if (!entries.length) return
+
+  const requests: Array<{ item: ComponentItem; quantity: number }> = []
+  try {
+    for (const entry of entries) {
+      requests.push({ item: entry.item, quantity: parseOperationQuantity(entry.quantity, entry.item) })
+    }
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : 'Проверьте количество для операции.'
+    return
+  }
+
+  closeQuantityActionDialog()
+  isSaving.value = true
+  resetMessages()
+  const failures: string[] = []
+  let completedUnits = 0
+
+  for (const request of requests) {
+    try {
+      await performWarehouseItemAction(request.item, action, request.quantity)
+      completedUnits += request.quantity
+    } catch (caught) {
+      failures.push(`${getComponentName(request.item)}: ${getApiErrorMessage(caught)}`)
+    }
+  }
+
+  selectedComponentIds.value = []
+  if (selectedComponent.value && requests.some((entry) => getComponentId(entry.item) === getComponentId(selectedComponent.value!))) {
+    closeComponentCard()
+    resetComponentForm()
+  }
+  if (completedUnits) successMessage.value = `${getWarehouseActionLabel(action)}: ${completedUnits} шт.`
+  if (failures.length) error.value = `Не удалось обработать ${failures.length} поз.: ${failures.join('; ')}`
+  await loadData()
+  isSaving.value = false
 }
 
 function isComponentSelected(item: ComponentItem) {
@@ -609,43 +758,23 @@ async function runBulkWarehouseAction(action: WarehouseBulkAction) {
   const items = selectedComponents.value
   if (!items.length) return
 
-  const labels: Record<WarehouseBulkAction, string> = {
-    stock: 'переместить на Склад',
-    work: 'вернуть в Рабочий склад',
-    archive: 'переместить в Списанные комплектующие',
-    restore: 'восстановить',
-    delete: 'удалить',
+  if (items.some((item) => getAvailableComponentQuantity(item) > 1)) {
+    quantityActionDialog.action = action
+    quantityActionDialog.entries = items.map((item) => ({ item, quantity: '1' }))
+    quantityActionDialog.open = true
+    return
   }
+
   if (!(await confirmAction({
     header: 'Множественная операция',
-    message: `${labels[action][0].toUpperCase()}${labels[action].slice(1)} выбранные позиции (${items.length})?`,
-    acceptLabel: labels[action],
+    message: `${getWarehouseActionLabel(action)} выбранные позиции (${items.length})?`,
+    acceptLabel: getWarehouseActionLabel(action),
     danger: action === 'delete',
   }))) return
 
-  isSaving.value = true
-  resetMessages()
-  const failures: string[] = []
-  let completed = 0
-  for (const item of items) {
-    const id = getComponentId(item)
-    try {
-      if (action === 'stock') await moveComponentToStock(id)
-      else if (action === 'work') await moveComponentToWorkStock(id)
-      else if (action === 'archive') await archiveComponent(id)
-      else if (action === 'restore') await restoreComponent(id)
-      else await deleteComponent(id)
-      completed += 1
-    } catch (caught) {
-      failures.push(`${getComponentName(item)}: ${getApiErrorMessage(caught)}`)
-    }
-  }
-
-  selectedComponentIds.value = []
-  if (completed) successMessage.value = `Операция выполнена для ${completed} поз.`
-  if (failures.length) error.value = `Не удалось обработать ${failures.length} поз.: ${failures.join('; ')}`
-  await loadData()
-  isSaving.value = false
+  quantityActionDialog.action = action
+  quantityActionDialog.entries = items.map((item) => ({ item, quantity: '1' }))
+  await executeWarehouseQuantityDialog()
 }
 
 function goToPreviousPage() {
@@ -664,8 +793,8 @@ function goToNextPage() {
   currentPage.value += 1
 }
 
-watch(isComponentCardOpen, (isOpen) => {
-  window.document.body.classList.toggle('modal-open', isOpen)
+watch([isComponentCardOpen, () => quantityActionDialog.open], ([isCardOpen, isQuantityOpen]) => {
+  window.document.body.classList.toggle('modal-open', isCardOpen || isQuantityOpen)
 })
 
 watch([query, pageLimit, warehouseColumnFilters], () => { currentPage.value = 1 }, { deep: true })
@@ -833,16 +962,18 @@ onBeforeUnmount(() => {
             </td>
             <td>{{ item.supplier }}</td>
             <td>{{ item.quantity }}</td>
-
             <td class="table-money">
-              {{ formatMoney(item.cost) }}
-              ({{ formatMoney(Number(item.cost) / Number(item.quantity)) }} /шт.)
+              <span>{{ formatMoney(item.cost) }}</span>
+              <small v-if="getAvailableComponentQuantity(item) > 1" class="table-money-unit">
+                ({{ getComponentUnitMoney(item.cost, item) }} / шт.)
+              </small>
             </td>
             <td class="table-money">
-              {{ formatMoney(item.price) }}
-              ({{ formatMoney(Number(item.price) / Number(item.quantity)) }} /шт.)
+              <span>{{ formatMoney(item.price) }}</span>
+              <small v-if="getAvailableComponentQuantity(item) > 1" class="table-money-unit">
+                ({{ getComponentUnitMoney(item.price, item) }} / шт.)
+              </small>
             </td>
-
             <td class="order-status-cell">
               <span>Заказано <strong>{{ item.ordered }}</strong></span>
               <span>Получено <strong>{{ item.recd }}</strong></span>
@@ -925,7 +1056,7 @@ onBeforeUnmount(() => {
               class="secondary-button"
               type="button"
               :disabled="isSaving"
-              @click="activeWarehouseListMode === 'stock' ? changeComponentStockState(selectedComponent, false) : changeComponentStockState(selectedComponent, true)"
+              @click="requestWarehouseItemAction(selectedComponent, activeWarehouseListMode === 'stock' ? 'work' : 'stock')"
             >
               {{ activeWarehouseListMode === 'stock' ? 'В Рабочий склад' : 'На Склад' }}
             </button>
@@ -934,9 +1065,18 @@ onBeforeUnmount(() => {
               class="secondary-button"
               type="button"
               :disabled="isSaving"
-              @click="changeComponentArchiveState(selectedComponent, true)"
+              @click="requestWarehouseItemAction(selectedComponent, 'archive')"
             >
               В Списанные комплектующие
+            </button>
+            <button
+              v-if="selectedComponent && activeWarehouseListMode !== 'archive'"
+              class="ghost-button danger-button"
+              type="button"
+              :disabled="isSaving"
+              @click="requestWarehouseItemAction(selectedComponent, 'delete')"
+            >
+              Удалить
             </button>
             <button class="ghost-button" type="button" @click="closeComponentCard">Закрыть</button>
           </div>
@@ -945,8 +1085,8 @@ onBeforeUnmount(() => {
         <form class="side-form flat-form" @submit.prevent="saveComponent">
           <div class="form-grid">
             <label>
-              ТСР
-              <select v-model="componentForm.tsr_id">
+              ТСР комплектующей
+              <select v-model="componentForm.tsr_id" @change="handleComponentTsrChange">
                 <option value="">Не указан</option>
                 <option v-for="option in tsrOptions" :key="option.value" :value="option.value">
                   {{ option.label }}
@@ -1031,15 +1171,76 @@ onBeforeUnmount(() => {
             </label>
           </div>
 
-          <label>
-            Клиент
-            <select v-model="componentForm.client_id">
-              <option value="">На складе</option>
-              <option v-for="client in visibleOwnerClients" :key="String(client.client_id)" :value="client.client_id">
-                {{ getClientName(client) }}
-              </option>
-            </select>
-          </label>
+          <section class="warehouse-client-assignment-panel" aria-label="Привязка комплектующей к пациенту">
+            <div class="warehouse-client-assignment-heading">
+              <div>
+                <strong>Привязка к пациенту</strong>
+                <span>Выберите пациента и, если у него есть ТСР, конкретную карточку ТСР.</span>
+              </div>
+              <span v-if="componentForm.client_id" class="warehouse-client-assignment-status">Пациент выбран</span>
+            </div>
+
+            <div class="warehouse-client-assignment-grid">
+              <label>
+                Клиент
+                <select v-model="componentForm.client_id" @change="handleComponentOwnerChange">
+                  <option value="">На складе</option>
+                  <option v-for="client in visibleOwnerClients" :key="String(client.client_id)" :value="client.client_id">
+                    {{ getClientName(client) }}
+                  </option>
+                </select>
+              </label>
+
+              <label v-if="componentForm.client_id && selectedOwnerClientTsrItems.length">
+                ТСР пациента *
+                <select v-model="componentForm.client_tsr_id" required @change="handleComponentClientTsrChange">
+                  <option value="">Выберите ТСР пациента</option>
+                  <option
+                    v-for="item in selectedOwnerClientTsrItems"
+                    :key="String(item.client_tsr_id)"
+                    :value="item.client_tsr_id"
+                  >
+                    {{ getClientTsrOptionLabel(item) }}
+                  </option>
+                </select>
+                <small class="form-hint">При одинаковых кодах ориентируйтесь на дату пробития и стоимость сертификата.</small>
+              </label>
+
+              <div v-else-if="componentForm.client_id" class="warehouse-client-tsr-empty">
+                <span>ТСР пациента</span>
+                <strong>У пациента пока нет ТСР</strong>
+                <small>Комплектующую можно сохранить за пациентом без выбора конкретной карточки ТСР.</small>
+              </div>
+            </div>
+
+            <div v-if="selectedOwnerClientTsr" class="warehouse-client-tsr-context" aria-live="polite">
+              <span>Выбранный ТСР</span>
+              <strong>{{ selectedOwnerClientTsr.tsr?.full_tsr_code || 'ТСР без кода' }}</strong>
+              <div>
+                <span>Дата пробития: {{ formatClientTsrDate(selectedOwnerClientTsr.check_date) }}</span>
+                <span v-if="selectedOwnerClientTsr.certificate_price != null && String(selectedOwnerClientTsr.certificate_price).trim()">
+                  Сертификат: {{ formatMoney(Number(selectedOwnerClientTsr.certificate_price)) }}
+                </span>
+              </div>
+            </div>
+
+            <label v-if="selectedComponent && componentAssignmentChanged && selectedComponentAvailableQuantity > 1" class="operation-quantity-field warehouse-client-quantity-field">
+              Количество для назначения
+              <div class="inline-quantity-picker">
+                <input
+                  v-model="componentCardOperationQuantity"
+                  type="number"
+                  min="1"
+                  :max="selectedComponentAvailableQuantity"
+                  step="1"
+                />
+                <button class="ghost-button" type="button" @click="componentCardOperationQuantity = '1'">1</button>
+                <button class="ghost-button" type="button" @click="componentCardOperationQuantity = String(selectedComponentAvailableQuantity)">Все</button>
+                <span class="muted">из {{ selectedComponentAvailableQuantity }} шт.</span>
+              </div>
+              <small class="form-hint">Остаток сохранит текущего владельца и прежнюю привязку к ТСР.</small>
+            </label>
+          </section>
           <label>
             Характеристики
             <input v-model="componentForm.properties" />
@@ -1053,6 +1254,52 @@ onBeforeUnmount(() => {
             {{ isSaving ? 'Сохраняем...' : 'Сохранить комплектующую' }}
           </button>
         </form>
+      </section>
+    </div>
+
+    <div v-if="quantityActionDialog.open" class="modal-backdrop" @click.self="closeQuantityActionDialog">
+      <section v-focus-trap class="modal-panel quantity-operation-modal" role="dialog" aria-modal="true" aria-label="Количество комплектующих для операции">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Операция с комплектующими</p>
+            <h2>{{ getWarehouseActionLabel(quantityActionDialog.action) }}</h2>
+            <p class="muted">Для каждой позиции укажите, сколько одинаковых единиц обработать. Остаток останется в текущем состоянии.</p>
+          </div>
+          <button class="ghost-button" type="button" @click="closeQuantityActionDialog">Закрыть</button>
+        </div>
+
+        <div class="quantity-operation-list">
+          <div v-for="entry in quantityActionDialog.entries" :key="getComponentId(entry.item)" class="quantity-operation-row">
+            <div>
+              <strong>{{ getComponentName(entry.item) }}</strong>
+              <span class="muted">{{ getComponentAttributes(entry.item) }} · доступно {{ getAvailableComponentQuantity(entry.item) }} шт.</span>
+            </div>
+            <div class="quantity-operation-picker">
+              <button class="ghost-button" type="button" @click="setQuantityDialogEntry(entry, 1)">1</button>
+              <input
+                v-model="entry.quantity"
+                type="number"
+                min="1"
+                :max="getAvailableComponentQuantity(entry.item)"
+                step="1"
+                aria-label="Количество для операции"
+              />
+              <button class="ghost-button" type="button" @click="setQuantityDialogEntry(entry, getAvailableComponentQuantity(entry.item))">Все</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="ghost-button" type="button" @click="closeQuantityActionDialog">Отмена</button>
+          <button
+            :class="quantityActionDialog.action === 'delete' ? 'danger-button' : 'primary-button'"
+            type="button"
+            :disabled="isSaving"
+            @click="executeWarehouseQuantityDialog"
+          >
+            {{ getWarehouseActionLabel(quantityActionDialog.action) }}
+          </button>
+        </div>
       </section>
     </div>
   </section>

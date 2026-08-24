@@ -27,31 +27,37 @@ export async function createComponent(payload: ComponentCreatePayload) {
   return data
 }
 
-export async function updateComponent(componentId: string, payload: ComponentUpdatePayload) {
-  const { data } = await api.patch<ComponentItem>(`/components/${componentId}`, payload)
+export async function updateComponent(
+  componentId: string,
+  payload: ComponentUpdatePayload,
+  operationQuantity?: number,
+) {
+  const { data } = await api.patch<ComponentItem>(`/components/${componentId}`, payload, {
+    params: operationQuantity ? { operation_quantity: operationQuantity } : undefined,
+  })
   return data
 }
 
-export async function archiveComponent(componentId: string) {
-  const { data } = await api.post<ComponentItem>(`/components/${componentId}/archive`)
+export async function archiveComponent(componentId: string, quantity = 1) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/archive`, undefined, { params: { quantity } })
   return data
 }
 
-export async function restoreComponent(componentId: string) {
-  const { data } = await api.post<ComponentItem>(`/components/${componentId}/restore`)
+export async function restoreComponent(componentId: string, quantity = 1) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/restore`, undefined, { params: { quantity } })
   return data
 }
 
-export async function moveComponentToStock(componentId: string) {
-  const { data } = await api.post<ComponentItem>(`/components/${componentId}/stock`)
+export async function moveComponentToStock(componentId: string, quantity = 1) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/stock`, undefined, { params: { quantity } })
   return data
 }
 
-export async function moveComponentToWorkStock(componentId: string) {
-  const { data } = await api.post<ComponentItem>(`/components/${componentId}/work-stock`)
+export async function moveComponentToWorkStock(componentId: string, quantity = 1) {
+  const { data } = await api.post<ComponentItem>(`/components/${componentId}/work-stock`, undefined, { params: { quantity } })
   return data
 }
 
-export async function deleteComponent(componentId: string) {
-  await api.delete(`/components/${componentId}`)
+export async function deleteComponent(componentId: string, quantity = 1) {
+  await api.delete(`/components/${componentId}`, { params: { quantity } })
 }

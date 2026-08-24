@@ -65,7 +65,7 @@ const editable = reactive<Record<string, EditableContractRow>>({})
 const query = ref('')
 const startDate = ref('')
 const endDate = ref('')
-const hideFailed = ref(true)
+const hideFailed = ref(false)
 const newFieldName = ref('')
 const newFieldType = ref<'number' | 'text'>('number')
 const pageLimit = ref(50)
@@ -317,6 +317,7 @@ const activeContractFilterCount = computed(() => [
   query.value.trim(),
   startDate.value,
   endDate.value,
+  hideFailed.value ? 'hide-failed' : '',
   ...Object.values(contractColumnFilters).map((value) => value.trim()),
 ].filter(Boolean).length)
 
@@ -335,6 +336,7 @@ function resetContractFilters() {
   query.value = ''
   startDate.value = ''
   endDate.value = ''
+  hideFailed.value = false
   Object.keys(contractColumnFilters).forEach((key) => { contractColumnFilters[key] = '' })
   contractSortKey.value = null
   contractSortDirection.value = null

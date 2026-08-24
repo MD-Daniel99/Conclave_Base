@@ -389,7 +389,8 @@ def select_llc_tsr_items(
     }
 
     # Backward compatibility with an older frontend that sent only TSR or
-    # component IDs. New clients select the concrete client↔TSR instance.
+    # component IDs. New clients select concrete client↔TSR instances and may
+    # include any number of them in one contract.
     if not selected_assignment_ids and not selected_tsr_ids:
         selected_assignment_ids = {
             str(module.get("client_tsr_id") or "")
@@ -403,10 +404,7 @@ def select_llc_tsr_items(
                 if str(module.get("tsr_id") or (module.get("tsr") or {}).get("id") or "")
             }
     if not selected_assignment_ids and not selected_tsr_ids:
-        raise ValueError("Для договора ООО выберите один сертификат пациента")
-
-    if len(selected_assignment_ids) > 1 or len(selected_tsr_ids) > 1:
-        raise ValueError("Один договор можно сформировать только по одному сертификату")
+        raise ValueError("Для договора ООО выберите хотя бы один ТСР пациента")
 
     if selected_assignment_ids:
         missing_ids = selected_assignment_ids.difference(attached_by_assignment_id)
@@ -417,24 +415,27 @@ def select_llc_tsr_items(
             if str(item.get("client_tsr_id") or "") in selected_assignment_ids
         ]
     else:
-        attached_tsr_ids = {
-            str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or "")
-            for item in attached_items
-        }
-        missing_ids = selected_tsr_ids.difference(attached_tsr_ids)
+        attached_by_tsr_id: dict[str, list[dict[str, Any]]] = {}
+        for item in attached_items:
+            tsr_id = str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or "")
+            if tsr_id:
+                attached_by_tsr_id.setdefault(tsr_id, []).append(item)
+
+        missing_ids = selected_tsr_ids.difference(attached_by_tsr_id)
         if missing_ids:
             raise ValueError("Один или несколько выбранных ТСР не прикреплены к клиенту")
-        selected_items = [
-            item for item in attached_items
-            if str(item.get("tsr_id") or (item.get("tsr") or {}).get("id") or "") in selected_tsr_ids
-        ]
-        if len(selected_items) != 1:
-            raise ValueError(
-                "У пациента есть несколько одинаковых ТСР. Выберите конкретный сертификат по дате пробития"
-            )
 
-    if len(selected_items) != 1:
-        raise ValueError("Один договор можно сформировать только по одному сертификату")
+        selected_items = []
+        for tsr_id in selected_tsr_ids:
+            matches = attached_by_tsr_id.get(tsr_id, [])
+            if len(matches) != 1:
+                raise ValueError(
+                    "У пациента есть несколько одинаковых ТСР. Выберите конкретные сертификаты по дате пробития"
+                )
+            selected_items.append(matches[0])
+
+    if not selected_items:
+        raise ValueError("Для договора ООО выберите хотя бы один ТСР пациента")
 
     selected_item_ids = {str(item.get("client_tsr_id") or "") for item in selected_items}
     selected_item_tsr_ids = {
@@ -593,6 +594,9 @@ def _metadata_certificate_ids(metadata: Any) -> set[str]:
     direct_id = str(metadata.get("certificate_id") or "").strip()
     if direct_id:
         ids.add(direct_id)
+    direct_ids = metadata.get("certificate_ids")
+    if isinstance(direct_ids, list):
+        ids.update(str(value).strip() for value in direct_ids if str(value).strip())
     snapshots = metadata.get("selected_tsr_components")
     if isinstance(snapshots, list):
         for snapshot in snapshots:
@@ -670,9 +674,15 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         else []
     )
     selected_certificate = selected_document_tsr_items[0] if selected_document_tsr_items else None
+    # DOCUMENT.certificate_id is a legacy single-value compatibility field.
+    # For multi-TSR contracts the complete relation is stored in
+    # contract_metadata.selected_tsr_components, so keep certificate_id empty
+    # rather than pretending that the document belongs to only the first TSR.
     certificate_id = (
         uuid.UUID(str(selected_certificate.get("client_tsr_id")))
-        if selected_certificate and selected_certificate.get("client_tsr_id")
+        if len(selected_document_tsr_items) == 1
+        and selected_certificate
+        and selected_certificate.get("client_tsr_id")
         else None
     )
 
@@ -754,15 +764,15 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
 
     components_cost = sum(parse_money(component.get("cost")) for component in selected_document_components)
     certificate_amount = (
-        parse_money(selected_certificate.get("certificate_price"))
-        if selected_certificate
+        sum(parse_money(item.get("certificate_price")) for item in selected_document_tsr_items)
+        if selected_document_tsr_items
         else parse_money(context.get("Сумма"))
     )
 
     old_documents: list[models.Document] = []
     old_paths: list[str] = []
     preserved_accounting: dict[str, Any] | None = None
-    if selected_certificate:
+    if selected_document_tsr_items:
         candidates = (
             db.query(models.Document)
             .filter(
@@ -772,9 +782,15 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
             .order_by(models.Document.created_at.desc(), models.Document.document_id.desc())
             .all()
         )
+        # One certificate may have only one current contract. When several TSRs
+        # are combined into one new contract, replace any older contract that
+        # covered at least one of those concrete client↔TSR records.
         old_documents = [
             candidate for candidate in candidates
-            if _document_matches_certificate(candidate, selected_certificate)
+            if any(
+                _document_matches_certificate(candidate, certificate)
+                for certificate in selected_document_tsr_items
+            )
         ]
         for old_document in old_documents:
             if preserved_accounting is None:
@@ -798,6 +814,11 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         certificate_id=certificate_id,
         contract_metadata={
             "certificate_id": str(certificate_id or ""),
+            "certificate_ids": [
+                str(item.get("client_tsr_id") or "")
+                for item in selected_document_tsr_items
+                if str(item.get("client_tsr_id") or "")
+            ],
             "selected_components": component_snapshot,
             "selected_tsr_components": tsr_component_snapshot,
             "components_cost": components_cost,

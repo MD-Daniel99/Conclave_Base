@@ -2859,3 +2859,240 @@ body.modal-open {
     rgb(var(--tsr-card-accent-rgb, 148 112 245) / 12%)
   );
 }
+
+/* Quantity-aware component operations. */
+.quantity-operation-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.quantity-operation-list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.quantity-operation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.quantity-operation-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.quantity-operation-picker,
+.inline-quantity-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quantity-operation-picker input,
+.inline-quantity-picker input,
+.component-row-quantity-picker input,
+.operation-quantity-field input {
+  width: 86px;
+  min-width: 72px;
+}
+
+.warehouse-assign-quantity-field {
+  margin-top: 10px;
+}
+
+.component-row-quantity-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 4%);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.component-row-quantity-picker input {
+  height: 32px;
+  padding: 4px 7px;
+}
+
+@media (max-width: 760px) {
+  .quantity-operation-row {
+    grid-template-columns: 1fr;
+  }
+
+  .component-list-row .component-actions {
+    align-items: flex-start;
+  }
+}
+
+.compact-quantity-button {
+  min-height: 30px;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+/* Warehouse component card: keep patient, concrete patient TSR and quantity
+   in one visual assignment block so partial stock assignments stay explicit. */
+.warehouse-client-assignment-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgb(var(--page-accent-rgb, 148 112 245) / 28%);
+  border-radius: 14px;
+  background:
+    linear-gradient(145deg, rgb(var(--page-accent-rgb, 148 112 245) / 10%), transparent 55%),
+    var(--surface-soft);
+}
+
+.warehouse-client-assignment-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.warehouse-client-assignment-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.warehouse-client-assignment-heading strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.warehouse-client-assignment-heading span,
+.warehouse-client-tsr-empty small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.warehouse-client-assignment-status {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid rgb(var(--page-accent-rgb, 148 112 245) / 32%);
+  border-radius: 999px;
+  color: var(--text-soft) !important;
+  background: rgb(var(--page-accent-rgb, 148 112 245) / 13%);
+  font-weight: 800;
+}
+
+.warehouse-client-assignment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+.warehouse-client-tsr-empty {
+  display: grid;
+  gap: 4px;
+  min-height: 74px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 11px;
+  background: rgb(255 255 255 / 3%);
+}
+
+.warehouse-client-tsr-empty > span,
+.warehouse-client-tsr-context > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.warehouse-client-tsr-context {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 12px;
+  border: 1px solid rgb(var(--page-accent-rgb, 148 112 245) / 30%);
+  border-radius: 11px;
+  background: rgb(var(--page-accent-rgb, 148 112 245) / 9%);
+}
+
+.warehouse-client-tsr-context > strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.warehouse-client-tsr-context > div {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.warehouse-client-quantity-field {
+  display: grid;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+@media (max-width: 760px) {
+  .warehouse-client-assignment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .warehouse-client-assignment-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .warehouse-client-assignment-status {
+    align-self: flex-start;
+  }
+}
+
+/* Accounting tables keep their intended viewport cap but must remain vertically scrollable. */
+.accounting-table {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+/* Warehouse money cells: total first, unit value as a compact secondary line. */
+.components-page .table-money-unit {
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+/* Contract TSR selector: compact bulk controls without competing with the form above. */
+.contract-selector-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.contract-selector-heading .eyebrow {
+  margin-bottom: 3px;
+}
+
+@media (max-width: 760px) {
+  .contract-selector-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
