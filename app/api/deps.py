@@ -61,6 +61,12 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь заблокирован")
+    now = datetime.now(timezone.utc)
+    if user.last_seen_at is None or (now - user.last_seen_at).total_seconds() >= 30:
+        user.last_seen_at = now
+        db.add(user)
+        db.commit()
+        db.refresh(user)
     return user
 
 

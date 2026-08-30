@@ -8,6 +8,11 @@ import {
   deleteAccountingCustomField,
   fetchContractAccountingReport,
   updateContractAccounting,
+  fetchContractExpenseHistory,
+  addContractExpense,
+  updateContractExpense,
+  deleteContractExpense,
+  updateContractExpenseStatus,
 } from '@/shared/api/accounting'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
@@ -82,6 +87,19 @@ const success = ref('')
 const confirmAction = useAppConfirm()
 useSuccessToast(success, 'Договорная бухгалтерия')
 
+const selectedExpenseRow = ref<ContractAccountingRow | null>(null)
+const selectedExpenseFieldKey = ref('')
+const selectedExpenseFieldLabel = ref('')
+const selectedExpenseHistory = ref<Awaited<ReturnType<typeof fetchContractExpenseHistory>> | null>(null)
+const expenseDialogLoading = ref(false)
+const expenseAmount = ref('')
+const expenseDescription = ref('')
+const expensePaid = ref(true)
+const editingExpenseId = ref<string | null>(null)
+const editExpenseAmount = ref('')
+const editExpenseDescription = ref('')
+const pendingDeleteExpenseId = ref<string | null>(null)
+
 const availableColumns = computed(() => [
   ...leadingColumns,
   ...expenseColumns,
@@ -131,26 +149,12 @@ function getExpense(row: ContractAccountingRow, key: ExpenseKey) {
   return ensureRow(row)[key]
 }
 
-function setExpense(row: ContractAccountingRow, key: ExpenseKey, value: string) {
-  ensureRow(row)[key] = value
-}
-
-function formatExpense(row: ContractAccountingRow, key: ExpenseKey) {
-  setExpense(row, key, formatMoneyInput(getExpense(row, key)))
-}
-
 function getCustom(row: ContractAccountingRow, field: AccountingReportField) {
   return ensureRow(row).custom[field.key] ?? ''
 }
 
 function setCustom(row: ContractAccountingRow, field: AccountingReportField, value: string) {
   ensureRow(row).custom[field.key] = value
-}
-
-function formatCustom(row: ContractAccountingRow, field: AccountingReportField) {
-  if (isNumericField(field)) {
-    setCustom(row, field, formatMoneyInput(getCustom(row, field)))
-  }
 }
 
 function getCustomColumnKey(field: AccountingReportField) {
@@ -210,7 +214,10 @@ function getDocumentSortKey(row: ContractAccountingRow) {
 
 const calculatedRows = computed(() => reportRows.value.map((row) => {
   const values = ensureRow(row)
-  const fixedExpenses = expenseColumns.reduce((sum, column) => sum + parseMoney(values[column.key]), 0)
+  const fixedExpenses = expenseColumns.reduce((sum, column) => {
+    const unpaid = column.key === 'prosthetist_work' && row.expense_status?.[column.key] === 'unpaid'
+    return sum + (unpaid ? 0 : parseMoney(row.amounts[column.key]))
+  }, 0)
   const customExpenses = customFields.value.reduce((sum, field) => (
     isNumericField(field) ? sum + parseMoney(values.custom[field.key]) : sum
   ), 0)
@@ -368,6 +375,154 @@ async function loadData() {
     error.value = getApiErrorMessage(caught)
   } finally {
     isLoading.value = false
+  }
+}
+
+function getExpenseCellTotal(row: ContractAccountingRow, key: string) {
+  const history = selectedExpenseRow.value === row && selectedExpenseFieldKey.value === key ? selectedExpenseHistory.value : null
+  if (history) return history.total
+  if (key.startsWith('custom:')) {
+    const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
+    return field ? parseMoney(getCustom(row, field)) : 0
+  }
+  return parseMoney(getExpense(row, key as ExpenseKey))
+}
+
+function getExpenseCellLabel(key: string) {
+  const fixed = expenseColumns.find((column) => column.key === key)
+  if (fixed) return fixed.label
+  const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
+  return field ? field.label : key
+}
+
+async function openExpenseCell(row: ContractAccountingRow, key: string) {
+  selectedExpenseRow.value = row
+  selectedExpenseFieldKey.value = key
+  selectedExpenseFieldLabel.value = getExpenseCellLabel(key)
+  expenseAmount.value = ''
+  expenseDescription.value = ''
+  editingExpenseId.value = null
+  editExpenseAmount.value = ''
+  editExpenseDescription.value = ''
+  pendingDeleteExpenseId.value = null
+  selectedExpenseHistory.value = null
+  expensePaid.value = true
+  expenseDialogLoading.value = true
+  try {
+    selectedExpenseHistory.value = await fetchContractExpenseHistory(getDocumentId(row), key)
+    expensePaid.value = selectedExpenseHistory.value.paid
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught)
+    selectedExpenseRow.value = null
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
+function closeExpenseCell() {
+  selectedExpenseRow.value = null
+  selectedExpenseHistory.value = null
+  selectedExpenseFieldKey.value = ''
+  editingExpenseId.value = null
+  pendingDeleteExpenseId.value = null
+  expenseAmount.value = ''
+  expenseDescription.value = ''
+}
+
+function startEditExpense(entry: { id: string; amount: number; description: string }) {
+  editingExpenseId.value = entry.id
+  editExpenseAmount.value = formatMoneyInput(entry.amount)
+  editExpenseDescription.value = entry.description
+  pendingDeleteExpenseId.value = null
+}
+
+function cancelEditExpense() {
+  editingExpenseId.value = null
+  editExpenseAmount.value = ''
+  editExpenseDescription.value = ''
+}
+
+async function saveEditedExpense() {
+  const row = selectedExpenseRow.value
+  const key = selectedExpenseFieldKey.value
+  const entryId = editingExpenseId.value
+  const amount = parseMoney(editExpenseAmount.value)
+  const description = editExpenseDescription.value.trim()
+  if (!row || !key || !entryId) return
+  if (!(amount > 0)) { error.value = 'Введите сумму расхода больше нуля.'; return }
+  if (!description) { error.value = 'Введите название или описание расхода.'; return }
+  expenseDialogLoading.value = true
+  try {
+    selectedExpenseHistory.value = await updateContractExpense(getDocumentId(row), key, entryId, { amount, description })
+    editingExpenseId.value = null
+    success.value = 'Расход изменён'
+    await loadData()
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
+function requestDeleteExpense(entryId: string) {
+  pendingDeleteExpenseId.value = pendingDeleteExpenseId.value === entryId ? null : entryId
+  editingExpenseId.value = null
+}
+
+async function confirmDeleteExpense(entryId: string) {
+  const row = selectedExpenseRow.value
+  const key = selectedExpenseFieldKey.value
+  if (!row || !key) return
+  expenseDialogLoading.value = true
+  try {
+    selectedExpenseHistory.value = await deleteContractExpense(getDocumentId(row), key, entryId)
+    pendingDeleteExpenseId.value = null
+    success.value = 'Расход удалён'
+    await loadData()
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
+async function saveExpenseEntry() {
+  const row = selectedExpenseRow.value
+  const key = selectedExpenseFieldKey.value
+  const amount = parseMoney(expenseAmount.value)
+  const description = expenseDescription.value.trim()
+  if (!row || !key) return
+  if (!(amount > 0)) { error.value = 'Введите сумму расхода больше нуля.'; return }
+  if (!description) { error.value = 'Введите название или описание расхода.'; return }
+  expenseDialogLoading.value = true
+  try {
+    selectedExpenseHistory.value = await addContractExpense(getDocumentId(row), {
+      field_key: key, amount, description, paid: key === 'prosthetist_work' ? expensePaid.value : true,
+    })
+    expenseAmount.value = ''
+    expenseDescription.value = ''
+    success.value = 'Расход добавлен'
+    await loadData()
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
+async function changeProsthetistPaymentStatus(paid: boolean) {
+  const row = selectedExpenseRow.value
+  if (!row || selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  expenseDialogLoading.value = true
+  try {
+    selectedExpenseHistory.value = await updateContractExpenseStatus(getDocumentId(row), 'prosthetist_work', paid)
+    expensePaid.value = paid
+    success.value = paid ? 'Работа протезиста отмечена как оплаченная' : 'Работа протезиста отмечена как неоплаченная'
+    await loadData()
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught)
+  } finally {
+    expenseDialogLoading.value = false
   }
 }
 
@@ -591,24 +746,34 @@ onMounted(loadData)
             </td>
             <td v-if="isColumnVisible('modules_cost')" class="table-money">{{ formatMoney(item.modulesCost) }}</td>
             <td v-for="column in expenseColumns.filter((entry) => isColumnVisible(entry.key))" :key="column.key">
-              <input
-                class="table-input"
-                :value="getExpense(item.row, column.key)"
-                inputmode="decimal"
-                @input="setExpense(item.row, column.key, ($event.target as HTMLInputElement).value)"
-                @blur="formatExpense(item.row, column.key)"
-              />
+              <button
+                class="accounting-expense-cell"
+                :class="{ 'accounting-expense-unpaid': column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid' }"
+                type="button"
+                @click="openExpenseCell(item.row, column.key)"
+              >
+                {{ formatMoney(getExpenseCellTotal(item.row, column.key)) }}
+                <span v-if="column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid'" class="accounting-unpaid-badge">Не оплачено</span>
+              </button>
             </td>
             <td
               v-for="field in customFields.filter((entry) => isColumnVisible(getCustomColumnKey(entry)))"
               :key="field.key"
             >
+              <button
+                v-if="isNumericField(field)"
+                class="accounting-expense-cell"
+                type="button"
+                @click="openExpenseCell(item.row, getCustomColumnKey(field))"
+              >
+                {{ formatMoney(getExpenseCellTotal(item.row, getCustomColumnKey(field))) }}
+              </button>
               <input
+                v-else
                 class="table-input"
                 :value="getCustom(item.row, field)"
-                :inputmode="isNumericField(field) ? 'decimal' : 'text'"
+                inputmode="text"
                 @input="setCustom(item.row, field, ($event.target as HTMLInputElement).value)"
-                @blur="formatCustom(item.row, field)"
               />
             </td>
             <td
@@ -660,5 +825,70 @@ onMounted(loadData)
         </button>
       </div>
     </div>
-  </div>
+
+
+    <div v-if="selectedExpenseRow" class="accounting-expense-modal" role="dialog" aria-modal="true">
+      <div class="accounting-expense-backdrop" @click="closeExpenseCell"></div>
+      <section class="accounting-expense-dialog">
+        <div class="accounting-expense-dialog-head">
+          <div>
+            <p class="eyebrow">{{ selectedExpenseRow.document.filename }}</p>
+            <h2>{{ selectedExpenseFieldLabel }}</h2>
+            <p class="muted">Текущая сумма: <strong>{{ formatMoney(selectedExpenseHistory?.total ?? 0) }}</strong></p>
+          </div>
+          <button class="ghost-button" type="button" @click="closeExpenseCell">Закрыть</button>
+        </div>
+
+        <div v-if="expenseDialogLoading && !selectedExpenseHistory" class="muted">Загружаем историю...</div>
+        <template v-else>
+          <div class="accounting-expense-history">
+            <template v-if="selectedExpenseHistory?.entries.length">
+              <div v-for="entry in selectedExpenseHistory.entries" :key="entry.id" class="accounting-expense-entry">
+                <template v-if="editingExpenseId === entry.id">
+                  <div class="accounting-expense-edit-form">
+                    <label><span>Сумма</span><input v-model="editExpenseAmount" inputmode="decimal" /></label>
+                    <label><span>Описание</span><input v-model="editExpenseDescription" maxlength="500" /></label>
+                    <div class="accounting-expense-entry-actions">
+                      <button class="primary-button" type="button" :disabled="expenseDialogLoading" @click="saveEditedExpense">Сохранить</button>
+                      <button class="secondary-button" type="button" :disabled="expenseDialogLoading" @click="cancelEditExpense">Отмена</button>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div><strong>{{ formatMoney(entry.amount) }}</strong><span>{{ entry.description }}</span></div>
+                  <div class="accounting-expense-entry-meta">
+                    <small>{{ entry.username || 'Система' }} · {{ entry.created_at ? new Date(entry.created_at).toLocaleString('ru-RU') : 'ранее' }}</small>
+                    <div class="accounting-expense-entry-actions">
+                      <button class="ghost-button" type="button" :disabled="expenseDialogLoading" @click="startEditExpense(entry)">Изменить</button>
+                      <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="requestDeleteExpense(entry.id)">Удалить</button>
+                    </div>
+                  </div>
+                  <div v-if="pendingDeleteExpenseId === entry.id" class="accounting-expense-delete-confirm">
+                    <span>Удалить этот расход? Сумма будет пересчитана.</span>
+                    <div class="accounting-expense-entry-actions">
+                      <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="confirmDeleteExpense(entry.id)">Удалить</button>
+                      <button class="secondary-button" type="button" :disabled="expenseDialogLoading" @click="pendingDeleteExpenseId = null">Отмена</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+            <p v-else class="muted">Расходов пока нет.</p>
+          </div>
+
+          <div v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="accounting-payment-status">
+            <span class="muted">Статус выплаты:</span>
+            <button class="status-choice" :class="{ active: expensePaid }" type="button" @click="changeProsthetistPaymentStatus(true)">Оплачено</button>
+            <button class="status-choice unpaid" :class="{ active: !expensePaid }" type="button" @click="changeProsthetistPaymentStatus(false)">Не оплачено</button>
+          </div>
+
+          <form class="accounting-expense-add" @submit.prevent="saveExpenseEntry">
+            <label><span>Новый расход</span><input v-model="expenseAmount" inputmode="decimal" placeholder="Сумма" required /></label>
+            <label class="accounting-expense-description"><span>На что расход</span><input v-model="expenseDescription" placeholder="Например: дополнительная оплата работы" maxlength="500" required /></label>
+            <button class="primary-button" :disabled="expenseDialogLoading" type="submit">Добавить расход</button>
+          </form>
+        </template>
+      </section>
+    </div>
+</div>
 </template>

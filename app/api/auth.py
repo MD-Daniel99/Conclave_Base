@@ -1,5 +1,5 @@
 # app/api/auth.py
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -37,6 +37,13 @@ def login(payload: schemas.UserLogin, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь заблокирован")
 
+    now = datetime.now(timezone.utc)
+    user.last_login_at = now
+    user.last_seen_at = now
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
     access_token = create_access_token(
         subject=user.user_id,
         expires_delta=timedelta(minutes=getattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 60 * 24)),
@@ -53,6 +60,17 @@ def login(payload: schemas.UserLogin, db: Session = Depends(get_db)):
 @router.get("/me", response_model=schemas.UserRead)
 def read_me(current_user: models.User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/presence")
+def touch_presence(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    current_user.last_seen_at = datetime.now(timezone.utc)
+    db.add(current_user)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.post("/register", response_model=schemas.UserRead, status_code=status.HTTP_201_CREATED)

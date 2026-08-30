@@ -273,10 +273,244 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "other_expenses": getattr(client, "other_expenses", 0.0),
         "agency_expenses": getattr(client, "agency_expenses", 0.0),
         "custom_fields": custom_fields,
+        "accounting_expenses": getattr(client, "accounting_expenses", None) or {},
+        "accounting_expense_status": getattr(client, "accounting_expense_status", None) or {},
     }
 
     return result
 
+
+
+ACCOUNTING_FIXED_EXPENSE_KEYS = {
+    "prosthetist_work",
+    "patient_travel",
+    "patient_accommodation",
+    "patient_meals",
+    "patient_payment",
+    "other_expenses",
+    "agency_expenses",
+}
+
+
+def _accounting_field_exists(db: Session, field_key: str) -> bool:
+    if field_key in ACCOUNTING_FIXED_EXPENSE_KEYS:
+        return True
+    if field_key.startswith("custom:"):
+        try:
+            field_id = UUID(field_key.split(":", 1)[1])
+        except (ValueError, IndexError):
+            return False
+        field = db.get(models.AccountingCustomField, field_id)
+        return bool(field and field.is_active and field.field_type == "number")
+    return False
+
+
+def _legacy_accounting_value(db: Session, client: models.Client, field_key: str) -> float:
+    if field_key in ACCOUNTING_FIXED_EXPENSE_KEYS:
+        return float(getattr(client, field_key, 0.0) or 0.0)
+    if field_key.startswith("custom:"):
+        try:
+            field_id = UUID(field_key.split(":", 1)[1])
+        except (ValueError, IndexError):
+            return 0.0
+        row = db.query(models.AccountingFieldValue).filter(
+            models.AccountingFieldValue.client_id == client.client_id,
+            models.AccountingFieldValue.field_id == field_id,
+        ).first()
+        return float(row.value_number or 0.0) if row else 0.0
+    return 0.0
+
+
+def _normalize_expense_store(value: Any) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for key, entries in value.items():
+        if not isinstance(entries, list):
+            continue
+        result[str(key)] = [dict(item) for item in entries if isinstance(item, dict)]
+    return result
+
+
+def _expense_total(entries: list[dict[str, Any]]) -> float:
+    return sum(float(item.get("amount") or 0.0) for item in entries)
+
+
+def get_accounting_expense_history(db: Session, client_id: UUID, field_key: str) -> dict[str, Any]:
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Client not found")
+    if not _accounting_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+
+    store = _normalize_expense_store(client.accounting_expenses)
+    entries = store.get(field_key, [])
+    status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
+    paid = str(status_store.get(field_key, "paid")).lower() != "unpaid"
+
+    # Старые значения без детализации показываем как один legacy-элемент.
+    if not entries:
+        legacy = _legacy_accounting_value(db, client, field_key)
+        if legacy:
+            entries = [{
+                "id": f"legacy-{field_key}",
+                "amount": legacy,
+                "description": "Сумма до включения детализации",
+                "created_at": None,
+                "user_id": None,
+                "username": None,
+            }]
+    return {
+        "field_key": field_key,
+        "total": _expense_total(entries),
+        "paid": paid,
+        "entries": entries,
+    }
+
+
+def add_accounting_expense(
+    db: Session,
+    client_id: UUID,
+    payload: schemas.AccountingExpenseCreate,
+    user: models.User,
+) -> dict[str, Any]:
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Client not found")
+    field_key = payload.field_key.strip()
+    if not _accounting_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+
+    store = _normalize_expense_store(client.accounting_expenses)
+    entries = store.setdefault(field_key, [])
+    if not entries:
+        legacy = _legacy_accounting_value(db, client, field_key)
+        if legacy:
+            entries.append({
+                "id": f"legacy-{field_key}",
+                "amount": legacy,
+                "description": "Сумма до включения детализации",
+                "created_at": None,
+                "user_id": None,
+                "username": None,
+            })
+
+    entries.append({
+        "id": str(uuid.uuid4()),
+        "amount": float(payload.amount),
+        "description": payload.description.strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "user_id": str(user.user_id),
+        "username": user.username,
+    })
+    client.accounting_expenses = store
+    status_store = dict(client.accounting_expense_status or {})
+    if field_key == "prosthetist_work":
+        status_store[field_key] = "paid" if payload.paid is not False else "unpaid"
+    else:
+        status_store.setdefault(field_key, "paid")
+    client.accounting_expense_status = status_store
+    # Materialize the total into legacy columns / custom field values for compatibility.
+    total = _expense_total(entries)
+    if field_key in ACCOUNTING_FIXED_EXPENSE_KEYS:
+        setattr(client, field_key, total)
+    elif field_key.startswith("custom:"):
+        field_id = UUID(field_key.split(":", 1)[1])
+        row = db.query(models.AccountingFieldValue).filter(
+            models.AccountingFieldValue.client_id == client.client_id,
+            models.AccountingFieldValue.field_id == field_id,
+        ).first()
+        if row:
+            row.value_number = total
+        else:
+            db.add(models.AccountingFieldValue(client_id=client.client_id, field_id=field_id, value_number=total))
+    db.add(client)
+    db.commit()
+    db.refresh(client)
+    return get_accounting_expense_history(db, client_id, field_key)
+
+
+def _materialize_accounting_expense_total(db: Session, client: models.Client, field_key: str, total: float) -> None:
+    """Keep legacy accounting columns/custom numeric values synchronized with history."""
+    if field_key in ACCOUNTING_FIXED_EXPENSE_KEYS:
+        setattr(client, field_key, total)
+    elif field_key.startswith("custom:"):
+        field_id = UUID(field_key.split(":", 1)[1])
+        row = db.query(models.AccountingFieldValue).filter(
+            models.AccountingFieldValue.client_id == client.client_id,
+            models.AccountingFieldValue.field_id == field_id,
+        ).first()
+        if row:
+            row.value_number = total
+        else:
+            db.add(models.AccountingFieldValue(client_id=client.client_id, field_id=field_id, value_number=total))
+
+
+def update_accounting_expense(
+    db: Session, client_id: UUID, field_key: str, entry_id: str, payload: schemas.AccountingExpenseUpdate
+) -> dict[str, Any]:
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Client not found")
+    field_key = field_key.strip()
+    if not _accounting_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+
+    store = _normalize_expense_store(client.accounting_expenses)
+    entries = store.get(field_key, [])
+    entry = next((item for item in entries if str(item.get("id")) == str(entry_id)), None)
+    if not entry:
+        raise ValueError("Расход не найден")
+    entry["amount"] = float(payload.amount)
+    entry["description"] = payload.description.strip()
+    client.accounting_expenses = store
+    _materialize_accounting_expense_total(db, client, field_key, _expense_total(entries))
+    db.add(client)
+    db.commit()
+    db.refresh(client)
+    return get_accounting_expense_history(db, client_id, field_key)
+
+
+def delete_accounting_expense(db: Session, client_id: UUID, field_key: str, entry_id: str) -> dict[str, Any]:
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Client not found")
+    field_key = field_key.strip()
+    if not _accounting_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+
+    store = _normalize_expense_store(client.accounting_expenses)
+    entries = store.get(field_key, [])
+    index = next((i for i, item in enumerate(entries) if str(item.get("id")) == str(entry_id)), None)
+    if index is None:
+        raise ValueError("Расход не найден")
+    entries.pop(index)
+    if entries:
+        store[field_key] = entries
+    else:
+        store.pop(field_key, None)
+    client.accounting_expenses = store
+    _materialize_accounting_expense_total(db, client, field_key, _expense_total(entries))
+    db.add(client)
+    db.commit()
+    db.refresh(client)
+    return get_accounting_expense_history(db, client_id, field_key)
+
+
+def set_accounting_expense_status(db: Session, client_id: UUID, field_key: str, paid: bool) -> dict[str, Any]:
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Client not found")
+    if field_key != "prosthetist_work":
+        raise ValueError("Payment status is available only for prosthetist work")
+    if not _accounting_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+    status_store = dict(client.accounting_expense_status or {})
+    status_store[field_key] = "paid" if paid else "unpaid"
+    client.accounting_expense_status = status_store
+    db.add(client)
+    db.commit()
+    return get_accounting_expense_history(db, client_id, field_key)
 
 # -------------------------
 # Client
@@ -1442,12 +1676,19 @@ def update_module(
         data['module_name_index'] = name_ref.name_index
 
     # A warehouse row may represent several identical physical units. When its
-    # owner changes, only the quantity explicitly selected for the operation must
-    # move. Ordinary form edits are applied to the aggregate first, then the
-    # selected portion is detached so money/count totals remain consistent.
+    # owner or concrete client↔TSR assignment changes, only the quantity selected
+    # for that operation must move. Ordinary form edits are applied to the
+    # aggregate first, then the selected portion is detached so money/count
+    # totals remain consistent.
     client_state_changes = (
-        'client_id' in data
-        and data.get('client_id') != db_module.client_id
+        ('client_id' in data and data.get('client_id') != db_module.client_id)
+        or (
+            operation_quantity is not None
+            and (
+                ('client_tsr_id' in data and data.get('client_tsr_id') != db_module.client_tsr_id)
+                or ('tsr_id' in data and data.get('tsr_id') != db_module.tsr_id)
+            )
+        )
     )
 
     if client_state_changes:

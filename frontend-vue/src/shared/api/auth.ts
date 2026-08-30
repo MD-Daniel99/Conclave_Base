@@ -53,3 +53,8 @@ export async function updateUserSettings(userId: string, payload: UserSettings) 
   const { data } = await api.patch<{ status: string }>(`/auth/users/${userId}/settings`, payload)
   return data
 }
+
+
+export async function touchPresence() {
+  await api.post('/auth/presence')
+}

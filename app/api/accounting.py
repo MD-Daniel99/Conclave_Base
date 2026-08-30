@@ -71,3 +71,92 @@ def update_client_custom_values(
     after = crud.get_client_custom_field_values(db, client_id)
     log_action(db, entity="client", entity_id=client_id, action="accounting.custom_values.update", user=current_user, before=before, after=after)
     return {"status": "updated"}
+
+
+@router.get("/clients/{client_id}/expenses/{field_key}")
+def get_client_expense_history(
+    client_id: UUID,
+    field_key: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    try:
+        return crud.get_accounting_expense_history(db, client_id, field_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/clients/{client_id}/expenses")
+def add_client_expense(
+    client_id: UUID,
+    payload: schemas.AccountingExpenseCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    try:
+        result = crud.add_accounting_expense(db, client_id, payload, current_user)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    log_action(
+        db, entity="client", entity_id=client_id, action="accounting.expense.add",
+        user=current_user, after={"field_key": payload.field_key, "amount": payload.amount, "description": payload.description, "paid": payload.paid},
+    )
+    return result
+
+
+@router.patch("/clients/{client_id}/expenses/{field_key}/status")
+def update_client_expense_status(
+    client_id: UUID,
+    field_key: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    try:
+        result = crud.set_accounting_expense_status(db, client_id, field_key, bool(payload.get("paid")))
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    log_action(db, entity="client", entity_id=client_id, action="accounting.expense.status", user=current_user, after={"field_key": field_key, "paid": bool(payload.get("paid"))})
+    return result
+
+@router.patch("/clients/{client_id}/expenses/{field_key}/{entry_id}")
+def update_client_expense(
+    client_id: UUID,
+    field_key: str,
+    entry_id: str,
+    payload: schemas.AccountingExpenseUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    try:
+        result = crud.update_accounting_expense(db, client_id, field_key, entry_id, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    log_action(
+        db, entity="client", entity_id=client_id, action="accounting.expense.update",
+        user=current_user, after={"field_key": field_key, "entry_id": entry_id, "amount": payload.amount, "description": payload.description},
+    )
+    return result
+
+
+@router.delete("/clients/{client_id}/expenses/{field_key}/{entry_id}")
+def delete_client_expense(
+    client_id: UUID,
+    field_key: str,
+    entry_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    try:
+        result = crud.delete_accounting_expense(db, client_id, field_key, entry_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    log_action(
+        db, entity="client", entity_id=client_id, action="accounting.expense.delete",
+        user=current_user, after={"field_key": field_key, "entry_id": entry_id},
+    )
+    return result

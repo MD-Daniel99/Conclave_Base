@@ -392,6 +392,8 @@ class ClientRead(ClientBase):
     tsr_items: Optional[List[ClientTsrRead]] = Field(default_factory=list)
 
     custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    accounting_expenses: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    accounting_expense_status: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)
     
@@ -565,6 +567,8 @@ class UserRead(UserBase):
     role: str
     is_active: bool
     created_at: datetime
+    last_login_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
     settings: Optional[Dict[str, Any]] = None
 
@@ -697,6 +701,34 @@ class AccountingFieldValueUpdate(BaseModel):
 class AccountingValuesUpdate(BaseModel):
     """Тело запроса на обновление нескольких значений"""
     values: List[AccountingFieldValueUpdate]
+
+
+class AccountingExpenseCreate(BaseModel):
+    field_key: str
+    amount: float = Field(..., gt=0)
+    description: str = Field(..., min_length=1, max_length=500)
+    paid: Optional[bool] = True
+
+
+class AccountingExpenseUpdate(BaseModel):
+    amount: float = Field(..., gt=0)
+    description: str = Field(..., min_length=1, max_length=500)
+
+
+class AccountingExpenseEntryRead(BaseModel):
+    id: str
+    amount: float
+    description: str
+    created_at: Optional[datetime] = None
+    user_id: Optional[UUID] = None
+    username: Optional[str] = None
+
+
+class AccountingExpenseRead(BaseModel):
+    field_key: str
+    total: float
+    paid: bool = True
+    entries: List[AccountingExpenseEntryRead] = Field(default_factory=list)
 
 
 DocumentRead.model_rebuild()

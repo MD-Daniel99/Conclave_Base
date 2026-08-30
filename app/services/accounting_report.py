@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from uuid import UUID, uuid4
 from typing import Any, Iterable
 
 from sqlalchemy.orm import Session, selectinload
@@ -26,7 +27,190 @@ FIXED_EXPENSE_KEYS = (
     "patient_payment",
     "other_expenses",
     "agency_expenses",
-)
+ )
+
+
+def accounting_expense_entries(client: models.Client, field_key: str) -> list[dict[str, Any]]:
+    store = client.accounting_expenses if isinstance(client.accounting_expenses, dict) else {}
+    entries = store.get(field_key, []) if isinstance(store.get(field_key, []), list) else []
+    return [item for item in entries if isinstance(item, dict)]
+
+
+def accounting_expense_total(client: models.Client, field_key: str) -> float:
+    entries = accounting_expense_entries(client, field_key)
+    if entries:
+        return sum(parse_number(item.get("amount")) for item in entries)
+    return parse_number(getattr(client, field_key, 0.0)) if field_key in FIXED_EXPENSE_KEYS else 0.0
+
+
+def accounting_expense_paid(client: models.Client, field_key: str) -> bool:
+    if field_key != "prosthetist_work":
+        return True
+    store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
+    return str(store.get(field_key, "paid")).lower() != "unpaid"
+
+CONTRACT_EXPENSE_HISTORY_KEY = "__expense_history__"
+
+
+def _contract_history_store(accounting: models.ContractAccounting) -> dict[str, dict[str, Any]]:
+    values = accounting.custom_values if isinstance(accounting.custom_values, dict) else {}
+    history = values.get(CONTRACT_EXPENSE_HISTORY_KEY)
+    return dict(history) if isinstance(history, dict) else {}
+
+
+def _contract_field_exists(db: Session, field_key: str) -> bool:
+    if field_key in FIXED_EXPENSE_KEYS:
+        return True
+    if not field_key.startswith("custom:"):
+        return False
+    try:
+        field_id = UUID(field_key.split(":", 1)[1])
+    except ValueError:
+        return False
+    field = db.get(models.AccountingCustomField, field_id)
+    return bool(field and field.is_active and field.field_type == "number")
+
+
+def _contract_legacy_value(accounting: models.ContractAccounting, field_key: str) -> float:
+    if field_key in FIXED_EXPENSE_KEYS:
+        return parse_number(getattr(accounting, field_key, 0.0))
+    if field_key.startswith("custom:"):
+        field_id = field_key.split(":", 1)[1]
+        return parse_number((accounting.custom_values or {}).get(field_id, 0.0))
+    return 0.0
+
+
+def _contract_legacy_entry(field_key: str, amount: float) -> dict[str, Any] | None:
+    if amount <= 0:
+        return None
+    return {"id": f"legacy-{field_key}", "amount": amount, "description": "Сумма до включения детализации", "created_at": None, "user_id": None, "username": None}
+
+
+def _contract_expense_total(entries: list[dict[str, Any]]) -> float:
+    return sum(parse_number(item.get("amount")) for item in entries)
+
+
+def get_contract_expense_history(db: Session, document_id: UUID, field_key: str) -> dict[str, Any]:
+    accounting = db.query(models.ContractAccounting).filter(models.ContractAccounting.document_id == document_id).first()
+    if not accounting:
+        raise ValueError("Contract accounting row not found")
+    if not _contract_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+    store = _contract_history_store(accounting)
+    state = store.get(field_key) if isinstance(store.get(field_key), dict) else {}
+    raw_entries = state.get("entries", [])
+    entries = [dict(item) for item in raw_entries if isinstance(item, dict)] if isinstance(raw_entries, list) else []
+    if not entries:
+        legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
+        if legacy:
+            entries = [legacy]
+    return {"field_key": field_key, "total": _contract_expense_total(entries), "paid": str(state.get("paid", "paid")).lower() != "unpaid", "entries": entries}
+
+
+def _write_contract_history(accounting: models.ContractAccounting, store: dict[str, dict[str, Any]]) -> None:
+    values = dict(accounting.custom_values or {})
+    values[CONTRACT_EXPENSE_HISTORY_KEY] = store
+    accounting.custom_values = values
+
+
+def _materialize_contract_expense(accounting: models.ContractAccounting, field_key: str, total: float) -> None:
+    if field_key in FIXED_EXPENSE_KEYS:
+        setattr(accounting, field_key, total)
+        return
+    if field_key.startswith("custom:"):
+        values = dict(accounting.custom_values or {})
+        values[field_key.split(":", 1)[1]] = total
+        accounting.custom_values = values
+
+
+def add_contract_expense(db: Session, document_id: UUID, payload: Any, user: models.User) -> dict[str, Any]:
+    accounting = db.query(models.ContractAccounting).filter(models.ContractAccounting.document_id == document_id).first()
+    if not accounting:
+        raise ValueError("Contract accounting row not found")
+    field_key = payload.field_key.strip()
+    if not _contract_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+    store = _contract_history_store(accounting)
+    state = dict(store.get(field_key) or {})
+    entries = [dict(item) for item in state.get("entries", []) if isinstance(item, dict)]
+    if not entries:
+        legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
+        if legacy:
+            entries.append(legacy)
+    entries.append({"id": str(uuid4()), "amount": float(payload.amount), "description": payload.description.strip(), "created_at": datetime.now(timezone.utc).isoformat(), "user_id": str(user.user_id), "username": user.username})
+    paid = True if field_key != "prosthetist_work" else payload.paid is not False
+    store[field_key] = {"entries": entries, "paid": paid}
+    _write_contract_history(accounting, store)
+    _materialize_contract_expense(accounting, field_key, _contract_expense_total(entries))
+    db.commit()
+    return get_contract_expense_history(db, document_id, field_key)
+
+
+def set_contract_expense_status(db: Session, document_id: UUID, field_key: str, paid: bool) -> dict[str, Any]:
+    if field_key != "prosthetist_work":
+        raise ValueError("Payment status is available only for prosthetist work")
+    accounting = db.query(models.ContractAccounting).filter(models.ContractAccounting.document_id == document_id).first()
+    if not accounting:
+        raise ValueError("Contract accounting row not found")
+    store = _contract_history_store(accounting)
+    state = dict(store.get(field_key) or {})
+    entries = [dict(item) for item in state.get("entries", []) if isinstance(item, dict)]
+    if not entries:
+        legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
+        if legacy:
+            entries.append(legacy)
+    store[field_key] = {"entries": entries, "paid": bool(paid)}
+    _write_contract_history(accounting, store)
+    db.commit()
+    return get_contract_expense_history(db, document_id, field_key)
+
+
+def update_contract_expense(db: Session, document_id: UUID, field_key: str, entry_id: str, payload: Any) -> dict[str, Any]:
+    accounting = db.query(models.ContractAccounting).filter(models.ContractAccounting.document_id == document_id).first()
+    if not accounting:
+        raise ValueError("Contract accounting row not found")
+    if not _contract_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+    store = _contract_history_store(accounting)
+    state = dict(store.get(field_key) or {})
+    entries = [dict(item) for item in state.get("entries", []) if isinstance(item, dict)]
+    if not entries:
+        legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
+        if legacy:
+            entries.append(legacy)
+    target = next((item for item in entries if str(item.get("id")) == entry_id), None)
+    if target is None:
+        raise ValueError("Expense entry not found")
+    target["amount"] = float(payload.amount)
+    target["description"] = payload.description.strip()
+    store[field_key] = {"entries": entries, "paid": str(state.get("paid", "paid")).lower() != "unpaid"}
+    _write_contract_history(accounting, store)
+    _materialize_contract_expense(accounting, field_key, _contract_expense_total(entries))
+    db.commit()
+    return get_contract_expense_history(db, document_id, field_key)
+
+
+def delete_contract_expense(db: Session, document_id: UUID, field_key: str, entry_id: str) -> dict[str, Any]:
+    accounting = db.query(models.ContractAccounting).filter(models.ContractAccounting.document_id == document_id).first()
+    if not accounting:
+        raise ValueError("Contract accounting row not found")
+    if not _contract_field_exists(db, field_key):
+        raise ValueError("Unknown accounting expense field")
+    store = _contract_history_store(accounting)
+    state = dict(store.get(field_key) or {})
+    entries = [dict(item) for item in state.get("entries", []) if isinstance(item, dict)]
+    if not entries:
+        legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
+        if legacy:
+            entries.append(legacy)
+    new_entries = [item for item in entries if str(item.get("id")) != entry_id]
+    if len(new_entries) == len(entries):
+        raise ValueError("Expense entry not found")
+    store[field_key] = {"entries": new_entries, "paid": str(state.get("paid", "paid")).lower() != "unpaid"}
+    _write_contract_history(accounting, store)
+    _materialize_contract_expense(accounting, field_key, _contract_expense_total(new_entries))
+    db.commit()
+    return get_contract_expense_history(db, document_id, field_key)
 
 
 def calculate_financials(
@@ -158,7 +342,7 @@ def build_accounting_report(
         )
 
         expenses = {
-            key: parse_number(getattr(client, key, 0.0))
+            key: (accounting_expense_total(client, key) if accounting_expense_paid(client, key) else 0.0)
             for key in FIXED_EXPENSE_KEYS
         }
         fixed_expenses = sum(expenses.values())
@@ -170,7 +354,9 @@ def build_accounting_report(
             if field is None:
                 continue
             if field["type"] == "number":
-                value: Any = parse_number(raw_value)
+                expense_key = f"custom:{field_id}"
+                entries = accounting_expense_entries(client, expense_key)
+                value: Any = (sum(parse_number(item.get("amount")) for item in entries) if entries else parse_number(raw_value))
                 custom_expenses += value
             else:
                 value = "" if raw_value is None else str(raw_value)
@@ -302,8 +488,14 @@ def build_contract_accounting_report(
             key: parse_number(getattr(accounting, key, 0.0))
             for key in FIXED_EXPENSE_KEYS
         }
-        fixed_expenses = sum(fixed_expenses_by_key.values())
+        contract_history = _contract_history_store(accounting)
+        prosthetist_state = contract_history.get("prosthetist_work") if isinstance(contract_history.get("prosthetist_work"), dict) else {}
+        calculation_fixed_expenses_by_key = dict(fixed_expenses_by_key)
+        if str(prosthetist_state.get("paid", "paid")).lower() == "unpaid":
+            calculation_fixed_expenses_by_key["prosthetist_work"] = 0.0
+        fixed_expenses = sum(calculation_fixed_expenses_by_key.values())
         custom_values = accounting.custom_values or {}
+        report_custom_values = {key: value for key, value in custom_values.items() if key != CONTRACT_EXPENSE_HISTORY_KEY}
         custom_expenses = sum(
             parse_number(value)
             for field_id, value in custom_values.items()
@@ -351,7 +543,10 @@ def build_contract_accounting_report(
                 "tax_percent": applied_tax_percent,
                 **financials,
             },
-            "custom_values": custom_values,
+            "custom_values": report_custom_values,
+            "expense_status": {
+                "prosthetist_work": "unpaid" if str(prosthetist_state.get("paid", "paid")).lower() == "unpaid" else "paid",
+            },
         })
 
     rows.sort(

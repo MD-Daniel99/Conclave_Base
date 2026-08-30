@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Drawer from 'primevue/drawer'
 import Menu from 'primevue/menu'
@@ -21,6 +21,7 @@ import {
 } from '@lucide/vue'
 
 import { useAuthStore } from '@/app/stores/auth'
+import { touchPresence } from '@/shared/api/auth'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -28,6 +29,7 @@ const route = useRoute()
 const isSidebarCollapsed = ref(localStorage.getItem('db.sidebar.collapsed') === 'true')
 const isMobileMenuOpen = ref(false)
 const profileMenu = ref<InstanceType<typeof Menu> | null>(null)
+let presenceTimer: number | undefined
 
 const allNavigationItems = [
   { to: '/', label: 'Обзор', icon: LayoutDashboard },
@@ -88,6 +90,24 @@ function toggleSidebar() {
 function toggleProfileMenu(event: Event) {
   profileMenu.value?.toggle(event)
 }
+
+async function refreshPresence() {
+  if (!authStore.isAuthenticated) return
+  try {
+    await touchPresence()
+  } catch {
+    // Presence is auxiliary and must never interrupt the application.
+  }
+}
+
+onMounted(() => {
+  void refreshPresence()
+  presenceTimer = window.setInterval(() => { void refreshPresence() }, 30_000)
+})
+
+onBeforeUnmount(() => {
+  if (presenceTimer) window.clearInterval(presenceTimer)
+})
 
 function logout() {
   authStore.logout()

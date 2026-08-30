@@ -10,6 +10,11 @@ from app.services.accounting_report import (
     build_accounting_report,
     build_contract_accounting_report,
     build_contract_coverage,
+    get_contract_expense_history as get_contract_expense_history_service,
+    add_contract_expense as add_contract_expense_service,
+    set_contract_expense_status as set_contract_expense_status_service,
+    update_contract_expense as update_contract_expense_service,
+    delete_contract_expense as delete_contract_expense_service,
 )
 from app.services.audit import log_action, snapshot
 
@@ -96,6 +101,12 @@ def update_contract_accounting(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract accounting row not found")
     before = snapshot(row)
     for key, value in payload.model_dump(exclude_unset=True).items():
+        if key == "custom_values" and isinstance(value, dict):
+            existing = dict(row.custom_values or {})
+            history = existing.get("__expense_history__")
+            value = dict(value)
+            if history is not None:
+                value["__expense_history__"] = history
         setattr(row, key, value)
     db.commit()
     db.refresh(row)
@@ -115,3 +126,91 @@ def update_contract_accounting(
             },
         )
     return {"status": "updated"}
+
+@router.get("/contracts/{document_id}/expenses/{field_key}")
+def get_contract_expense_history(
+    document_id: str,
+    field_key: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(require_admin),
+):
+    from uuid import UUID
+    from fastapi import HTTPException, status
+    try:
+        parsed_id = UUID(document_id)
+        return get_contract_expense_history_service(db, parsed_id, field_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/contracts/{document_id}/expenses")
+def add_contract_expense(
+    document_id: str,
+    payload: schemas.AccountingExpenseCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    from uuid import UUID
+    from fastapi import HTTPException, status
+    try:
+        parsed_id = UUID(document_id)
+        result = add_contract_expense_service(db, parsed_id, payload, current_user)
+        return result
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.patch("/contracts/{document_id}/expenses/{field_key}/status")
+def update_contract_expense_status(
+    document_id: str,
+    field_key: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+    _current_user=Depends(require_admin),
+):
+    from uuid import UUID
+    from fastapi import HTTPException, status
+    try:
+        parsed_id = UUID(document_id)
+        return set_contract_expense_status_service(db, parsed_id, field_key, bool(payload.get("paid")))
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.patch("/contracts/{document_id}/expenses/{field_key}/{entry_id}")
+def update_contract_expense_entry(
+    document_id: str,
+    field_key: str,
+    entry_id: str,
+    payload: schemas.AccountingExpenseUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(require_admin),
+):
+    from uuid import UUID
+    from fastapi import HTTPException, status
+    try:
+        parsed_id = UUID(document_id)
+        return update_contract_expense_service(db, parsed_id, field_key, entry_id, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.delete("/contracts/{document_id}/expenses/{field_key}/{entry_id}")
+def delete_contract_expense_entry(
+    document_id: str,
+    field_key: str,
+    entry_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(require_admin),
+):
+    from uuid import UUID
+    from fastapi import HTTPException, status
+    try:
+        parsed_id = UUID(document_id)
+        return delete_contract_expense_service(db, parsed_id, field_key, entry_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

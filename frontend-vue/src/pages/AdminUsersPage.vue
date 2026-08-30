@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 import { useAuthStore } from '@/app/stores/auth'
 import { createUser, deleteUser, fetchUsers, updateUser } from '@/shared/api/auth'
@@ -25,7 +25,7 @@ type UserForm = {
 const authStore = useAuthStore()
 const users = ref<User[]>([])
 const userSearch = ref('')
-const userColumnFilters = reactive<Record<string, string>>({ username: '', role: '', active: '', created_at: '' })
+const userColumnFilters = reactive<Record<string, string>>({ username: '', role: '', active: '', online: '', last_login_at: '', created_at: '' })
 const userSortKey = ref<string | null>(null)
 const userSortDirection = ref<SortDirection>(null)
 const selectedUser = ref<User | null>(null)
@@ -56,6 +56,8 @@ const isSelfSelected = computed(() => {
 
 function userColumnValue(user: User, key: string) {
   if (key === 'active') return user.is_active ? 'Активен' : 'Заблокирован'
+  if (key === 'online') return isUserOnline(user) ? 'Онлайн' : 'Не в сети'
+  if (key === 'last_login_at') return user.last_login_at
   if (key === 'created_at') return user.created_at
   return user[key as keyof User]
 }
@@ -73,11 +75,13 @@ const visibleUsers = computed(() => {
       user.username,
       user.role,
       user.is_active ? 'Активен' : 'Заблокирован',
+      isUserOnline(user) ? 'Онлайн' : 'Не в сети',
+      formatDateTime(user.last_login_at),
       formatDateTime(user.created_at),
     ].join(' ').toLocaleLowerCase('ru-RU').includes(needle)
     if (!matchesSearch) return false
     return Object.entries(userColumnFilters).every(([key, filter]) => {
-      const kind = key === 'created_at' ? 'date' : key === 'role' || key === 'active' ? 'select' : 'text'
+      const kind = key === 'created_at' || key === 'last_login_at' ? 'date' : key === 'role' || key === 'active' || key === 'online' ? 'select' : 'text'
       return matchesTableFilter(userColumnValue(user, key), filter, kind)
     })
   })
@@ -95,6 +99,12 @@ function formatDateTime(value?: string | null) {
   }
 
   return date.toLocaleString('ru-RU')
+}
+
+function isUserOnline(user: User) {
+  if (!user.is_active || !user.last_seen_at) return false
+  const seen = new Date(user.last_seen_at).getTime()
+  return Number.isFinite(seen) && Date.now() - seen <= 90_000
 }
 
 function resetMessages() {
@@ -315,7 +325,14 @@ async function removeUser(user: User) {
   }
 }
 
-onMounted(loadUsers)
+let usersRefreshTimer: number | undefined
+onMounted(async () => {
+  await loadUsers()
+  usersRefreshTimer = window.setInterval(() => { void loadUsers() }, 20_000)
+})
+onBeforeUnmount(() => {
+  if (usersRefreshTimer) window.clearInterval(usersRefreshTimer)
+})
 </script>
 
 <template>
@@ -385,6 +402,28 @@ onMounted(loadUsers)
                 @update:filter-value="userColumnFilters.active = $event"
               />
               <SortableFilterHeader
+                label="Статус"
+                column-key="online"
+                filter-kind="select"
+                :options="[{ value: 'Онлайн', label: 'Онлайн' }, { value: 'Не в сети', label: 'Не в сети' }]"
+                :sort-key="userSortKey"
+                :sort-direction="userSortDirection"
+                :filter-value="userColumnFilters.online"
+                @sort="sortUsers"
+                @update:filter-value="userColumnFilters.online = $event"
+              />
+              <SortableFilterHeader
+                label="Последний вход"
+                column-key="last_login_at"
+                filter-kind="date"
+                placeholder="дд.мм.гггг"
+                :sort-key="userSortKey"
+                :sort-direction="userSortDirection"
+                :filter-value="userColumnFilters.last_login_at"
+                @sort="sortUsers"
+                @update:filter-value="userColumnFilters.last_login_at = $event"
+              />
+              <SortableFilterHeader
                 label="Создан"
                 column-key="created_at"
                 filter-kind="date"
@@ -400,7 +439,7 @@ onMounted(loadUsers)
           </thead>
           <tbody>
             <tr v-if="isLoading">
-              <td colspan="5">Загружаем пользователей...</td>
+              <td colspan="7">Загружаем пользователей...</td>
             </tr>
 
             <tr
@@ -421,6 +460,12 @@ onMounted(loadUsers)
                   {{ user.is_active ? 'Активен' : 'Заблокирован' }}
                 </span>
               </td>
+              <td>
+                <span :class="['status-badge', isUserOnline(user) ? 'success' : 'neutral']">
+                  {{ isUserOnline(user) ? 'Онлайн' : 'Не в сети' }}
+                </span>
+              </td>
+              <td>{{ formatDateTime(user.last_login_at) }}</td>
               <td>{{ formatDateTime(user.created_at) }}</td>
               <td class="row-actions">
                 <button class="ghost-button" type="button" @click="selectUser(user)">
@@ -446,7 +491,7 @@ onMounted(loadUsers)
             </tr>
 
             <tr v-if="!isLoading && visibleUsers.length === 0">
-              <td colspan="5">Пользователи не найдены.</td>
+              <td colspan="7">Пользователи не найдены.</td>
             </tr>
           </tbody>
         </table>

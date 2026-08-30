@@ -11,10 +11,14 @@ import {
   deleteAccountingCustomField,
   fetchAccountingCustomFields,
   fetchClientContractCoverage,
-  updateClientAccountingValues,
+  fetchClientExpenseHistory,
+  addClientExpense,
+  updateClientExpense,
+  deleteClientExpense,
+  updateClientExpenseStatus,
 } from '@/shared/api/accounting'
 import { fetchUserSettings, updateUserSettings } from '@/shared/api/auth'
-import { fetchClients, updateClient } from '@/shared/api/clients'
+import { fetchClients } from '@/shared/api/clients'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection, type TableFilterKind } from '@/shared/lib/table'
@@ -23,7 +27,6 @@ import type {
   AccountingCustomField,
   Client,
   ClientContractCoverage,
-  ClientUpdatePayload,
 } from '@/shared/types/entities'
 
 type ExpenseKey =
@@ -86,6 +89,18 @@ const accountingColumnFilters = reactive<Record<string, string>>({})
 const accountingSortKey = ref<string | null>(null)
 const accountingSortDirection = ref<SortDirection>(null)
 const editableRows = reactive<Record<string, EditableRow>>({})
+const selectedExpenseClient = ref<Client | null>(null)
+const selectedExpenseFieldKey = ref('')
+const selectedExpenseFieldLabel = ref('')
+const selectedExpenseHistory = ref<Awaited<ReturnType<typeof fetchClientExpenseHistory>> | null>(null)
+const expenseDialogLoading = ref(false)
+const expenseAmount = ref('')
+const expenseDescription = ref('')
+const expensePaid = ref(true)
+const editingExpenseId = ref<string | null>(null)
+const editExpenseAmount = ref('')
+const editExpenseDescription = ref('')
+const pendingDeleteExpenseId = ref<string | null>(null)
 const isLoading = ref(false)
 const isSaving = ref(false)
 const isPercentSaving = ref(false)
@@ -173,10 +188,16 @@ const calculatedRows = computed(() =>
     const certificateIds = new Set(certificateSlices.map((item) => item.id).filter(Boolean))
     const rawCertificate = certificateSlices.reduce((sum, item) => sum + item.amount, 0)
     const rawModulesCost = getModulesCost(client, certificateIds)
-    const editable = ensureEditableRow(client)
-    const fixedExpenses = expenseColumns.reduce((sum, column) => sum + parseMoney(editable[column.key]), 0)
+    const fixedExpenses = expenseColumns.reduce((sum, column) => {
+      const value = getExpenseCellTotal(client, column.key)
+      const paid = getExpenseCellPaid(client, column.key)
+      return sum + (paid ? value : 0)
+    }, 0)
     const customExpenses = numericCustomFields.value.reduce(
-      (sum, field) => sum + parseMoney(getCustomEditableValue(client, field)),
+      (sum, field) => {
+        const key = getCustomColumnKey(field)
+        return sum + getExpenseCellTotal(client, key)
+      },
       0,
     )
     const taxPercent = getClientTaxPercent(client)
@@ -215,10 +236,10 @@ function accountingColumnValue(row: (typeof calculatedRows.value)[number], key: 
   if (key === 'profit') return row.profit
   if (key.startsWith('custom:')) {
     const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
-    return field ? getCustomEditableValue(row.client, field) : ''
+    return field ? getExpenseCellTotal(row.client, key) : ''
   }
   if (expenseColumns.some((column) => column.key === key)) {
-    return parseMoney(getExpenseValue(row.client, key as ExpenseKey))
+    return getExpenseCellTotal(row.client, key)
   }
   return ''
 }
@@ -298,6 +319,13 @@ const totals = computed(() =>
 function resetMessages() {
   error.value = ''
   successMessage.value = ''
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('ru-RU')
 }
 
 function getClientId(client: Client) {
@@ -422,6 +450,189 @@ function resetAccountingFilters() {
   resetAccountingPage()
 }
 
+function getExpenseEntries(client: Client, key: string) {
+  return client.accounting_expenses?.[key] ?? []
+}
+
+function getExpenseCellTotal(client: Client, key: string) {
+  const entries = getExpenseEntries(client, key)
+  if (entries.length > 0) {
+    return entries.reduce((sum, item) => sum + parseMoney(item.amount), 0)
+  }
+  if (key.startsWith('custom:')) {
+    const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
+    return field ? parseMoney(getCustomEditableValue(client, field)) : 0
+  }
+  return parseMoney(client[key as ExpenseKey] ?? 0)
+}
+
+function getExpenseCellPaid(client: Client, key: string) {
+  return key !== 'prosthetist_work' || client.accounting_expense_status?.[key] !== 'unpaid'
+}
+
+function isExpenseCellUnpaid(client: Client, key: string) {
+  return key === 'prosthetist_work' && !getExpenseCellPaid(client, key)
+}
+
+function getExpenseCellLabel(key: string) {
+  const fixed = expenseColumns.find((column) => column.key === key)
+  if (fixed) return fixed.label
+  const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
+  return field ? getFieldName(field) : key
+}
+
+async function openExpenseCell(client: Client, key: string) {
+  const clientId = getClientId(client)
+  if (!clientId) return
+  selectedExpenseClient.value = client
+  selectedExpenseFieldKey.value = key
+  selectedExpenseFieldLabel.value = getExpenseCellLabel(key)
+  expenseAmount.value = ''
+  expenseDescription.value = ''
+  expensePaid.value = getExpenseCellPaid(client, key)
+  editingExpenseId.value = null
+  editExpenseAmount.value = ''
+  editExpenseDescription.value = ''
+  selectedExpenseHistory.value = null
+  expenseDialogLoading.value = true
+  try {
+    selectedExpenseHistory.value = await fetchClientExpenseHistory(clientId, key)
+    expensePaid.value = selectedExpenseHistory.value.paid
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+    selectedExpenseClient.value = null
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+ 
+function closeExpenseCell() {
+  selectedExpenseClient.value = null
+  selectedExpenseHistory.value = null
+  expenseAmount.value = ''
+  expenseDescription.value = ''
+  editingExpenseId.value = null
+  editExpenseAmount.value = ''
+  editExpenseDescription.value = ''
+  pendingDeleteExpenseId.value = null
+}
+
+function startEditExpense(entry: { id: string; amount: number; description: string }) {
+  editingExpenseId.value = entry.id
+  pendingDeleteExpenseId.value = null
+  editExpenseAmount.value = formatMoneyInput(entry.amount)
+  editExpenseDescription.value = entry.description
+}
+
+function cancelEditExpense() {
+  editingExpenseId.value = null
+  editExpenseAmount.value = ''
+  editExpenseDescription.value = ''
+}
+
+async function saveEditedExpense() {
+  const client = selectedExpenseClient.value
+  const key = selectedExpenseFieldKey.value
+  const entryId = editingExpenseId.value
+  const amount = parseMoney(editExpenseAmount.value)
+  const description = editExpenseDescription.value.trim()
+  if (!client || !key || !entryId) return
+  if (!(amount > 0)) { error.value = 'Введите сумму расхода больше нуля.'; return }
+  if (!description) { error.value = 'Введите название или описание расхода.'; return }
+  expenseDialogLoading.value = true
+  resetMessages()
+  try {
+    selectedExpenseHistory.value = await updateClientExpense(getClientId(client), key, entryId, { amount, description })
+    cancelEditExpense()
+    successMessage.value = 'Расход изменён'
+    await loadData()
+    const refreshed = clients.value.find((item) => getClientId(item) === getClientId(client))
+    if (refreshed) {
+      selectedExpenseClient.value = refreshed
+      selectedExpenseHistory.value = await fetchClientExpenseHistory(getClientId(refreshed), key)
+    }
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
+function requestDeleteExpense(entryId: string) {
+  pendingDeleteExpenseId.value = pendingDeleteExpenseId.value === entryId ? null : entryId
+  editingExpenseId.value = null
+}
+
+async function confirmDeleteExpense(entryId: string) {
+  const client = selectedExpenseClient.value
+  const key = selectedExpenseFieldKey.value
+  if (!client || !key) return
+  expenseDialogLoading.value = true
+  resetMessages()
+  try {
+    selectedExpenseHistory.value = await deleteClientExpense(getClientId(client), key, entryId)
+    successMessage.value = 'Расход удалён'
+    pendingDeleteExpenseId.value = null
+    await loadData()
+    const refreshed = clients.value.find((item) => getClientId(item) === getClientId(client))
+    if (refreshed) {
+      selectedExpenseClient.value = refreshed
+      selectedExpenseHistory.value = await fetchClientExpenseHistory(getClientId(refreshed), key)
+    }
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
+async function saveExpenseEntry() {
+  const client = selectedExpenseClient.value
+  const key = selectedExpenseFieldKey.value
+  const amount = parseMoney(expenseAmount.value)
+  const description = expenseDescription.value.trim()
+  if (!client || !key) return
+  if (!(amount > 0)) { error.value = 'Введите сумму расхода больше нуля.'; return }
+  if (!description) { error.value = 'Введите название или описание расхода.'; return }
+  expenseDialogLoading.value = true
+  resetMessages()
+  try {
+    selectedExpenseHistory.value = await addClientExpense(getClientId(client), {
+      field_key: key, amount, description, paid: key === 'prosthetist_work' ? expensePaid.value : true,
+    })
+    expenseAmount.value = ''
+    expenseDescription.value = ''
+    successMessage.value = 'Расход добавлен'
+    await loadData()
+    const refreshed = clients.value.find((item) => getClientId(item) === getClientId(client))
+    if (refreshed) {
+      selectedExpenseClient.value = refreshed
+      selectedExpenseHistory.value = await fetchClientExpenseHistory(getClientId(refreshed), key)
+    }
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
+async function changeProsthetistPaymentStatus(paid: boolean) {
+  const client = selectedExpenseClient.value
+  if (!client || selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  expenseDialogLoading.value = true
+  try {
+    selectedExpenseHistory.value = await updateClientExpenseStatus(getClientId(client), 'prosthetist_work', paid)
+    expensePaid.value = paid
+    await loadData()
+    const refreshed = clients.value.find((item) => getClientId(item) === getClientId(client))
+    if (refreshed) selectedExpenseClient.value = refreshed
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
 function ensureEditableRow(client: Client) {
   const clientId = getClientId(client)
 
@@ -439,18 +650,6 @@ function ensureEditableRow(client: Client) {
   }
 
   return editableRows[clientId]
-}
-
-function getExpenseValue(client: Client, key: ExpenseKey) {
-  return ensureEditableRow(client)[key]
-}
-
-function setExpenseValue(client: Client, key: ExpenseKey, value: string) {
-  ensureEditableRow(client)[key] = value
-}
-
-function formatExpenseValue(client: Client, key: ExpenseKey) {
-  setExpenseValue(client, key, formatMoneyInput(getExpenseValue(client, key)))
 }
 
 function getCustomEditableValue(client: Client, field: AccountingCustomField) {
@@ -543,7 +742,7 @@ async function savePercentSettings() {
     isPercentSaving.value = false
   }
 }
-
+ 
 async function loadData() {
   isLoading.value = true
   error.value = ''
@@ -568,47 +767,6 @@ async function loadData() {
     error.value = getApiErrorMessage(caughtError)
   } finally {
     isLoading.value = false
-  }
-}
-
-async function saveClientValues(client: Client) {
-  const clientId = getClientId(client)
-
-  if (!clientId) {
-    return
-  }
-
-  const row = ensureEditableRow(client)
-  isSaving.value = true
-  resetMessages()
-
-  try {
-    const expensePayload = Object.fromEntries(
-      expenseColumns.map((column) => [column.key, parseMoney(row[column.key])]),
-    ) as ClientUpdatePayload
-    await updateClient(clientId, expensePayload)
-
-    const values = customFields.value
-      .map((field) => {
-        const fieldId = getFieldId(field)
-        const rawValue = getCustomEditableValue(client, field)
-        return {
-          field_id: fieldId,
-          value: getFieldType(field) === 'number' ? parseMoney(rawValue) : rawValue,
-        }
-      })
-      .filter((value) => value.field_id)
-
-    if (values.length > 0) {
-      await updateClientAccountingValues(clientId, values)
-    }
-
-    successMessage.value = 'Значения сохранены'
-    await loadData()
-  } catch (caughtError) {
-    error.value = getApiErrorMessage(caughtError)
-  } finally {
-    isSaving.value = false
   }
 }
 
@@ -864,22 +1022,33 @@ onMounted(async () => {
               <td v-if="isColumnVisible('certificate')" class="table-money">{{ formatMoney(row.certificate) }}</td>
               <td v-if="isColumnVisible('modules_cost')" class="table-money">{{ formatMoney(row.modulesCost) }}</td>
               <td v-for="column in expenseColumns.filter((item) => isColumnVisible(item.key))" :key="column.key">
-                <input
-                  class="table-input"
-                  :value="getExpenseValue(row.client, column.key)"
-                  inputmode="decimal"
-                  @input="setExpenseValue(row.client, column.key, ($event.target as HTMLInputElement).value)"
-                  @blur="formatExpenseValue(row.client, column.key)"
-                />
+                <button
+                  class="accounting-expense-cell"
+                  :class="{ 'accounting-expense-unpaid': isExpenseCellUnpaid(row.client, column.key) }"
+                  type="button"
+                  :title="`Открыть расходы: ${column.label}`"
+                  @click="openExpenseCell(row.client, column.key)"
+                >
+                  {{ formatMoney(getExpenseCellTotal(row.client, column.key)) }}
+                  <span v-if="isExpenseCellUnpaid(row.client, column.key)" class="accounting-unpaid-badge">Не оплачено</span>
+                </button>
               </td>
               <td
                 v-for="field in customFields.filter((item) => isColumnVisible(getCustomColumnKey(item)))"
                 :key="getFieldId(field)"
               >
+                <button
+                  v-if="getFieldType(field) === 'number'"
+                  class="accounting-expense-cell"
+                  type="button"
+                  @click="openExpenseCell(row.client, getCustomColumnKey(field))"
+                >
+                  {{ formatMoney(getExpenseCellTotal(row.client, getCustomColumnKey(field))) }}
+                </button>
                 <input
+                  v-else
                   class="table-input"
                   :value="getCustomEditableValue(row.client, field)"
-                  :inputmode="getFieldType(field) === 'number' ? 'decimal' : 'text'"
                   @input="setCustomEditableValue(row.client, field, ($event.target as HTMLInputElement).value)"
                   @blur="formatCustomEditableValue(row.client, field)"
                 />
@@ -900,11 +1069,7 @@ onMounted(async () => {
               >
                 <strong>{{ formatMoney(row.profit) }}</strong>
               </td>
-              <td class="row-actions">
-                <button class="ghost-button" :disabled="isSaving" type="button" @click="saveClientValues(row.client)">
-                  Сохранить
-                </button>
-              </td>
+              <td class="row-actions"></td>
             </tr>
             <tr v-if="rows.length === 0">
               <td :colspan="visibleColumnCount()">Нет данных для отчёта.</td>
@@ -929,8 +1094,88 @@ onMounted(async () => {
       </div>
     </template>
 
+
+    <div v-if="selectedExpenseClient" class="accounting-expense-modal" role="dialog" aria-modal="true">
+      <div class="accounting-expense-backdrop" @click="closeExpenseCell"></div>
+      <section class="accounting-expense-dialog">
+        <div class="accounting-expense-dialog-head">
+          <div>
+            <p class="eyebrow">{{ getClientName(selectedExpenseClient) }}</p>
+            <h2>{{ selectedExpenseFieldLabel }}</h2>
+            <p class="muted">Текущая сумма: <strong>{{ formatMoney(selectedExpenseHistory?.total ?? getExpenseCellTotal(selectedExpenseClient, selectedExpenseFieldKey)) }}</strong></p>
+          </div>
+          <button class="ghost-button" type="button" @click="closeExpenseCell">Закрыть</button>
+        </div>
+
+        <div v-if="expenseDialogLoading && !selectedExpenseHistory" class="muted">Загружаем историю...</div>
+        <template v-else>
+          <div class="accounting-expense-history">
+            <template v-if="selectedExpenseHistory?.entries.length">
+              <div v-for="entry in selectedExpenseHistory.entries" :key="entry.id" class="accounting-expense-entry">
+                <template v-if="editingExpenseId === entry.id">
+                  <div class="accounting-expense-edit-form">
+                    <label>
+                      <span>Сумма</span>
+                      <input v-model="editExpenseAmount" inputmode="decimal" />
+                    </label>
+                    <label>
+                      <span>Описание</span>
+                      <input v-model="editExpenseDescription" maxlength="500" />
+                    </label>
+                    <div class="accounting-expense-entry-actions">
+                      <button class="primary-button" type="button" :disabled="expenseDialogLoading" @click="saveEditedExpense">Сохранить</button>
+                      <button class="secondary-button" type="button" :disabled="expenseDialogLoading" @click="cancelEditExpense">Отмена</button>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div>
+                    <strong>{{ formatMoney(entry.amount) }}</strong>
+                    <span>{{ entry.description }}</span>
+                  </div>
+                  <div class="accounting-expense-entry-meta">
+                    <small>{{ entry.username || 'Система' }} · {{ entry.created_at ? formatDateTime(entry.created_at) : 'ранее' }}</small>
+                    <div class="accounting-expense-entry-actions">
+                      <button class="ghost-button" type="button" :disabled="expenseDialogLoading" @click="startEditExpense(entry)">Изменить</button>
+                      <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="requestDeleteExpense(entry.id)">Удалить</button>
+                    </div>
+                  </div>
+                  <div v-if="pendingDeleteExpenseId === entry.id" class="accounting-expense-delete-confirm">
+                    <span>Удалить этот расход? Сумма будет пересчитана.</span>
+                    <div class="accounting-expense-entry-actions">
+                      <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="confirmDeleteExpense(entry.id)">Удалить</button>
+                      <button class="secondary-button" type="button" :disabled="expenseDialogLoading" @click="pendingDeleteExpenseId = null">Отмена</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+            <p v-else class="muted">Расходов пока нет.</p>
+          </div>
+
+          <div v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="accounting-payment-status">
+            <span class="muted">Статус выплаты:</span>
+            <button class="status-choice" :class="{ active: expensePaid }" type="button" @click="changeProsthetistPaymentStatus(true)">Оплачено</button>
+            <button class="status-choice unpaid" :class="{ active: !expensePaid }" type="button" @click="changeProsthetistPaymentStatus(false)">Не оплачено</button>
+          </div>
+
+          <form class="accounting-expense-add" @submit.prevent="saveExpenseEntry">
+            <label>
+              <span>Новый расход</span>
+              <input v-model="expenseAmount" inputmode="decimal" placeholder="Сумма" required />
+            </label>
+            <label class="accounting-expense-description">
+              <span>На что расход</span>
+              <input v-model="expenseDescription" placeholder="Например: дополнительная оплата работы" maxlength="500" required />
+            </label>
+            <button class="primary-button" :disabled="expenseDialogLoading" type="submit">Добавить расход</button>
+          </form>
+        </template>
+      </section>
+    </div>
+
     <ContractAccountingTab
-      v-else
+      v-if="activeAccountingTab === 'contracts'"
       :tax-usn-percent="taxUsnPercent"
       :tax-osno-percent="taxOsnoPercent"
       :acquiring-percent="acquiringPercent"

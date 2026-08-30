@@ -61,3 +61,96 @@ export async function updateContractAccounting(documentId: string, payload: Reco
   const { data } = await api.patch(`/accounting/contracts/${documentId}`, payload)
   return data
 }
+
+
+export interface AccountingExpenseEntry {
+  id: string
+  amount: number
+  description: string
+  created_at?: string | null
+  user_id?: string | null
+  username?: string | null
+}
+
+export interface AccountingExpenseHistory {
+  field_key: string
+  total: number
+  paid: boolean
+  entries: AccountingExpenseEntry[]
+}
+
+export async function fetchClientExpenseHistory(clientId: string, fieldKey: string) {
+  const { data } = await api.get<AccountingExpenseHistory>(`/accounting/clients/${clientId}/expenses/${encodeURIComponent(fieldKey)}`)
+  return data
+}
+
+export async function addClientExpense(clientId: string, payload: { field_key: string; amount: number; description: string; paid?: boolean }) {
+  const { data } = await api.post<AccountingExpenseHistory>(`/accounting/clients/${clientId}/expenses`, payload)
+  return data
+}
+
+export async function updateClientExpenseStatus(clientId: string, fieldKey: string, paid: boolean) {
+  const { data } = await api.patch<AccountingExpenseHistory>(`/accounting/clients/${clientId}/expenses/${encodeURIComponent(fieldKey)}/status`, { paid })
+  return data
+}
+
+export async function updateClientExpense(
+  clientId: string,
+  fieldKey: string,
+  entryId: string,
+  payload: { amount: number; description: string },
+) {
+  const { data } = await api.patch<AccountingExpenseHistory>(
+    `/accounting/clients/${clientId}/expenses/${encodeURIComponent(fieldKey)}/${encodeURIComponent(entryId)}`,
+    payload,
+  )
+  return data
+}
+
+export async function deleteClientExpense(clientId: string, fieldKey: string, entryId: string) {
+  const { data } = await api.delete<AccountingExpenseHistory>(
+    `/accounting/clients/${clientId}/expenses/${encodeURIComponent(fieldKey)}/${encodeURIComponent(entryId)}`,
+  )
+  return data
+}
+
+export async function fetchContractExpenseHistory(documentId: string, fieldKey: string) {
+  const { data } = await api.get<AccountingExpenseHistory>(`/accounting/contracts/${documentId}/expenses/${encodeURIComponent(fieldKey)}`)
+  return data
+}
+
+export async function addContractExpense(
+  documentId: string,
+  payload: { field_key: string; amount: number; description: string; paid?: boolean },
+) {
+  const { data } = await api.post<AccountingExpenseHistory>(`/accounting/contracts/${documentId}/expenses`, payload)
+  return data
+}
+
+export async function updateContractExpenseStatus(documentId: string, fieldKey: string, paid: boolean) {
+  const { data } = await api.patch<AccountingExpenseHistory>(
+    `/accounting/contracts/${documentId}/expenses/${encodeURIComponent(fieldKey)}/status`,
+    { paid },
+  )
+  return data
+}
+
+export async function updateContractExpense(
+  documentId: string,
+  fieldKey: string,
+  entryId: string,
+  payload: { amount: number; description: string },
+) {
+  const { data } = await api.patch<AccountingExpenseHistory>(
+    `/accounting/contracts/${documentId}/expenses/${encodeURIComponent(fieldKey)}/${encodeURIComponent(entryId)}`,
+    payload,
+  )
+  return data
+}
+
+export async function deleteContractExpense(documentId: string, fieldKey: string, entryId: string) {
+  const { data } = await api.delete<AccountingExpenseHistory>(
+    `/accounting/contracts/${documentId}/expenses/${encodeURIComponent(fieldKey)}/${encodeURIComponent(entryId)}`,
+  )
+  return data
+}

@@ -116,6 +116,48 @@ const ALLOWED_UPLOAD_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ])
 
+function sanitizeDigits(value: string, maxLength: number): string {
+  return value.replace(/\D/g, '').slice(0, maxLength);
+}
+
+// Очистка для серии паспорта: разрешаем цифры и пробелы (не более 7 символов)
+function sanitizeSeries(value: string): string {
+  return value.replace(/[^0-9 ]/g, '').slice(0, 7);
+}
+
+// Форматирование СНИЛС: 123-456-789 01
+function formatSnils(value: string): string {
+  const digits = sanitizeDigits(value, 11);
+  if (!digits) return '';
+  let result = '';
+  for (let i = 0; i < digits.length; i++) {
+    if (i === 3 || i === 6) result += '-';
+    if (i === 9) result += ' ';
+    result += digits[i];
+  }
+  return result;
+}
+
+// Форматирование кода подразделения: 123-456
+function formatDepartmentCode(value: string): string {
+  const digits = sanitizeDigits(value, 6);
+  if (digits.length <= 3) return digits;
+  return digits.slice(0, 3) + '-' + digits.slice(3);
+}
+
+function formatIpraNumber(value: string): string {
+  const digits = sanitizeDigits(value, 12);
+  if (!digits) return '';
+  if (digits.length <= 3) return `ИПРА-${digits}`;
+  return `ИПРА-${digits.slice(0, 3)}-${digits.slice(3)}`;
+}
+
+function formatSeries(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return digits.slice(0, 2) + ' ' + digits.slice(2);
+}
+
 type ContractTemplateOption = { value: string; label: string }
 
 const contractTemplateOptions = ref<ContractTemplateOption[]>([
@@ -1819,8 +1861,16 @@ function isTabLoading(tab: DetailTab) {
 function fillForm(client: Client) {
   const passports = Array.isArray(client.passports) ? client.passports : []
   const firstPassport = passports[0]
-  const seriesNumberParts = String(firstPassport?.series_number ?? '').split(/\s+/)
-
+  const passportRaw = String(firstPassport?.series_number ?? '');
+  const parts = passportRaw.split(/\s+/);
+  if (parts.length > 1) {
+    passportForm.number = parts.pop() ?? '';   // забираем последнюю часть как номер
+    passportForm.series = parts.join(' ');     // всё остальное – серия (с пробелами)
+  } else {
+    passportForm.series = parts[0] ?? '';
+    passportForm.number = '';
+  }
+    
   form.last_name = String(client.last_name ?? '')
   form.first_name = String(client.first_name ?? '')
   form.middle_name = String(client.middle_name ?? '')
@@ -1832,10 +1882,11 @@ function fillForm(client: Client) {
   form.taxation_system = client.taxation_system === 'ОСНО' ? 'ОСНО' : 'УСН'
   form.notes = String(client.notes ?? '')
   emailDraft.value = String(client.email ?? '')
-  snilsForm.ipra_number = String(client.ipra_code ?? '')
+  snilsForm.ipra_number = formatIpraNumber(String(client.ipra_code ?? ''));
+  const firstSnils = (client.snils ?? [])[0];
+  snilsForm.number = firstSnils ? formatSnils(firstSnils.number) : '';
 
-  passportForm.series = seriesNumberParts[0] ?? ''
-  passportForm.number = seriesNumberParts.slice(1).join(' ')
+  
   passportForm.birth_date = String(firstPassport?.birth_date ?? '').slice(0, 10)
   passportForm.birth_place = String(firstPassport?.birth_place ?? '')
   passportForm.issued_by = String(firstPassport?.issued_by ?? '')
@@ -2467,10 +2518,17 @@ function startEditPassport(passport: ClientPassport) {
     return
   }
 
-  const seriesNumberParts = String(passport.series_number ?? '').split(/\s+/)
+  const passportRaw = String(passport.series_number ?? '');
+  const parts = passportRaw.split(/\s+/);
+  if (parts.length > 1) {
+    passportForm.number = parts.pop() ?? '';
+    passportForm.series = parts.join(' ');
+  } else {
+    passportForm.series = parts[0] ?? '';
+    passportForm.number = '';
+  }
+
   editingPassportId.value = passport.passport_id
-  passportForm.series = seriesNumberParts[0] ?? ''
-  passportForm.number = seriesNumberParts.slice(1).join(' ')
   passportForm.birth_date = String(passport.birth_date ?? '').slice(0, 10)
   passportForm.birth_place = passport.birth_place ?? ''
   passportForm.issued_by = passport.issued_by ?? ''
@@ -2592,8 +2650,8 @@ function startEditSnils(snils: ClientSnils) {
   }
 
   editingSnilsId.value = snils.snils_id
-  snilsForm.number = snils.number ?? ''
-  snilsForm.ipra_number = selectedClient.value?.ipra_code ?? ''
+  snilsForm.number = formatSnils(snils.number ?? '');
+  snilsForm.ipra_number = formatIpraNumber(selectedClient.value?.ipra_code ?? '');
   snilsForm.ipra_date = String(snils.issued_date ?? '').slice(0, 10)
   snilsFormExpanded.value = true
   resetMessages()
@@ -3645,7 +3703,6 @@ onBeforeUnmount(() => {
             <div class="form-heading collapsible-form-heading">
               <div>
                 <h2>Паспорт</h2>
-                <p class="muted">Форма не занимает место, пока она не нужна.</p>
               </div>
               <button
                 class="ghost-button"
@@ -3658,13 +3715,34 @@ onBeforeUnmount(() => {
             </div>
             <div v-show="passportFormExpanded" class="collapsible-form-body">
               <div class="form-grid">
-                <label>Серия<input v-model="passportForm.series" /></label>
-                <label>Номер<input v-model="passportForm.number" /></label>
+                <label>
+                Серия
+                <input
+                  :value="passportForm.series"
+                  @input="(e) => { passportForm.series = sanitizeSeries((e.target as HTMLInputElement).value) }"
+                  @blur="passportForm.series = formatSeries(passportForm.series)"
+                />
+                </label>
+                <label>
+                Номер
+                <input
+                  :value="passportForm.number"
+                  @input="(e) => { passportForm.number = sanitizeDigits((e.target as HTMLInputElement).value, 6) }"
+                  @blur="passportForm.number = passportForm.number.trim()"
+                />
+              </label>
                 <label>Место рождения<input v-model="passportForm.birth_place" /></label>
               </div>
               <div class="form-grid">
                 <label>Дата рождения<DateInput v-model="passportForm.birth_date" aria-label="Дата рождения" /></label>
-                <label>Код подразделения<input v-model="passportForm.department_code" /></label>
+                <label>
+                Код подразделения
+                <input
+                  :value="passportForm.department_code"
+                  @input="(e) => { passportForm.department_code = sanitizeDigits((e.target as HTMLInputElement).value, 6) }"
+                  @blur="passportForm.department_code = formatDepartmentCode(passportForm.department_code)"
+                />
+              </label>
                 <label>Дата выдачи<DateInput v-model="passportForm.issue_date" aria-label="Дата выдачи паспорта" /></label>
               </div>
               <div class="form-grid">
@@ -3706,7 +3784,6 @@ onBeforeUnmount(() => {
             <div class="form-heading collapsible-form-heading">
               <div>
                 <h2>СНИЛС / ИПРА</h2>
-                <p class="muted">Дата относится к ИПРА, а не к СНИЛС.</p>
               </div>
               <button
                 class="ghost-button"
@@ -3719,8 +3796,25 @@ onBeforeUnmount(() => {
             </div>
             <div v-show="snilsFormExpanded" class="collapsible-form-body">
               <div class="form-grid">
-                <label>СНИЛС<input v-model="snilsForm.number" /></label>
-                <label>Номер ИПРА<input v-model="snilsForm.ipra_number" /></label>
+                <label>
+                СНИЛС
+                <input
+                  :value="snilsForm.number"
+                  @input="(e) => { snilsForm.number = sanitizeDigits((e.target as HTMLInputElement).value, 11) }"
+                  @blur="snilsForm.number = formatSnils(snilsForm.number)"
+                />
+                </label>
+                <label>
+                  Номер ИПРА
+                  <input
+                    :value="snilsForm.ipra_number"
+                    @input="(e) => { 
+                      // Удаляем всё, кроме цифр (префикс добавится при blur)
+                      snilsForm.ipra_number = (e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 12);
+                    }"
+                    @blur="snilsForm.ipra_number = formatIpraNumber(snilsForm.ipra_number)"
+                  />
+                </label>
                 <label>Дата ИПРА<DateInput v-model="snilsForm.ipra_date" aria-label="Дата ИПРА" /></label>
               </div>
               <div class="row-actions">
@@ -3857,7 +3951,7 @@ onBeforeUnmount(() => {
                   >
                     <Plus :size="16" aria-hidden="true" />
                     Создать новую
-                  </button>
+                  </button> 
                   <button
                     class="component-mode-button"
                     :class="{ active: componentEntryMode === 'catalog' }"

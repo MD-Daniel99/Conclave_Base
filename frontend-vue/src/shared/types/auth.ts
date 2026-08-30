@@ -2,7 +2,7 @@ import type { Token, UserLogin, UserRead } from '@/shared/api/generated/types.ge
 
 export type LoginPayload = UserLogin
 export type LoginResponse = Token
-export type User = UserRead
+export type User = UserRead & { last_login_at?: string | null; last_seen_at?: string | null }
 
 export interface UserSettings {
   // Старый ключ читается как резервный, чтобы не потерять сохранённый процент.

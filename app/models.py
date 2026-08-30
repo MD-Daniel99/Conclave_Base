@@ -116,7 +116,7 @@ class Client(Base):
         nullable=False,
         unique=True
     )
-
+  
     last_name = Column(String(128), nullable=False)
     first_name = Column(String(128), nullable=False)
     middle_name = Column(String(128), nullable=True)  # отчество — опционально
@@ -169,6 +169,12 @@ class Client(Base):
     other_expenses = Column(Float, nullable=False, default=0.0, server_default=text("0"))
     agency_expenses = Column(Float, nullable=False, default=0.0, server_default=text("0"))
     email = Column(String(64), nullable = True)
+
+    # Детализация расходов бухгалтерии: ключ статьи -> список расходов.
+    # Старые числовые поля выше сохраняются для совместимости; при появлении
+    # детализации её сумма становится источником значения статьи.
+    accounting_expenses = Column(JSON, nullable=True, default=dict)
+    accounting_expense_status = Column(JSON, nullable=True, default=dict)
 
     # отношения
     # prosthesis_type = relationship("ProsthesisRef", back_populates = "client")
@@ -365,6 +371,8 @@ class User(Base):
     role = Column(String(32), nullable=False, default="user") # 'admin' или 'user'
     is_active = Column(Boolean, default=True) # Требуется import Boolean
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
     settings = Column(JSON, nullable=True)
 
     def __repr__(self):
