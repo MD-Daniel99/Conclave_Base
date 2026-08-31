@@ -32,3 +32,4 @@ def downgrade() -> None:
     op.add_column('MODULES', sa.Column('received_stored', sa.VARCHAR(length=64), autoincrement=False, nullable=False))
     op.drop_column('MODULES', 'recd')
     # ### end Alembic commands ###
+

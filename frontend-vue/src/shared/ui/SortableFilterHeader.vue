@@ -39,7 +39,7 @@ function updateFilter(event: Event) {
 </script>
 
 <template>
-  <th class="filterable-table-header">
+  <th class="filterable-table-header" :data-column-key="props.columnKey">
     <button
       type="button"
       class="table-sort-button"
@@ -79,3 +79,4 @@ function updateFilter(event: Event) {
     />
   </th>
 </template>
+

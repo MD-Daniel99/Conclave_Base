@@ -9,6 +9,8 @@ const ClientsPage = () => import('@/pages/ClientsPage.vue')
 const AgentsPage = () => import('@/pages/AgentsPage.vue')
 const WarehousePage = () => import('@/pages/WarehousePage.vue')
 const AccountingPage = () => import('@/pages/AccountingPage.vue')
+const DocumentsPage = () => import('@/pages/DocumentsPage.vue')
+const TsrReferencesPage = () => import('@/pages/TsrReferencesPage.vue')
 const AdminUsersPage = () => import('@/pages/AdminUsersPage.vue')
 const SettingsPage = () => import('@/pages/SettingsPage.vue')
 
@@ -44,6 +46,25 @@ export const router = createRouter({
           path: 'warehouse',
           name: 'warehouse',
           component: WarehousePage,
+        },
+        {
+          path: 'documents',
+          redirect: { name: 'documents-contracts' },
+        },
+        {
+          path: 'documents/contracts',
+          name: 'documents-contracts',
+          component: DocumentsPage,
+        },
+        {
+          path: 'documents/mtz',
+          name: 'documents-mtz',
+          component: DocumentsPage,
+        },
+        {
+          path: 'tsr-references',
+          name: 'tsr-references',
+          component: TsrReferencesPage,
         },
         {
           path: 'accounting',
@@ -92,3 +113,4 @@ router.beforeEach(async (to) => {
 
   return true
 })
+

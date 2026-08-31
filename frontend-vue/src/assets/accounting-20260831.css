@@ -1,0 +1,128 @@
+/* Accounting UX patch 2026-08-31. Loaded after the existing theme. */
+.accounting-period-filter {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgb(var(--page-accent-rgb, 148 112 245) / 7%);
+}
+
+.accounting-period-head,
+.accounting-period-controls,
+.accounting-period-switch,
+.accounting-fields-menu-body,
+.document-subsection-heading,
+.reference-page-card-head,
+.reference-add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.accounting-period-head { justify-content: space-between; flex-wrap: wrap; }
+.accounting-period-head > div:first-child { display: grid; gap: 2px; }
+.accounting-period-kicker { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.accounting-period-switch { flex-wrap: wrap; }
+.accounting-period-switch button {
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-soft);
+  background: transparent;
+  cursor: pointer;
+}
+.accounting-period-switch button.active {
+  border-color: rgb(var(--page-accent-rgb, 148 112 245) / 45%);
+  color: var(--text);
+  background: rgb(var(--page-accent-rgb, 148 112 245) / 16%);
+}
+.accounting-period-controls { flex-wrap: wrap; align-items: end; }
+.accounting-period-controls label { display: grid; gap: 5px; min-width: 180px; }
+.accounting-period-controls .form-hint { margin: 0 0 8px; }
+
+.accounting-fields-menu {
+  margin: 10px 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgb(255 255 255 / 2%);
+}
+.accounting-fields-menu > summary {
+  padding: 10px 13px;
+  cursor: pointer;
+  font-weight: 800;
+  user-select: none;
+}
+.accounting-fields-menu-body {
+  align-items: stretch;
+  flex-direction: column;
+  padding: 0 13px 13px;
+}
+.accounting-fields-menu-body > * { width: 100%; }
+
+/* The table keeps every column but uses the available width much more efficiently. */
+.accounting-table { overflow-x: visible !important; }
+.accounting-table table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed;
+  font-size: 11.5px;
+}
+.accounting-table th,
+.accounting-table td {
+  min-width: 0 !important;
+  padding: 5px 4px !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+.accounting-table th { line-height: 1.15; }
+.accounting-table .table-input,
+.accounting-table input,
+.accounting-table select,
+.accounting-table button.accounting-expense-cell {
+  min-width: 0 !important;
+  width: 100%;
+  padding: 5px 4px;
+  font-size: inherit;
+}
+.accounting-table .accounting-identity-cell { width: clamp(125px, 14vw, 185px); }
+.accounting-table .accounting-client-link strong,
+.accounting-table .accounting-client-link span { overflow-wrap: anywhere; }
+.accounting-stock-reused {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+.accounting-expense-total { font-weight: 800; }
+
+.document-subsection {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgb(var(--page-accent-rgb, 148 112 245) / 5%);
+}
+.document-subsection-heading { justify-content: space-between; }
+.document-subsection-heading h3 { margin: 0; }
+
+.reference-page-grid { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.reference-page-card { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface, transparent); }
+.reference-page-card-head { justify-content: space-between; align-items: start; }
+.reference-page-card-head h2 { margin-top: 0; }
+.reference-count { min-width: 32px; padding: 5px 9px; border-radius: 999px; text-align: center; background: rgb(var(--page-accent-rgb, 148 112 245) / 14%); }
+.reference-search { width: 100%; margin: 10px 0; }
+.reference-add-row input { flex: 1 1 auto; min-width: 0; }
+.reference-page-list { display: grid; gap: 7px; max-height: 58vh; overflow: auto; }
+.reference-page-row { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
+.reference-page-row > strong { overflow-wrap: anywhere; }
+
+@media (max-width: 1050px) {
+  .reference-page-grid { grid-template-columns: 1fr; }
+  .accounting-table table { font-size: 10.5px; }
+  .accounting-table th, .accounting-table td { padding: 4px 3px !important; }
+}

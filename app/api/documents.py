@@ -9,7 +9,7 @@ import os
 from app import crud, models, schemas
 from app.api.deps import get_current_user
 from app.db import get_db
-from app.services import contracts
+from app.services import contracts, mtz
 from app.services.audit import log_action, snapshot
 
 router = APIRouter()
@@ -68,6 +68,13 @@ def next_contract_number(
     current_user: models.User = Depends(get_current_user),
 ):
     return {"number": contracts.get_next_contract_number(db)}
+
+
+@router.get("/mtz_templates")
+def list_mtz_templates(
+    current_user: models.User = Depends(get_current_user),
+):
+    return mtz.list_mtz_templates()
 
 
 @router.get("/download/{document_id}")
@@ -131,3 +138,36 @@ def gen_contract(
         },
     )
     return contract
+
+
+@router.post("/clients/{client_id}/generate_mtz", response_model=schemas.DocumentRead)
+def gen_mtz(
+    client_id: UUID,
+    payload: schemas.MtzGeneration,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        document = mtz.generate_mtz(db, client_id, payload)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Шаблон МТЗ отсутствует на сервере")
+    except ValueError as e:
+        message = str(e)
+        code = status.HTTP_404_NOT_FOUND if "Клиент" in message else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=message)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"MTZ generation failed: {e}")
+
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action="document.generate_mtz",
+        user=current_user,
+        after=document,
+        details={
+            "template_type": payload.template_type,
+            "document_number": document.document_number,
+        },
+    )
+    return document

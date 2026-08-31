@@ -46,3 +46,4 @@ def downgrade() -> None:
     # op.drop_column('AGENT', 'first_name')
     # op.drop_column('AGENT', 'last_name')
     # ### end Alembic commands ###
+

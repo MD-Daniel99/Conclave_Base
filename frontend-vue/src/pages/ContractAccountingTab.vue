@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import DateInput from '@/shared/ui/DateInput.vue'
+import AccountingPeriodFilter from '@/shared/ui/AccountingPeriodFilter.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
 import {
   createAccountingCustomField,
@@ -61,6 +61,7 @@ const trailingColumns = [
   { key: 'vat', label: 'НДС' },
   { key: 'tax', label: 'Налог' },
   { key: 'acquiring', label: 'Эквайринг' },
+  { key: 'expenses', label: 'Расходы' },
   { key: 'profit', label: 'Прибыль' },
 ]
 
@@ -214,15 +215,15 @@ function getDocumentSortKey(row: ContractAccountingRow) {
 
 const calculatedRows = computed(() => reportRows.value.map((row) => {
   const values = ensureRow(row)
-  const fixedExpenses = expenseColumns.reduce((sum, column) => {
-    const unpaid = column.key === 'prosthetist_work' && row.expense_status?.[column.key] === 'unpaid'
-    return sum + (unpaid ? 0 : parseMoney(row.amounts[column.key]))
-  }, 0)
+  const fixedExpenses = expenseColumns.reduce((sum, column) => (
+    sum + parseMoney(row.amounts[column.key])
+  ), 0)
   const customExpenses = customFields.value.reduce((sum, field) => (
     isNumericField(field) ? sum + parseMoney(values.custom[field.key]) : sum
   ), 0)
   const certificate = parseMoney(row.amounts.certificate)
   const modulesCost = parseMoney(row.amounts.modules_cost)
+  const stockReusedCost = parseMoney(row.amounts.stock_reused_cost ?? 0)
   const taxPercent = getTaxPercent(row)
   const vat = certificate * (props.vatPercent / (100 + props.vatPercent))
   const revenueWithoutVat = certificate - vat
@@ -233,15 +234,18 @@ const calculatedRows = computed(() => reportRows.value.map((row) => {
   )
   const tax = taxBase * (taxPercent / 100)
   const profit = revenueWithoutVat - modulesCost - fixedExpenses - customExpenses - acquiring - tax
+  const totalExpenses = modulesCost + fixedExpenses + customExpenses + vat + tax + acquiring
   return {
     row,
     certificate,
     modulesCost,
+    stockReusedCost,
     fixedExpenses,
     customExpenses,
     vat,
     tax,
     acquiring,
+    totalExpenses,
     profit,
   }
 }))
@@ -261,6 +265,7 @@ function contractColumnValue(item: CalculatedContractRow, key: string): unknown 
   if (key === 'vat') return item.vat
   if (key === 'tax') return item.tax
   if (key === 'acquiring') return item.acquiring
+  if (key === 'expenses') return item.totalExpenses
   if (key === 'profit') return item.profit
   if (key.startsWith('custom:')) {
     const field = customFields.value.find((entry) => getCustomColumnKey(entry) === key)
@@ -604,16 +609,6 @@ onMounted(loadData)
 
 <template>
   <div class="accounting-tab-content">
-    <form class="inline-search wide-search contract-accounting-search" @submit.prevent="loadData">
-      <input v-model="query" placeholder="Договор, клиент, номер или дата пробития" />
-      <DateInput v-model="startDate" aria-label="Дата начала" />
-      <DateInput v-model="endDate" aria-label="Дата окончания" />
-      <button class="secondary-button" type="submit">Обновить</button>
-      <button v-if="activeContractFilterCount" class="ghost-button" type="button" @click="resetContractFilters">
-        Сбросить фильтры
-      </button>
-    </form>
-
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="success" class="form-success">{{ success }}</p>
 
@@ -632,6 +627,23 @@ onMounted(loadData)
       </div>
     </div>
 
+    <div class="accounting-filter-row">
+      <form class="accounting-period-controls" @submit.prevent="loadData">
+        <AccountingPeriodFilter v-model:start-date="startDate" v-model:end-date="endDate" label="Период договорной бухгалтерии" storage-key="dbcrm.accounting.contracts.period" />
+        <div class="accounting-period-actions">
+          <button class="secondary-button" type="submit">Обновить</button>
+          <button v-if="activeContractFilterCount" class="ghost-button" type="button" @click="resetContractFilters">
+            Сбросить фильтры
+          </button>
+        </div>
+      </form>
+      <div class="inline-search wide-search accounting-query-search accounting-query-search-inline">
+        <input v-model="query" placeholder="Договор или клиент" />
+      </div>
+    </div>
+
+    <details class="accounting-settings-menu">
+      <summary>Настройки таблицы и полей</summary>
     <div class="toolbar-form accounting-toolbar">
       <label class="checkbox-label">
         <input v-model="hideFailed" type="checkbox" />
@@ -686,6 +698,8 @@ onMounted(loadData)
       </button>
     </div>
 
+    </details>
+
     <p v-if="isLoading" class="muted">Загружаем договорную бухгалтерию...</p>
 
     <div v-else class="table-wrap accounting-table">
@@ -724,6 +738,7 @@ onMounted(loadData)
             <SortableFilterHeader v-if="isColumnVisible('vat')" label="НДС" column-key="vat" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.vat" @sort="sortContracts" @update:filter-value="contractColumnFilters.vat = $event" />
             <SortableFilterHeader v-if="isColumnVisible('tax')" label="Налог" column-key="tax" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.tax" @sort="sortContracts" @update:filter-value="contractColumnFilters.tax = $event" />
             <SortableFilterHeader v-if="isColumnVisible('acquiring')" label="Эквайринг" column-key="acquiring" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.acquiring" @sort="sortContracts" @update:filter-value="contractColumnFilters.acquiring = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('expenses')" label="Расходы" column-key="expenses" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.expenses" @sort="sortContracts" @update:filter-value="contractColumnFilters.expenses = $event" />
             <SortableFilterHeader v-if="isColumnVisible('profit')" label="Прибыль" column-key="profit" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.profit" @sort="sortContracts" @update:filter-value="contractColumnFilters.profit = $event" />
             <th></th>
           </tr>
@@ -744,7 +759,10 @@ onMounted(loadData)
             >
               {{ formatMoney(item.certificate) }}
             </td>
-            <td v-if="isColumnVisible('modules_cost')" class="table-money">{{ formatMoney(item.modulesCost) }}</td>
+            <td v-if="isColumnVisible('modules_cost')" class="table-money">
+              {{ formatMoney(item.modulesCost) }}
+              <small class="accounting-stock-cost" title="Ранее купленные комплектующие со Склада; повторно в расходы не включаются">(со Склада: {{ formatMoney(item.stockReusedCost) }})</small>
+            </td>
             <td v-for="column in expenseColumns.filter((entry) => isColumnVisible(entry.key))" :key="column.key">
               <button
                 class="accounting-expense-cell"
@@ -791,6 +809,7 @@ onMounted(loadData)
               {{ formatMoney(item.tax) }}
             </td>
             <td v-if="isColumnVisible('acquiring')" class="table-money">{{ formatMoney(item.acquiring) }}</td>
+            <td v-if="isColumnVisible('expenses')" class="table-money"><strong>{{ formatMoney(item.totalExpenses) }}</strong></td>
             <td
               v-if="isColumnVisible('profit')"
               class="table-money"
@@ -892,3 +911,4 @@ onMounted(loadData)
     </div>
 </div>
 </template>
+

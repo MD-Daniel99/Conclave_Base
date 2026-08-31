@@ -356,6 +356,17 @@ class Module(Base):
         server_default=text("false"),
         index=True,
     )
+    # DBCRM_UPDATE_20260831: stock accounting
+    # True only while a client assignment was made directly from the dedicated
+    # «Склад» state.  Such an item was bought earlier and must not become a new
+    # expense when it is put back into work.
+    accounting_cost_excluded = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        index=True,
+    )
 
     client = relationship("Client", back_populates = "modules")
     tsr = relationship("TstCodeRef", back_populates="modules")
@@ -500,3 +511,4 @@ class ContractAccounting(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     document = relationship("Document", back_populates="contract_accounting")
+

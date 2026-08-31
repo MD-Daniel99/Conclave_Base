@@ -79,3 +79,4 @@ def downgrade() -> None:
     for column_name in reversed(EXPENSE_COLUMNS):
         if column_name in existing:
             op.drop_column("CLIENT", column_name)
+

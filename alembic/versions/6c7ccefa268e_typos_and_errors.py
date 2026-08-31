@@ -32,3 +32,4 @@ def downgrade() -> None:
     op.add_column('MODULES', sa.Column('module', sa.VARCHAR(length=64), autoincrement=False, nullable=False))
     op.drop_column('MODULES', 'module_name')
     # ### end Alembic commands ###
+

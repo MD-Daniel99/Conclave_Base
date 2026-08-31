@@ -294,14 +294,16 @@ select {
   transform: translateX(2px);
 }
 
-.nav-list a.router-link-active {
+.nav-list a.router-link-active,
+.nav-list a.nav-parent-active {
   border: 0;
   color: #ffffff;
   background: linear-gradient(135deg, rgb(91 95 246 / 34%), rgb(91 95 246 / 15%));
   box-shadow: inset 0 0 0 1px rgb(142 145 255 / 18%), 0 8px 20px rgb(0 0 0 / 13%);
 }
 
-.nav-list a.router-link-active::before {
+.nav-list a.router-link-active::before,
+.nav-list a.nav-parent-active::before {
   position: absolute;
   left: -14px;
   width: 3px;
@@ -310,6 +312,36 @@ select {
   background: #8a8dff;
   content: "";
 }
+
+.nav-subitems {
+  display: grid;
+  gap: 2px;
+  margin: -2px 0 4px 32px;
+  padding-left: 9px;
+  border-left: 1px solid rgb(170 180 196 / 18%);
+}
+.nav-list .nav-subitem {
+  min-height: 30px;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 650;
+}
+.nav-list .nav-subitem.router-link-active {
+  background: rgb(91 95 246 / 16%);
+  box-shadow: none;
+}
+.nav-list .nav-subitem.router-link-active::before { display: none; }
+.nav-subitem-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: .7;
+}
+.mobile-nav-subitems { margin-left: 30px; }
 
 .nav-icon {
   width: 20px;
@@ -2039,4 +2071,394 @@ tr.selected td:first-child {
   border-color: var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 20%, transparent);
   outline-offset: 0;
+}
+
+/* DBCRM_UPDATE_20260831: accounting UX */
+.accounting-period-filter {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  flex: 0 1 520px;
+  width: min(100%, 520px);
+  min-width: min(100%, 460px);
+  min-height: 172px;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+.accounting-period-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.accounting-period-title { display: grid; gap: 3px; min-width: 0; }
+.accounting-period-heading .eyebrow { margin: 0; font-size: 10px; }
+.accounting-period-heading strong { font-size: 14px; line-height: 1.25; text-transform: capitalize; }
+.accounting-period-modes { display: flex; flex: 0 0 auto; gap: 5px; }
+.accounting-period-modes button {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 5px 10px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.accounting-period-modes button.active { border-color: var(--accent); color: var(--accent-dark); background: var(--surface-blue); font-weight: 700; }
+.accounting-period-body { display: grid; align-items: end; min-height: 66px; }
+.accounting-period-fields { display: grid; gap: 10px; align-items: end; }
+.accounting-period-fields-month { grid-template-columns: minmax(210px, 250px) minmax(180px, 1fr); }
+.accounting-period-fields-range { grid-template-columns: repeat(2, minmax(190px, 1fr)); }
+.accounting-period-fields label { display: grid; gap: 5px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.accounting-period-fields input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 42px; }
+.accounting-period-note { align-self: center; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.accounting-period-all-state { display: grid; align-content: center; min-height: 58px; gap: 3px; }
+.accounting-period-all-state strong { font-size: 13px; }
+.accounting-period-all-state span { color: var(--muted); font-size: 11px; }
+
+.accounting-settings-menu {
+  margin: 8px 0; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-soft);
+}
+.accounting-settings-menu > summary {
+  cursor: pointer; list-style: none; padding: 10px 13px; font-size: 12px; font-weight: 750; color: var(--text-soft);
+}
+.accounting-settings-menu > summary::-webkit-details-marker { display: none; }
+.accounting-settings-menu > summary::after { content: '▾'; float: right; color: var(--muted); }
+.accounting-settings-menu[open] > summary::after { content: '▴'; }
+.accounting-settings-menu[open] > summary { border-bottom: 1px solid var(--border); }
+.accounting-settings-menu > .toolbar-form,
+.accounting-settings-menu > .field-chip-row,
+.accounting-settings-menu > .form-hint { margin: 10px 12px; }
+
+.accounting-stock-cost { display: inline; margin-left: 4px; color: var(--muted); font-size: 11px; line-height: inherit; font-weight: 650; white-space: nowrap; }
+.component-characteristics-line { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+/* Keep the normal readable typography.  Only spacing and minimum column widths
+   are reduced a little so the table is denser without turning into tiny text. */
+.accounting-table { overflow-x: auto; }
+.accounting-table > table { width: max-content; min-width: 100%; table-layout: auto; }
+.accounting-table th,
+.accounting-table td { padding: 9px 8px; vertical-align: top; }
+.accounting-table .filterable-table-header { min-width: 7.6rem; }
+.accounting-table .table-column-filter { min-width: 5.2rem; height: 30px; margin-top: 7px; padding-inline: 6px; }
+.accounting-table .accounting-identity-cell { min-width: 220px; }
+.accounting-table .accounting-expense-cell { min-width: 88px; padding: 6px 5px; }
+.accounting-table .table-money { white-space: nowrap; }
+
+.contract-accounting-search { align-items: flex-start; width: min(100%, 1180px); }
+.contract-accounting-search > input:first-child { flex: 1 1 300px; min-width: 250px; }
+.contract-accounting-search .accounting-period-filter { flex: 0 1 520px; }
+
+.client-documents-tabs { margin-bottom: 14px; }
+.client-mtz-panel { display: grid; gap: 14px; }
+.client-mtz-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, .7fr); gap: 14px; align-items: start; }
+.client-mtz-form { display: grid; gap: 14px; }
+.client-mtz-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.client-mtz-form-grid .wide-field { grid-column: 1 / -1; }
+.client-mtz-preview { display: grid; gap: 8px; }
+.client-mtz-preview dl { display: grid; gap: 8px; margin: 0; }
+.client-mtz-preview dl > div { display: grid; gap: 2px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.client-mtz-preview dt { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.client-mtz-preview dd { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+
+@media (max-width: 1000px) {
+  .accounting-period-filter { flex-basis: 100%; width: 100%; min-width: 0; }
+  .accounting-period-heading { gap: 10px; }
+  .contract-accounting-search .accounting-period-filter { flex-basis: 100%; }
+  .client-mtz-layout { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .accounting-period-filter { min-height: 0; }
+  .accounting-period-heading { flex-direction: column; }
+  .accounting-period-modes { width: 100%; }
+  .accounting-period-modes button { flex: 1 1 0; }
+  .accounting-period-fields-month,
+  .accounting-period-fields-range { grid-template-columns: 1fr; }
+  .accounting-period-note { display: none; }
+  .accounting-table > table { min-width: 980px; }
+  .client-mtz-form-grid { grid-template-columns: 1fr; }
+  .client-mtz-form-grid .wide-field { grid-column: auto; }
+}
+
+/* DBCRM_UPDATE_20260831: Documents + TSR workspace */
+.documents-page .tabs { margin-bottom: 12px; }
+.documents-client-picker { align-items: end; margin-bottom: 12px; }
+.documents-client-picker label { min-width: min(420px, 100%); }
+.documents-generator { display: grid; gap: 16px; }
+.documents-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.documents-wide-field { grid-column: span 2; }
+.documents-tsr-selector { display: grid; gap: 9px; }
+.documents-tsr-card { border: 1px solid var(--border); border-radius: 13px; padding: 10px 12px; background: var(--surface-soft); }
+.documents-component-list { display: grid; gap: 6px; margin: 8px 0 0 24px; }
+.documents-mtz-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(260px, .7fr); gap: 14px; align-items: start; }
+.documents-autofill-preview dl { display: grid; gap: 8px; margin: 0; }
+.documents-autofill-preview dl > div { display: grid; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.documents-autofill-preview dt { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.documents-autofill-preview dd { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+.documents-history { margin-top: 14px; }
+.documents-file-list { display: grid; gap: 7px; }
+.documents-file-row { width: 100%; display: flex; justify-content: space-between; gap: 12px; align-items: center; border: 1px solid var(--border); border-radius: 11px; padding: 9px 11px; background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.documents-file-row:hover { border-color: var(--accent); }
+.documents-file-row > span:first-child { display: grid; gap: 2px; min-width: 0; }
+.documents-file-row strong, .documents-file-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.documents-file-row small { color: var(--muted); }
+
+.tsr-reference-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .7fr); gap: 14px; align-items: start; }
+.tsr-reference-toolbar { align-items: end; margin-bottom: 12px; }
+.tsr-reference-toolbar label { min-width: min(520px, 100%); }
+.tsr-reference-rows { display: grid; gap: 6px; max-height: calc(100vh - 300px); overflow: auto; padding-right: 4px; }
+.tsr-reference-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 11px; padding: 8px 10px; background: var(--surface-soft); }
+.tsr-reference-row .link-button { text-align: left; overflow-wrap: anywhere; }
+.tsr-reference-editor { position: sticky; top: 16px; }
+
+@media (max-width: 980px) {
+  .documents-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .documents-mtz-layout, .tsr-reference-layout { grid-template-columns: 1fr; }
+  .tsr-reference-editor { position: static; }
+}
+@media (max-width: 650px) {
+  .documents-form-grid { grid-template-columns: 1fr; }
+  .documents-wide-field { grid-column: auto; }
+  .documents-file-row, .tsr-reference-row { align-items: flex-start; flex-direction: column; }
+}
+
+
+/* DBCRM_ROUND4_20260831: compact accounting layout without reducing typography. */
+.accounting-query-search {
+  width: min(100%, 760px);
+  margin-bottom: 10px;
+}
+.accounting-query-search > input {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.accounting-period-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  width: 100%;
+  margin: 10px 0 14px;
+}
+.accounting-period-controls .accounting-period-filter {
+  flex: 0 1 600px;
+  width: min(100%, 600px);
+  min-width: 0;
+}
+.accounting-period-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding-bottom: 1px;
+}
+.accounting-period-filter {
+  grid-template-rows: auto auto;
+  min-height: 0;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.accounting-period-heading { align-items: center; }
+.accounting-period-body {
+  min-height: 54px;
+  align-items: end;
+}
+.accounting-period-fields-month {
+  grid-template-columns: minmax(190px, 230px) minmax(150px, 1fr);
+}
+.accounting-period-fields-range {
+  grid-template-columns: repeat(2, minmax(180px, 230px));
+}
+.accounting-period-fields input { min-height: 38px; }
+.accounting-period-note {
+  max-width: 260px;
+  font-size: 10.5px;
+}
+.accounting-period-all-state {
+  min-height: 54px;
+  align-content: center;
+}
+
+/* The table keeps the normal font size. We only remove artificial minimum widths
+   and let each column size itself from its actual label/value content. */
+.accounting-table > table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+}
+.accounting-table th,
+.accounting-table td {
+  padding: 8px 6px;
+}
+.accounting-table .filterable-table-header {
+  width: 1%;
+  min-width: 6.4rem;
+  max-width: 9rem;
+}
+.accounting-table .filterable-table-header[data-column-key="client"] {
+  width: auto;
+  min-width: 13rem;
+  max-width: 17rem;
+}
+.accounting-table .filterable-table-header[data-column-key="modules_cost"] {
+  min-width: 9.5rem;
+  max-width: 11.5rem;
+}
+.accounting-table .filterable-table-header[data-column-key="prosthetist_work"],
+.accounting-table .filterable-table-header[data-column-key="patient_accommodation"] {
+  min-width: 8.2rem;
+  max-width: 9.5rem;
+}
+.accounting-table .table-sort-button {
+  line-height: 1.2;
+  white-space: normal;
+}
+.accounting-table .table-sort-button > span:first-child {
+  overflow-wrap: anywhere;
+}
+.accounting-table .table-column-filter {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  padding-inline: 5px;
+}
+.accounting-table .accounting-identity-cell {
+  min-width: 13rem;
+  max-width: 17rem;
+}
+.accounting-table .table-money {
+  width: 1%;
+  min-width: 0;
+  white-space: nowrap;
+}
+.accounting-table .accounting-expense-cell {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px;
+}
+.accounting-table .table-input {
+  width: 6.7rem;
+  min-width: 0;
+  max-width: 7.5rem;
+}
+.accounting-table .accounting-stock-cost {
+  display: block;
+  margin: 2px 0 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .accounting-period-controls { align-items: stretch; flex-direction: column; }
+  .accounting-period-controls .accounting-period-filter { width: 100%; flex-basis: auto; }
+  .accounting-period-actions { padding-bottom: 0; }
+}
+
+/* DBCRM_ROUND5_20260901: stable accounting columns, month-first period controls and readable MTZ date. */
+.accounting-table > table {
+  width: max-content;
+  min-width: 0;
+  table-layout: auto;
+}
+.accounting-table .filterable-table-header[data-column-key="client"],
+.accounting-table .accounting-identity-cell {
+  box-sizing: border-box;
+  width: 18rem;
+  min-width: 18rem;
+  max-width: 18rem;
+}
+.accounting-table .accounting-client-link strong,
+.accounting-table .accounting-client-link .muted {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.accounting-table .filterable-table-header[data-column-key="certificate"] {
+  width: 9rem;
+  min-width: 9rem;
+  max-width: 9rem;
+}
+.accounting-table .filterable-table-header[data-column-key="modules_cost"] {
+  width: 11rem;
+  min-width: 11rem;
+  max-width: 11rem;
+}
+.accounting-table th:last-child,
+.accounting-table td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.accounting-period-fields .month-input select,
+.accounting-period-fields .month-input input {
+  min-height: 38px;
+}
+.accounting-period-fields-month {
+  grid-template-columns: minmax(180px, 220px) minmax(150px, 1fr);
+}
+.accounting-period-fields-range {
+  grid-template-columns: repeat(2, minmax(180px, 220px));
+}
+
+.client-mtz-form-grid {
+  grid-template-columns: minmax(180px, .72fr) minmax(340px, 1.28fr);
+}
+.client-mtz-form-grid .mtz-date-field,
+.documents-form-grid .mtz-date-field {
+  min-width: 0;
+}
+.client-mtz-form-grid .mtz-date-field .date-input,
+.documents-form-grid .mtz-date-field .date-input {
+  width: 100%;
+  min-width: 328px;
+  max-width: 100%;
+}
+.client-mtz-form-grid .mtz-date-field .date-input-day,
+.client-mtz-form-grid .mtz-date-field .date-input-month,
+.documents-form-grid .mtz-date-field .date-input-day,
+.documents-form-grid .mtz-date-field .date-input-month {
+  flex: 0 0 76px;
+  width: 76px;
+}
+.client-mtz-form-grid .mtz-date-field .date-input-year,
+.documents-form-grid .mtz-date-field .date-input-year {
+  flex: 1 0 118px;
+  width: 118px;
+  min-width: 118px;
+}
+.client-mtz-form-grid .mtz-date-field .date-input-clear,
+.documents-form-grid .mtz-date-field .date-input-clear {
+  flex: 0 0 38px;
+  width: 38px;
+}
+
+@media (max-width: 760px) {
+  .accounting-table .filterable-table-header[data-column-key="client"],
+  .accounting-table .accounting-identity-cell {
+    width: 15rem;
+    min-width: 15rem;
+    max-width: 15rem;
+  }
+  .client-mtz-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .client-mtz-form-grid .wide-field {
+    grid-column: auto;
+  }
+  .client-mtz-form-grid .mtz-date-field .date-input,
+  .documents-form-grid .mtz-date-field .date-input {
+    min-width: 290px;
+  }
+  .client-mtz-form-grid .mtz-date-field .date-input-day,
+  .client-mtz-form-grid .mtz-date-field .date-input-month,
+  .documents-form-grid .mtz-date-field .date-input-day,
+  .documents-form-grid .mtz-date-field .date-input-month {
+    flex-basis: 66px;
+    width: 66px;
+  }
+  .client-mtz-form-grid .mtz-date-field .date-input-year,
+  .documents-form-grid .mtz-date-field .date-input-year {
+    flex-basis: 104px;
+    width: 104px;
+    min-width: 104px;
+  }
 }

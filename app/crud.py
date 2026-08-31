@@ -1485,6 +1485,7 @@ def _detach_module_units(
         is_archived=bool(source.is_archived),
         is_manually_archived=bool(source.is_manually_archived),
         is_in_stock=bool(source.is_in_stock),
+        accounting_cost_excluded=bool(source.accounting_cost_excluded),
         created_at=source.created_at,
         updated_at=source.updated_at,
     )
@@ -1544,6 +1545,7 @@ def create_module(db: Session, module_in: schemas.ModuleCreate) -> models.Module
         is_archived=bool(client.is_archived) if client else False,
         is_manually_archived=False,
         is_in_stock=client is None,
+        accounting_cost_excluded=False,
     )
 
     db.add(db_module)
@@ -1628,7 +1630,13 @@ def update_module(
     db_module = db.get(models.Module, module_id)
     if not db_module:
         return None
-    
+
+    # DBCRM_UPDATE_20260831: direct stock assignment
+    # Capture the source state before splitting/moving the row.  Accounting is
+    # excluded only when the user assigns the item directly from «Склад», not
+    # from «Рабочий склад».
+    was_in_stock = bool(db_module.is_in_stock)
+    was_accounting_excluded = bool(db_module.accounting_cost_excluded)
     data = payload.model_dump(exclude_unset=True)
     
     # Если меняем владельца
@@ -1706,7 +1714,10 @@ def update_module(
 
     for k, v in data.items():
         setattr(target_module, k, v)
-    
+
+    if 'client_id' in data and target_module.client_id is not None:
+        target_module.accounting_cost_excluded = bool(was_in_stock or was_accounting_excluded)
+
     db.add(target_module)
     try:
         db.commit()
@@ -1784,8 +1795,10 @@ def set_module_stock_state(
         target_module.client_id = None
         target_module.client_tsr_id = None
         target_module.is_in_stock = True
+        target_module.accounting_cost_excluded = False
     else:
         target_module.is_in_stock = False
+        target_module.accounting_cost_excluded = False
 
     try:
         db.commit()
@@ -2296,3 +2309,4 @@ def update_user_settings(db: Session, user_id: UUID, settings: dict):
     db.commit()
     db.refresh(user)
     return user
+

@@ -3322,3 +3322,284 @@ body.modal-open {
     flex-direction: column;
   }
 }
+
+
+
+/* DBCRM_ROUND6_20260901: final accounting density and toolbar layout.
+   This block intentionally lives in light-refresh.css because that stylesheet
+   is loaded last and otherwise re-expands all tables to min-width: 100%. */
+.accounting-page .metric-grid,
+.accounting-tab-content .metric-grid {
+  gap: 10px;
+}
+
+.accounting-page .metric-card,
+.accounting-tab-content .metric-card {
+  min-height: 94px;
+  padding: 13px 16px;
+  border-radius: 16px;
+}
+
+.accounting-page .metric-card strong,
+.accounting-tab-content .metric-card strong {
+  margin-top: 6px;
+  font-size: clamp(21px, 1.65vw, 27px);
+  line-height: 1.1;
+}
+
+.accounting-page .metric-card span,
+.accounting-tab-content .metric-card span {
+  line-height: 1.25;
+}
+
+.accounting-page .metric-card::after,
+.accounting-tab-content .metric-card::after {
+  right: -24px;
+  bottom: -38px;
+  width: 76px;
+  height: 76px;
+}
+
+.accounting-filter-row {
+  display: grid;
+  grid-template-columns: minmax(620px, auto) minmax(280px, 1fr);
+  align-items: end;
+  gap: 14px;
+  width: 100%;
+  margin: 8px 0 12px;
+}
+
+.accounting-filter-row .accounting-period-controls {
+  width: auto;
+  margin: 0;
+}
+
+.accounting-filter-row .accounting-query-search-inline {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  align-self: end;
+}
+
+.accounting-filter-row .accounting-query-search-inline > input {
+  width: 100%;
+}
+
+/* Do not force accounting tables to fill the viewport.  The wrapper remains
+   full-width, but the table itself is only as wide as the sum of its columns. */
+.table-wrap.accounting-table > table,
+.accounting-table > table {
+  width: max-content !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+/* The client column must not absorb leftover viewport width. */
+.accounting-table .filterable-table-header[data-column-key="client"],
+.accounting-table .accounting-identity-cell {
+  box-sizing: border-box;
+  width: 1% !important;
+  min-width: 14rem !important;
+  max-width: 17rem !important;
+}
+
+.accounting-table .accounting-client-link {
+  display: grid;
+  width: fit-content !important;
+  max-width: 17rem !important;
+  min-width: 0 !important;
+  justify-items: start;
+}
+
+.accounting-table .accounting-client-link strong,
+.accounting-table .accounting-client-link .muted {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Keep all other accounting columns compact while preserving readable data. */
+.accounting-table .filterable-table-header:not([data-column-key="client"]) {
+  width: auto !important;
+  min-width: 7.1rem !important;
+  max-width: 10.5rem !important;
+}
+
+.accounting-table .filterable-table-header[data-column-key="certificate"] {
+  min-width: 8.2rem !important;
+  max-width: 8.8rem !important;
+}
+
+.accounting-table .filterable-table-header[data-column-key="modules_cost"] {
+  min-width: 9.4rem !important;
+  max-width: 10rem !important;
+}
+
+.accounting-table th,
+.accounting-table td {
+  padding-inline: 6px;
+}
+
+.accounting-table .table-column-filter {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  padding-inline: 6px;
+}
+
+.accounting-table .table-money {
+  width: auto !important;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .accounting-filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .accounting-filter-row .accounting-query-search-inline {
+    max-width: 720px;
+  }
+}
+
+@media (max-width: 760px) {
+  .accounting-page .metric-card,
+  .accounting-tab-content .metric-card {
+    min-height: 84px;
+    padding: 12px 14px;
+  }
+
+  .accounting-table .filterable-table-header[data-column-key="client"],
+  .accounting-table .accounting-identity-cell {
+    width: 1% !important;
+    min-width: 13rem !important;
+    max-width: 15rem !important;
+  }
+
+  .accounting-table .accounting-client-link {
+    width: fit-content !important;
+    min-width: 0 !important;
+    max-width: 15rem !important;
+  }
+}
+
+/* DBCRM_ROUND7_20260901: accounting table width fix only.
+   With table-layout:auto, max-width on TH does not cap the column: body controls
+   (especially .accounting-expense-cell { width:100% }) can make every numeric
+   column grow.  Shrink every non-client column to its actual control/content
+   width and keep the client column compact and predictable. */
+.table-wrap.accounting-table > table,
+.accounting-table > table {
+  width: max-content !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+/* All columns start in shrink-to-content mode. */
+.accounting-table > table > thead > tr > th,
+.accounting-table > table > tbody > tr > td {
+  width: 1% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+/* Client: enough for a readable name, but never a viewport filler. */
+.accounting-table .filterable-table-header[data-column-key="client"],
+.accounting-table .accounting-identity-cell {
+  width: 15rem !important;
+  min-width: 15rem !important;
+  max-width: 15rem !important;
+}
+
+.accounting-table .accounting-client-link {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+/* Numeric / custom headers no longer define a large flexible track. */
+.accounting-table .filterable-table-header:not([data-column-key="client"]) {
+  width: 1% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  white-space: normal;
+}
+
+/* The filter control is the compact, explicit width anchor for each column. */
+.accounting-table .filterable-table-header:not([data-column-key="client"]) .table-column-filter {
+  box-sizing: border-box;
+  width: 8.6rem !important;
+  min-width: 8.6rem !important;
+  max-width: 8.6rem !important;
+}
+
+/* Slightly more room only where the heading/value genuinely needs it. */
+.accounting-table .filterable-table-header[data-column-key="modules_cost"] .table-column-filter {
+  width: 9.4rem !important;
+  min-width: 9.4rem !important;
+  max-width: 9.4rem !important;
+}
+
+.accounting-table .filterable-table-header[data-column-key="certificate"] .table-column-filter {
+  width: 8.2rem !important;
+  min-width: 8.2rem !important;
+  max-width: 8.2rem !important;
+}
+
+/* Body controls must not re-expand the tracks created above. */
+.accounting-table .accounting-expense-cell {
+  box-sizing: border-box;
+  width: 8.6rem !important;
+  min-width: 8.6rem !important;
+  max-width: 8.6rem !important;
+}
+
+.accounting-table .table-input {
+  box-sizing: border-box;
+  width: 8.6rem !important;
+  min-width: 8.6rem !important;
+  max-width: 8.6rem !important;
+}
+
+.accounting-table .table-money {
+  width: 1% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  white-space: nowrap;
+}
+
+/* Keep headings readable inside compact tracks instead of widening tracks. */
+.accounting-table .table-sort-button {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+}
+
+.accounting-table .table-sort-button > span:first-child {
+  min-width: 0;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: auto;
+}
+
+/* Empty/action column should also stay content-sized. */
+.accounting-table > table > thead > tr > th:last-child,
+.accounting-table > table > tbody > tr > td:last-child {
+  width: 1% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .accounting-table .filterable-table-header[data-column-key="client"],
+  .accounting-table .accounting-identity-cell {
+    width: 13.5rem !important;
+    min-width: 13.5rem !important;
+    max-width: 13.5rem !important;
+  }
+}

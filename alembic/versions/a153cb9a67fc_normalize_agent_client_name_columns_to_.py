@@ -61,3 +61,4 @@ def downgrade() -> None:
     op.execute('ALTER TABLE "CLIENT" ALTER COLUMN last_name TYPE TEXT USING last_name;')
     op.alter_column('CLIENT', 'first_name', nullable=True, existing_type=sa.VARCHAR(length=128))
     op.alter_column('CLIENT', 'middle_name', nullable=True, existing_type=sa.VARCHAR(length=128))
+

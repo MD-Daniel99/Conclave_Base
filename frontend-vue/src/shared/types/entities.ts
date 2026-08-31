@@ -106,6 +106,7 @@ export type ComponentItem = ModuleRead & {
   is_archived?: boolean
   is_manually_archived?: boolean
   is_in_stock?: boolean
+  accounting_cost_excluded?: boolean
 }
 export type ComponentCreatePayload = ModuleCreate
 export type ComponentUpdatePayload = ModuleUpdate
@@ -184,6 +185,7 @@ export interface AccountingReportClient {
 export interface AccountingReportAmounts {
   revenue: number
   cost: number
+  stock_reused_cost?: number
   salary: number
   custom_expenses: number
   revenue_without_vat?: number
@@ -228,6 +230,8 @@ export interface AccountingReport {
 export interface ContractAccountingAmounts {
   certificate: number
   modules_cost: number
+  // DBCRM_UPDATE_20260831: accounting stock
+  stock_reused_cost?: number
   prosthetist_work: number
   patient_travel: number
   patient_accommodation: number
@@ -288,3 +292,4 @@ export interface ClientContractCoverage {
   uncovered_module_ids: string[]
   uncovered_module_names: string[]
 }
+

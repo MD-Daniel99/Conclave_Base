@@ -54,3 +54,4 @@ def downgrade() -> None:
             server_default=None,
             postgresql_using=f'"{name}"::text',
         )
+

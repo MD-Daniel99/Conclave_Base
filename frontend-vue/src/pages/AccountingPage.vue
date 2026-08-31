@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import DateInput from '@/shared/ui/DateInput.vue'
+import AccountingPeriodFilter from '@/shared/ui/AccountingPeriodFilter.vue'
 import ContractAccountingTab from '@/pages/ContractAccountingTab.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
 
@@ -62,6 +62,7 @@ const trailingColumns = [
   { key: 'vat', label: 'НДС' },
   { key: 'tax', label: 'Налог' },
   { key: 'acquiring', label: 'Эквайринг' },
+  { key: 'expenses', label: 'Расходы' },
   { key: 'profit', label: 'Прибыль' },
 ]
 
@@ -188,11 +189,10 @@ const calculatedRows = computed(() =>
     const certificateIds = new Set(certificateSlices.map((item) => item.id).filter(Boolean))
     const rawCertificate = certificateSlices.reduce((sum, item) => sum + item.amount, 0)
     const rawModulesCost = getModulesCost(client, certificateIds)
-    const fixedExpenses = expenseColumns.reduce((sum, column) => {
-      const value = getExpenseCellTotal(client, column.key)
-      const paid = getExpenseCellPaid(client, column.key)
-      return sum + (paid ? value : 0)
-    }, 0)
+    const stockReusedCost = getStockReusedCost(client, certificateIds)
+    const fixedExpenses = expenseColumns.reduce((sum, column) => (
+      sum + getExpenseCellTotal(client, column.key)
+    ), 0)
     const customExpenses = numericCustomFields.value.reduce(
       (sum, field) => {
         const key = getCustomColumnKey(field)
@@ -210,17 +210,20 @@ const calculatedRows = computed(() =>
     )
     const tax = taxBase * (taxPercent / 100)
     const profit = revenueWithoutVat - rawModulesCost - fixedExpenses - customExpenses - acquiring - tax
+    const totalExpenses = rawModulesCost + fixedExpenses + customExpenses + vat + tax + acquiring
 
     return {
       client,
       certificateDates: certificateSlices.map((item) => item.date).filter(Boolean),
       certificate: rawCertificate,
       modulesCost: rawModulesCost,
+      stockReusedCost,
       fixedExpenses,
       customExpenses,
       vat,
       tax,
       acquiring,
+      totalExpenses,
       profit,
     }
   }),
@@ -233,6 +236,7 @@ function accountingColumnValue(row: (typeof calculatedRows.value)[number], key: 
   if (key === 'vat') return row.vat
   if (key === 'tax') return row.tax
   if (key === 'acquiring') return row.acquiring
+  if (key === 'expenses') return row.totalExpenses
   if (key === 'profit') return row.profit
   if (key.startsWith('custom:')) {
     const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
@@ -376,7 +380,20 @@ function getModulesCost(client: Client, visibleCertificateIds: Set<string>) {
   const dateFilterActive = Boolean(startDate.value || endDate.value)
   const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
   return (client.modules ?? []).reduce((sum, component) => {
-    if (component.is_archived) return sum
+    if (component.is_archived || component.accounting_cost_excluded) return sum
+    if (dateFilterActive && hasNormalizedCertificates) {
+      const certificateId = String(component.client_tsr_id ?? '')
+      if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
+    }
+    return sum + parseMoney(component.cost)
+  }, 0)
+}
+
+function getStockReusedCost(client: Client, visibleCertificateIds: Set<string>) {
+  const dateFilterActive = Boolean(startDate.value || endDate.value)
+  const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
+  return (client.modules ?? []).reduce((sum, component) => {
+    if (component.is_archived || !component.accounting_cost_excluded) return sum
     if (dateFilterActive && hasNormalizedCertificates) {
       const certificateId = String(component.client_tsr_id ?? '')
       if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
@@ -857,6 +874,8 @@ onMounted(async () => {
       </button>
     </div>
 
+    <details class="accounting-settings-menu accounting-calculation-menu">
+      <summary>Параметры расчёта</summary>
     <div class="toolbar-form accounting-percent-toolbar">
       <label>
         УСН · первая ставка, %
@@ -879,17 +898,9 @@ onMounted(async () => {
       </span>
     </div>
 
-    <template v-if="activeAccountingTab === 'clients'">
-      <form class="inline-search wide-search contract-accounting-search" @submit.prevent="loadData">
-        <input v-model="query" placeholder="ФИО, телефон, паспорт, СНИЛС, ТСР или агент" />
-        <DateInput v-model="startDate" aria-label="Дата начала" />
-        <DateInput v-model="endDate" aria-label="Дата окончания" />
-        <button class="secondary-button" type="submit">Обновить</button>
-        <button v-if="activeAccountingFilterCount" class="ghost-button" type="button" @click="resetAccountingFilters">
-          Сбросить фильтры
-        </button>
-      </form>
+    </details>
 
+    <template v-if="activeAccountingTab === 'clients'">
       <p v-if="error" class="form-error">{{ error }}</p>
       <p v-if="successMessage" class="form-success">{{ successMessage }}</p>
 
@@ -910,6 +921,23 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div class="accounting-filter-row">
+        <form class="accounting-period-controls" @submit.prevent="loadData">
+          <AccountingPeriodFilter v-model:start-date="startDate" v-model:end-date="endDate" storage-key="dbcrm.accounting.clients.period" />
+          <div class="accounting-period-actions">
+            <button class="secondary-button" type="submit">Обновить</button>
+            <button v-if="activeAccountingFilterCount" class="ghost-button" type="button" @click="resetAccountingFilters">
+              Сбросить фильтры
+            </button>
+          </div>
+        </form>
+        <div class="inline-search wide-search accounting-query-search accounting-query-search-inline">
+          <input v-model="query" placeholder="ФИО, телефон, паспорт, СНИЛС, ТСР или агент" />
+        </div>
+      </div>
+
+      <details class="accounting-settings-menu">
+        <summary>Настройки таблицы и полей</summary>
       <div class="toolbar-form accounting-toolbar">
         <label class="checkbox-label">
           <input v-model="hideFailed" type="checkbox" />
@@ -962,6 +990,8 @@ onMounted(async () => {
         </button>
       </div>
 
+      </details>
+
       <p v-if="isLoading" class="muted">Загружаем бухгалтерию...</p>
 
       <div v-else class="table-wrap accounting-table">
@@ -1000,6 +1030,7 @@ onMounted(async () => {
               <SortableFilterHeader v-if="isColumnVisible('vat')" label="НДС" column-key="vat" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.vat" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.vat = $event" />
               <SortableFilterHeader v-if="isColumnVisible('tax')" label="Налог" column-key="tax" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.tax" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.tax = $event" />
               <SortableFilterHeader v-if="isColumnVisible('acquiring')" label="Эквайринг" column-key="acquiring" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.acquiring" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.acquiring = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('expenses')" label="Расходы" column-key="expenses" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.expenses" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.expenses = $event" />
               <SortableFilterHeader v-if="isColumnVisible('profit')" label="Прибыль" column-key="profit" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.profit" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.profit = $event" />
               <th></th>
             </tr>
@@ -1020,7 +1051,10 @@ onMounted(async () => {
                 </button>
               </td>
               <td v-if="isColumnVisible('certificate')" class="table-money">{{ formatMoney(row.certificate) }}</td>
-              <td v-if="isColumnVisible('modules_cost')" class="table-money">{{ formatMoney(row.modulesCost) }}</td>
+              <td v-if="isColumnVisible('modules_cost')" class="table-money">
+                {{ formatMoney(row.modulesCost) }}
+                <small class="accounting-stock-cost" title="Ранее купленные комплектующие со Склада; повторно в расходы не включаются">(со Склада: {{ formatMoney(row.stockReusedCost) }})</small>
+              </td>
               <td v-for="column in expenseColumns.filter((item) => isColumnVisible(item.key))" :key="column.key">
                 <button
                   class="accounting-expense-cell"
@@ -1062,6 +1096,7 @@ onMounted(async () => {
                 {{ formatMoney(row.tax) }}
               </td>
               <td v-if="isColumnVisible('acquiring')" class="table-money">{{ formatMoney(row.acquiring) }}</td>
+              <td v-if="isColumnVisible('expenses')" class="table-money"><strong>{{ formatMoney(row.totalExpenses) }}</strong></td>
               <td
                 v-if="isColumnVisible('profit')"
                 class="table-money"
@@ -1183,3 +1218,4 @@ onMounted(async () => {
     />
   </section>
 </template>
+

@@ -150,3 +150,4 @@ def downgrade() -> None:
     module_columns = {column["name"] for column in sa.inspect(bind).get_columns("MODULES")}
     if "tsr_id" in module_columns:
         op.drop_column("MODULES", "tsr_id")
+

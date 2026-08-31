@@ -48,3 +48,4 @@ def downgrade() -> None:
                type_=sa.TEXT(),
                existing_nullable=False)
     # ### end Alembic commands ###
+

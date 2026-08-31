@@ -149,3 +149,4 @@ def downgrade() -> None:
     op.drop_table('AUDIT_LOG')
     op.drop_table('AGENT')
     # ### end Alembic commands ###
+

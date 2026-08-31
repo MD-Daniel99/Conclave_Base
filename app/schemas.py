@@ -135,6 +135,7 @@ class ModuleRead(ModuleBase):
     is_archived: bool = False
     is_manually_archived: bool = False
     is_in_stock: bool = False
+    accounting_cost_excluded: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -612,6 +613,7 @@ class DocumentType:
     LLC_CONTRACT = "llc_contract"
     DMK_CONTRACT = "dmk_contract"
     DMK_INSTRUMENT = "dmk_instrument"
+    MTZ_8_1_07_14 = "mtz_8_1_07_14"
 
 
 class ContractGeneration(BaseModel):
@@ -626,6 +628,18 @@ class ContractGeneration(BaseModel):
     selected_client_tsr_ids: List[UUID] = Field(default_factory=list)
     selected_tsr_ids: List[UUID] = Field(default_factory=list)
     selected_module_ids: List[UUID] = Field(default_factory=list)
+
+
+# DBCRM_UPDATE_20260831: MTZ
+class MtzGeneration(BaseModel):
+    template_type: str = "mtz_8_1_07_14"
+    mtz_number: str = Field(..., min_length=1, max_length=64)
+    document_date: str = Field(..., min_length=1, max_length=32)
+    disability_group_reason: str = Field(..., min_length=1, max_length=512)
+    certificate_reference: str = Field(..., min_length=1, max_length=512)
+    diagnosis: str = Field(..., min_length=1, max_length=1000)
+    amputation_level: str = Field(..., min_length=1, max_length=512)
+    weight_kg: str = Field(..., min_length=1, max_length=32)
 
 
 class ContractAccountingUpdate(BaseModel):
@@ -735,3 +749,4 @@ DocumentRead.model_rebuild()
 
 ClientRead.model_rebuild() 
 UserRead.model_rebuild()
+

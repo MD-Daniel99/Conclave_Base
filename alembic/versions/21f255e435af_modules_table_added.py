@@ -56,3 +56,4 @@ def downgrade() -> None:
                nullable=False)
     op.drop_table('MODULES')
     # ### end Alembic commands ###
+

@@ -56,3 +56,4 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_USERS_username'), table_name='USERS')
     op.drop_table('USERS')
     # ### end Alembic commands ###
+

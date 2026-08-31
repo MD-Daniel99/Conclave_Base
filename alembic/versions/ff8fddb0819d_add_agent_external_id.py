@@ -72,3 +72,4 @@ def downgrade() -> None:
     # 2) Удаляем последовательности (если они были созданы этим файлом)
     op.execute("DROP SEQUENCE IF EXISTS client_external_id_seq;")
     op.execute("DROP SEQUENCE IF EXISTS agent_external_id_seq;")
+

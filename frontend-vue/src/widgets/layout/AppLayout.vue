@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Drawer from 'primevue/drawer'
 import Menu from 'primevue/menu'
 import {
   ChevronDown,
+  FileText,
   Handshake,
   Landmark,
+  ListTree,
   LayoutDashboard,
   LogOut,
   Menu as MenuIcon,
@@ -31,11 +33,29 @@ const isMobileMenuOpen = ref(false)
 const profileMenu = ref<InstanceType<typeof Menu> | null>(null)
 let presenceTimer: number | undefined
 
-const allNavigationItems = [
+type NavigationItem = {
+  to: string
+  label: string
+  icon: Component
+  adminOnly?: boolean
+  children?: Array<{ to: string; label: string }>
+}
+
+const allNavigationItems: NavigationItem[] = [
   { to: '/', label: 'Обзор', icon: LayoutDashboard },
   { to: '/clients', label: 'Пациенты', icon: UsersRound },
   { to: '/agents', label: 'Агенты', icon: Handshake },
   { to: '/warehouse', label: 'Склад', icon: PackageOpen },
+  {
+    to: '/documents/contracts',
+    label: 'Документы',
+    icon: FileText,
+    children: [
+      { to: '/documents/contracts', label: 'Договоры' },
+      { to: '/documents/mtz', label: 'МТЗ' },
+    ],
+  },
+  { to: '/tsr-references', label: 'Справочник ТСР', icon: ListTree },
   { to: '/accounting', label: 'Бухгалтерия', icon: Landmark, adminOnly: true },
   { to: '/admin/users', label: 'Пользователи', icon: ShieldCheck, adminOnly: true },
   { to: '/settings', label: 'Настройки', icon: Settings },
@@ -49,6 +69,9 @@ const pageTitle = computed(() => {
     clients: 'Клиенты',
     agents: 'Агенты',
     warehouse: 'Склад',
+    'documents-contracts': 'Документы · Договоры',
+    'documents-mtz': 'Документы · МТЗ',
+    'tsr-references': 'Справочник ТСР',
     accounting: 'Бухгалтерия',
     'admin-users': 'Пользователи',
     settings: 'Настройки',
@@ -146,16 +169,23 @@ watch(
 
       <p class="sidebar-section-label">Рабочая область</p>
       <nav class="nav-list" aria-label="Главное меню">
-        <RouterLink
-          v-for="item in navigationItems"
-          :key="item.to"
-          v-tooltip.right="isSidebarCollapsed ? item.label : ''"
-          :to="item.to"
-          :title="isSidebarCollapsed ? item.label : undefined"
-        >
-          <span class="nav-icon"><component :is="item.icon" :size="18" aria-hidden="true" /></span>
-          <span class="nav-text">{{ item.label }}</span>
-        </RouterLink>
+        <template v-for="item in navigationItems" :key="item.to">
+          <RouterLink
+            v-tooltip.right="isSidebarCollapsed ? item.label : ''"
+            :to="item.to"
+            :title="isSidebarCollapsed ? item.label : undefined"
+            :class="{ 'nav-parent-active': item.children?.some((child) => route.path === child.to) }"
+          >
+            <span class="nav-icon"><component :is="item.icon" :size="18" aria-hidden="true" /></span>
+            <span class="nav-text">{{ item.label }}</span>
+          </RouterLink>
+          <div v-if="item.children?.length && !isSidebarCollapsed" class="nav-subitems" aria-label="Подразделы документов">
+            <RouterLink v-for="child in item.children" :key="child.to" :to="child.to" class="nav-subitem">
+              <span class="nav-subitem-dot" aria-hidden="true"></span>
+              <span>{{ child.label }}</span>
+            </RouterLink>
+          </div>
+        </template>
       </nav>
 
       <div class="sidebar-footer">
@@ -238,15 +268,18 @@ watch(
 
     <p class="sidebar-section-label">Рабочая область</p>
     <nav class="nav-list" aria-label="Мобильное меню">
-      <RouterLink
-        v-for="item in navigationItems"
-        :key="item.to"
-        :to="item.to"
-        @click="isMobileMenuOpen = false"
-      >
-        <span class="nav-icon"><component :is="item.icon" :size="18" aria-hidden="true" /></span>
-        <span class="nav-text">{{ item.label }}</span>
-      </RouterLink>
+      <template v-for="item in navigationItems" :key="item.to">
+        <RouterLink :to="item.to" @click="isMobileMenuOpen = false">
+          <span class="nav-icon"><component :is="item.icon" :size="18" aria-hidden="true" /></span>
+          <span class="nav-text">{{ item.label }}</span>
+        </RouterLink>
+        <div v-if="item.children?.length" class="nav-subitems mobile-nav-subitems">
+          <RouterLink v-for="child in item.children" :key="child.to" :to="child.to" class="nav-subitem" @click="isMobileMenuOpen = false">
+            <span class="nav-subitem-dot" aria-hidden="true"></span>
+            <span>{{ child.label }}</span>
+          </RouterLink>
+        </div>
+      </template>
     </nav>
 
     <div class="sidebar-footer">
@@ -264,3 +297,4 @@ watch(
     </div>
   </Drawer>
 </template>
+

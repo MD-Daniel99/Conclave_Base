@@ -42,3 +42,4 @@ def downgrade() -> None:
     op.drop_column('MODULES', 'quantity')
     op.drop_column('MODULES', 'module')
     # ### end Alembic commands ###
+

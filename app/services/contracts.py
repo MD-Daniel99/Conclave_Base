@@ -668,6 +668,16 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         if template_key == "llc_contract"
         else (client.get("modules") or [])
     )
+    component_accounting_flags = {
+        str(module.module_id): bool(getattr(module, "accounting_cost_excluded", False))
+        for module in db.query(models.Module).filter(models.Module.client_id == client_id).all()
+    }
+    for component in selected_document_components:
+        component["accounting_cost_excluded"] = component_accounting_flags.get(
+            str(component.get("module_id") or ""),
+            False,
+        )
+
     selected_document_tsr_items = (
         select_llc_tsr_items(client, payload, selected_document_components)
         if template_key == "llc_contract"
@@ -721,6 +731,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
             "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
             "price": parse_money(component.get("price")),
             "cost": parse_money(component.get("cost")),
+            "accounting_cost_excluded": bool(component.get("accounting_cost_excluded")),
         }
         for component in selected_document_components
     ]
@@ -747,6 +758,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
                     "quantity": max(1, int(parse_money(component.get("quantity")) or 1)),
                     "price": parse_money(component.get("price")),
                     "cost": parse_money(component.get("cost")),
+                    "accounting_cost_excluded": bool(component.get("accounting_cost_excluded")),
                 }
                 for component in components_by_client_tsr.get(
                     str(
@@ -762,7 +774,17 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         for item in selected_document_tsr_items
     ] if template_key == "llc_contract" else []
 
-    components_cost = sum(parse_money(component.get("cost")) for component in selected_document_components)
+    # DBCRM_UPDATE_20260831: stock reuse snapshot
+    components_cost = sum(
+        parse_money(component.get("cost"))
+        for component in selected_document_components
+        if not bool(component.get("accounting_cost_excluded"))
+    )
+    stock_reused_cost = sum(
+        parse_money(component.get("cost"))
+        for component in selected_document_components
+        if bool(component.get("accounting_cost_excluded"))
+    )
     certificate_amount = (
         sum(parse_money(item.get("certificate_price")) for item in selected_document_tsr_items)
         if selected_document_tsr_items
@@ -822,6 +844,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
             "selected_components": component_snapshot,
             "selected_tsr_components": tsr_component_snapshot,
             "components_cost": components_cost,
+            "stock_reused_cost": stock_reused_cost,
             # Обратная совместимость с ранее сформированными отчётами/выгрузками.
             "selected_modules": [
                 {
@@ -830,6 +853,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
                     "tsr": (component.get("tsr") or {}).get("full_tsr_code"),
                     "price": parse_money(component.get("price")),
                     "cost": parse_money(component.get("cost")),
+                    "accounting_cost_excluded": bool(component.get("accounting_cost_excluded")),
                 }
                 for component in selected_document_components
             ],
@@ -863,4 +887,5 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         except OSError:
             pass
     return db_doc
+
 

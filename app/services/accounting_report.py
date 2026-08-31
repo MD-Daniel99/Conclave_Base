@@ -340,9 +340,17 @@ def build_accounting_report(
             date_filter_active=bool(start_date or end_date),
             has_normalized_certificates=has_normalized_certificates,
         )
+        stock_reused_cost = sum_client_stock_reused_cost(
+            client.modules or [],
+            selected_certificate_ids=selected_certificate_ids,
+            date_filter_active=bool(start_date or end_date),
+            has_normalized_certificates=has_normalized_certificates,
+        )
 
+        # Payment status is informational.  Work performed by the prosthetist
+        # is an expense regardless of whether that payable has already been paid.
         expenses = {
-            key: (accounting_expense_total(client, key) if accounting_expense_paid(client, key) else 0.0)
+            key: accounting_expense_total(client, key)
             for key in FIXED_EXPENSE_KEYS
         }
         fixed_expenses = sum(expenses.values())
@@ -385,6 +393,7 @@ def build_accounting_report(
             "amounts": {
                 "revenue": revenue,
                 "cost": modules_cost,
+                "stock_reused_cost": stock_reused_cost,
                 "salary": fixed_expenses,
                 "custom_expenses": custom_expenses,
                 "tax_percent": applied_tax_percent,
@@ -484,16 +493,15 @@ def build_contract_accounting_report(
 
         metadata = document.contract_metadata if isinstance(document.contract_metadata, dict) else {}
         modules_cost = contract_components_cost(document, client.modules or [])
+        stock_reused_cost = contract_stock_reused_cost(document, client.modules or [])
         fixed_expenses_by_key = {
             key: parse_number(getattr(accounting, key, 0.0))
             for key in FIXED_EXPENSE_KEYS
         }
         contract_history = _contract_history_store(accounting)
         prosthetist_state = contract_history.get("prosthetist_work") if isinstance(contract_history.get("prosthetist_work"), dict) else {}
-        calculation_fixed_expenses_by_key = dict(fixed_expenses_by_key)
-        if str(prosthetist_state.get("paid", "paid")).lower() == "unpaid":
-            calculation_fixed_expenses_by_key["prosthetist_work"] = 0.0
-        fixed_expenses = sum(calculation_fixed_expenses_by_key.values())
+        # Status paid/unpaid remains visible, but never removes the expense.
+        fixed_expenses = sum(fixed_expenses_by_key.values())
         custom_values = accounting.custom_values or {}
         report_custom_values = {key: value for key, value in custom_values.items() if key != CONTRACT_EXPENSE_HISTORY_KEY}
         custom_expenses = sum(
@@ -538,6 +546,7 @@ def build_contract_accounting_report(
             "amounts": {
                 "certificate": certificate["amount"],
                 "modules_cost": modules_cost,
+                "stock_reused_cost": stock_reused_cost,
                 **fixed_expenses_by_key,
                 "custom_expenses": custom_expenses,
                 "tax_percent": applied_tax_percent,
@@ -557,7 +566,7 @@ def build_contract_accounting_report(
         reverse=True,
     )
     amount_keys = [
-        "certificate", "modules_cost", *FIXED_EXPENSE_KEYS,
+        "certificate", "modules_cost", "stock_reused_cost", *FIXED_EXPENSE_KEYS,
         "custom_expenses", "vat", "tax", "acquiring", "profit",
     ]
     totals = {key: sum(parse_number(row["amounts"].get(key)) for row in rows) for key in amount_keys}
@@ -682,45 +691,82 @@ def resolve_contract_certificate(document: models.Document, client: models.Clien
     }
 
 
-def contract_components_cost(document: models.Document, client_modules: Iterable[models.Module]) -> float:
-    """Read component cost, never the certificate/contract selling amount."""
+def _contract_component_cost_breakdown(
+    document: models.Document,
+    client_modules: Iterable[models.Module],
+) -> tuple[float, float]:
+    """Return (new expense cost, previously bought Stock cost)."""
     metadata = document.contract_metadata if isinstance(document.contract_metadata, dict) else {}
-    if "components_cost" in metadata:
-        return max(0.0, parse_number(metadata.get("components_cost")))
+    current_by_id = {str(module.module_id): module for module in client_modules}
+
+    def split(items: list[dict[str, Any]]) -> tuple[float, float]:
+        included = 0.0
+        reused = 0.0
+        for item in items:
+            cost = parse_number(item.get("cost"))
+            component_id = str(item.get("component_id") or item.get("module_id") or "")
+            current = current_by_id.get(component_id)
+            # The provenance flag may have been corrected after an old contract
+            # was generated. Prefer the current immutable provenance state when
+            # the component still exists; fall back to the document snapshot.
+            excluded = (
+                bool(getattr(current, "accounting_cost_excluded", False))
+                if current is not None
+                else bool(item.get("accounting_cost_excluded"))
+            )
+            if excluded:
+                reused += cost
+            else:
+                included += cost
+        return included, reused
 
     selected = metadata.get("selected_components")
     if isinstance(selected, list):
         selected_dicts = [item for item in selected if isinstance(item, dict)]
         if selected == [] or any("cost" in item for item in selected_dicts):
-            return sum(parse_number(item.get("cost")) for item in selected_dicts)
+            return split(selected_dicts)
 
     snapshots = metadata.get("selected_tsr_components")
     if isinstance(snapshots, list):
-        nested_costs: list[float] = []
-        has_cost_key = False
+        nested: list[dict[str, Any]] = []
         for snapshot in snapshots:
             if not isinstance(snapshot, dict):
                 continue
             components = snapshot.get("components")
-            if not isinstance(components, list):
-                continue
-            for component in components:
-                if isinstance(component, dict) and "cost" in component:
-                    has_cost_key = True
-                    nested_costs.append(parse_number(component.get("cost")))
-        if has_cost_key:
-            return sum(nested_costs)
+            if isinstance(components, list):
+                nested.extend(item for item in components if isinstance(item, dict) and "cost" in item)
+        if nested:
+            return split(nested)
 
     selected_ids = contract_component_ids(metadata)
     if selected_ids:
-        return sum(
-            parse_number(module.cost)
-            for module in client_modules
-            if str(module.module_id) in selected_ids and not module.is_archived
+        included = 0.0
+        reused = 0.0
+        for module in client_modules:
+            if str(module.module_id) not in selected_ids or module.is_archived:
+                continue
+            if bool(getattr(module, "accounting_cost_excluded", False)):
+                reused += parse_number(module.cost)
+            else:
+                included += parse_number(module.cost)
+        return included, reused
+
+    # Last-resort compatibility for documents whose selected component IDs are
+    # no longer available in the current client card.
+    if "components_cost" in metadata or "stock_reused_cost" in metadata:
+        return (
+            max(0.0, parse_number(metadata.get("components_cost"))),
+            max(0.0, parse_number(metadata.get("stock_reused_cost"))),
         )
-    # contract_total in historical documents often contains the certificate or
-    # selling price. It is intentionally not used as component cost.
-    return 0.0
+    return 0.0, 0.0
+
+
+def contract_components_cost(document: models.Document, client_modules: Iterable[models.Module]) -> float:
+    return _contract_component_cost_breakdown(document, client_modules)[0]
+
+
+def contract_stock_reused_cost(document: models.Document, client_modules: Iterable[models.Module]) -> float:
+    return _contract_component_cost_breakdown(document, client_modules)[1]
 
 
 def contract_component_ids(metadata: dict[str, Any]) -> set[str]:
@@ -774,9 +820,29 @@ def sum_client_module_cost(
     date_filter_active: bool,
     has_normalized_certificates: bool,
 ) -> float:
+    # DBCRM_UPDATE_20260831: accounting stock cost
     total = 0.0
     for module in modules:
-        if module.is_archived:
+        if module.is_archived or bool(getattr(module, "accounting_cost_excluded", False)):
+            continue
+        if date_filter_active and has_normalized_certificates:
+            module_certificate_id = str(module.client_tsr_id or "")
+            if not module_certificate_id or module_certificate_id not in selected_certificate_ids:
+                continue
+        total += parse_number(module.cost)
+    return total
+
+
+def sum_client_stock_reused_cost(
+    modules: Iterable[models.Module],
+    *,
+    selected_certificate_ids: set[str],
+    date_filter_active: bool,
+    has_normalized_certificates: bool,
+) -> float:
+    total = 0.0
+    for module in modules:
+        if module.is_archived or not bool(getattr(module, "accounting_cost_excluded", False)):
             continue
         if date_filter_active and has_normalized_certificates:
             module_certificate_id = str(module.client_tsr_id or "")
@@ -1017,3 +1083,4 @@ def normalize_date(value: Any) -> date | None:
             except ValueError:
                 pass
     return None
+

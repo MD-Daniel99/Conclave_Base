@@ -96,3 +96,4 @@ def downgrade() -> None:
             "s6": "WAIT_PARTS", "s7": "CONTRACT_SENT", "s8": "PROSTHESIS", "s9": "DONE",
         },
     )
+

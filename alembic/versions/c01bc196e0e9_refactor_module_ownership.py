@@ -36,3 +36,4 @@ def downgrade() -> None:
                existing_type=sa.UUID(),
                nullable=False)
     # ### end Alembic commands ###
+
