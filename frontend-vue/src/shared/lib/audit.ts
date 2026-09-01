@@ -24,6 +24,8 @@ const ACTION_LABELS: Record<string, string> = {
   'component.archive': 'Комплектующая перемещена в архив',
   'component.restore': 'Комплектующая восстановлена из архива',
   'components.tsr.assign': 'Назначен ТСР комплектующим',
+  'components.prosthetist.assign': 'Комплектующие переданы протезисту',
+  'components.prosthetist.return': 'Комплектующие возвращены от протезиста',
   'prosthesis.upsert': 'Добавлен вид протеза',
   'prosthesis.update': 'Изменён вид протеза',
   'prosthesis.delete': 'Удалён вид протеза',
@@ -51,6 +53,8 @@ const FIELD_LABELS: Record<string, string> = {
   middle_name: 'Отчество',
   status_code: 'Статус',
   current_stage: 'Этап',
+  contract_status: 'Статус договоров',
+  act_status: 'Статус актов',
   agent_id: 'Агент',
   client_id: 'Клиент',
   tsr_id: 'ТСР',
@@ -310,6 +314,14 @@ export function summarizeAuditDetails(item: AuditLogItem) {
     const tsr = stringifyValue(details.tsr_id)
     const components = stringifyValue(details.component_ids)
     return `ТСР «${tsr}» назначен комплектующим: ${components}.`
+  }
+
+  if (item.action === 'components.prosthetist.assign') {
+    return `Переданы протезисту: ${stringifyValue(details.component_ids)}.`
+  }
+
+  if (item.action === 'components.prosthetist.return') {
+    return `Возвращены от протезиста: ${stringifyValue(details.component_ids)}.`
   }
 
   if (before && after) {

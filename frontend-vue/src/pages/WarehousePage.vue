@@ -18,6 +18,7 @@ import { fetchNameIndexReferences, fetchTsrReferences } from '@/shared/api/refer
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
 import { formatMoney, formatMoneyInput } from '@/shared/lib/money'
+import { COMPONENT_SUPPLIERS } from '@/shared/lib/componentSuppliers'
 import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
 import EmptyState from '@/shared/ui/EmptyState.vue'
 import StatusPill from '@/shared/ui/StatusPill.vue'
@@ -50,7 +51,6 @@ type ComponentForm = {
   unit_cost: string
   unit_price: string
   recd: CountInput
-  pending: CountInput
   prosthetist_keep: CountInput
   properties: string
   client_id: string
@@ -71,7 +71,6 @@ const emptyComponentForm: ComponentForm = {
   unit_cost: '',
   unit_price: '',
   recd: '0',
-  pending: '0',
   prosthetist_keep: '0',
   properties: '-',
   client_id: '',
@@ -118,7 +117,7 @@ function warehouseColumnValue(item: ComponentItem, key: string) {
   if (key === 'name') return `${getComponentName(item)} ${item.tsr?.full_tsr_code || ''}`
   if (key === 'cost') return item.cost ?? 0
   if (key === 'price') return item.price ?? 0
-  if (key === 'order') return `Заказано ${item.ordered ?? 0} Получено ${item.recd ?? 0} Ожидается ${item.pending ?? 0}`
+  if (key === 'order') return `Заказано ${item.ordered ?? 0} Получено ${item.recd ?? 0} У протезиста ${item.prosthetist_keep ?? 0}`
   if (key === 'owner') return getClientLabel(item.client_id)
   return item[key as keyof ComponentItem]
 }
@@ -374,6 +373,12 @@ function getComponentName(item: ComponentItem) {
   return item.module_name_index || item.properties || 'Без названия'
 }
 
+function hasComponentDeliveryShortfall(item: ComponentItem) {
+  const ordered = Math.max(0, Number(item.ordered ?? 0))
+  const received = Math.max(0, Number(item.recd ?? 0))
+  return ordered > received
+}
+
 function getComponentAttributes(item: ComponentItem) {
   return [
     `Размер: ${item.size || '—'}`,
@@ -497,7 +502,6 @@ function selectComponent(item: ComponentItem) {
     unit_price: item.price == null ? '' : formatMoneyInput(Number(item.price) / quantity),
     ordered: String(item.ordered ?? 0),
     recd: String(item.recd ?? 0),
-    pending: String(item.pending ?? 0),
     prosthetist_keep: String(item.prosthetist_keep ?? 0),
     properties: item.properties ?? '-',
     client_id: item.client_id ?? '',
@@ -526,7 +530,6 @@ function buildComponentPayload(): ComponentCreatePayload {
     price: componentTotalPrice.value,
     ordered: toCount(componentForm.ordered),
     recd: toCount(componentForm.recd),
-    pending: toCount(componentForm.pending),
     prosthetist_keep: toCount(componentForm.prosthetist_keep),
     properties: required(componentForm.properties, '-'),
     notes: optional(componentForm.notes),
@@ -975,13 +978,15 @@ onBeforeUnmount(() => {
               </small>
             </td>
             <td class="order-status-cell">
-              <span>Заказано <strong>{{ item.ordered }}</strong></span>
-              <span>Получено <strong>{{ item.recd }}</strong></span>
-              <StatusPill
-                v-if="Number(item.pending || 0) > 0"
-                :label="`Ожидается: ${item.pending}`"
-                kind="status"
-              />
+              <span :class="{ 'component-count-status--ordered': Number(item.ordered || 0) > 0 }">
+                Заказано <strong>{{ item.ordered || 0 }}</strong>
+              </span>
+              <span :class="{ 'component-count-status--shortfall': hasComponentDeliveryShortfall(item) }">
+                Получено <strong>{{ item.recd || 0 }}</strong>
+              </span>
+              <span :class="{ 'component-count-status--prosthetist': Number(item.prosthetist_keep || 0) > 0 }">
+                У протезиста <strong>{{ item.prosthetist_keep || 0 }}</strong>
+              </span>
             </td>
             <td>
               <StatusPill
@@ -1019,7 +1024,9 @@ onBeforeUnmount(() => {
         <div class="mobile-entity-card-details">
           <span>Количество <strong>{{ item.quantity }}</strong></span>
           <span>Стоимость <strong>{{ formatMoney(item.cost) }}</strong></span>
-          <span>Ожидается <strong>{{ item.pending || 0 }}</strong></span>
+          <span class="component-count-status" :class="{ 'component-count-status--ordered': Number(item.ordered || 0) > 0 }">Заказано <strong>{{ item.ordered || 0 }}</strong></span>
+          <span class="component-count-status" :class="{ 'component-count-status--shortfall': hasComponentDeliveryShortfall(item) }">Получено <strong>{{ item.recd || 0 }}</strong></span>
+          <span class="component-count-status" :class="{ 'component-count-status--prosthetist': Number(item.prosthetist_keep || 0) > 0 }">У протезиста <strong>{{ item.prosthetist_keep || 0 }}</strong></span>
           <span>Владелец <strong>{{ getClientLabel(item.client_id) }}</strong></span>
         </div>
       </article>
@@ -1106,7 +1113,10 @@ onBeforeUnmount(() => {
             </label>
             <label>
               Поставщик *
-              <input v-model="componentForm.supplier" required />
+              <input v-model="componentForm.supplier" list="warehouse-component-suppliers" required />
+              <datalist id="warehouse-component-suppliers">
+                <option v-for="supplier in COMPONENT_SUPPLIERS" :key="supplier" :value="supplier" />
+              </datalist>
             </label>
           </div>
 
@@ -1141,10 +1151,6 @@ onBeforeUnmount(() => {
             <label>
               Получено
               <input v-model="componentForm.recd" type="number" min="0" step="1" />
-            </label>
-            <label>
-              Ожидается
-              <input v-model="componentForm.pending" type="number" min="0" step="1" />
             </label>
             <label>
               У протезиста

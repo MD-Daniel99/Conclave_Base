@@ -2941,6 +2941,145 @@ body.modal-open {
   font-size: 11px;
 }
 
+/* Component movement counters are shared by Warehouse and client TSR cards. */
+.order-status-cell > span,
+.mobile-entity-card-details > span.component-count-status,
+.component-status-summary > span {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 3px 7px;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.order-status-cell > span.component-count-status--ordered,
+.mobile-entity-card-details > span.component-count-status--ordered,
+.component-status-summary > span.component-count-status--ordered {
+  border-color: rgb(245 196 81 / 42%);
+  color: #f7d984;
+  background: rgb(245 196 81 / 13%);
+}
+
+.order-status-cell > span.component-count-status--shortfall,
+.mobile-entity-card-details > span.component-count-status--shortfall,
+.component-status-summary > span.component-count-status--shortfall {
+  border-color: rgb(251 113 133 / 40%);
+  color: #ffb4c0;
+  background: rgb(251 113 133 / 12%);
+}
+
+.order-status-cell > span.component-count-status--prosthetist,
+.mobile-entity-card-details > span.component-count-status--prosthetist,
+.component-status-summary > span.component-count-status--prosthetist {
+  border-color: rgb(74 222 128 / 40%);
+  color: #9cedb8;
+  background: rgb(74 222 128 / 12%);
+}
+
+.component-detail-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 5px;
+}
+
+.component-detail-status-row .component-characteristics-line {
+  flex: 1 1 300px;
+  margin-top: 0;
+}
+
+.component-list-row .component-status-summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+}
+
+.component-list-row .component-status-summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.component-status-summary strong {
+  color: inherit;
+}
+
+.component-prosthetist-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 5px 9px;
+  border: 1px solid rgb(74 222 128 / 26%);
+  border-radius: 10px;
+  color: #b9c6d8;
+  background: rgb(74 222 128 / 6%);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.25;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.component-prosthetist-toggle:has(input:checked),
+.component-prosthetist-toggle:has(input:indeterminate) {
+  border-color: rgb(74 222 128 / 48%);
+  color: #a9efc1;
+  background: rgb(74 222 128 / 13%);
+}
+
+.component-prosthetist-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #4ade80;
+  cursor: pointer;
+}
+
+.component-prosthetist-toggle input:disabled,
+.component-prosthetist-toggle:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.component-groups-modern .tsr-component-header .component-prosthetist-toggle > span,
+.component-list-row .component-actions .component-prosthetist-toggle > span {
+  display: inline;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+@media (max-width: 760px) {
+  .component-detail-status-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .component-detail-status-row .component-characteristics-line {
+    flex-basis: auto;
+  }
+
+  .component-list-row .component-status-summary {
+    justify-content: flex-start;
+  }
+
+  .component-prosthetist-toggle--group {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 /* Warehouse component card: keep patient, concrete patient TSR and quantity
    in one visual assignment block so partial stock assignments stay explicit. */
 .warehouse-client-assignment-panel {
@@ -3510,9 +3649,9 @@ body.modal-open {
 /* Client: enough for a readable name, but never a viewport filler. */
 .accounting-table .filterable-table-header[data-column-key="client"],
 .accounting-table .accounting-identity-cell {
-  width: 15rem !important;
-  min-width: 15rem !important;
-  max-width: 15rem !important;
+  width: 11.5rem !important;
+  min-width: 11.5rem !important;
+  max-width: 11.5rem !important;
 }
 
 .accounting-table .accounting-client-link {
@@ -3532,37 +3671,37 @@ body.modal-open {
 /* The filter control is the compact, explicit width anchor for each column. */
 .accounting-table .filterable-table-header:not([data-column-key="client"]) .table-column-filter {
   box-sizing: border-box;
-  width: 8.6rem !important;
-  min-width: 8.6rem !important;
-  max-width: 8.6rem !important;
+  width: 6.35rem !important;
+  min-width: 6.35rem !important;
+  max-width: 6.35rem !important;
 }
 
 /* Slightly more room only where the heading/value genuinely needs it. */
 .accounting-table .filterable-table-header[data-column-key="modules_cost"] .table-column-filter {
-  width: 9.4rem !important;
-  min-width: 9.4rem !important;
-  max-width: 9.4rem !important;
+  width: 7.4rem !important;
+  min-width: 7.4rem !important;
+  max-width: 7.4rem !important;
 }
 
 .accounting-table .filterable-table-header[data-column-key="certificate"] .table-column-filter {
-  width: 8.2rem !important;
-  min-width: 8.2rem !important;
-  max-width: 8.2rem !important;
+  width: 6.5rem !important;
+  min-width: 6.5rem !important;
+  max-width: 6.5rem !important;
 }
 
 /* Body controls must not re-expand the tracks created above. */
 .accounting-table .accounting-expense-cell {
   box-sizing: border-box;
-  width: 8.6rem !important;
-  min-width: 8.6rem !important;
-  max-width: 8.6rem !important;
+  width: 6.35rem !important;
+  min-width: 6.35rem !important;
+  max-width: 6.35rem !important;
 }
 
 .accounting-table .table-input {
   box-sizing: border-box;
-  width: 8.6rem !important;
-  min-width: 8.6rem !important;
-  max-width: 8.6rem !important;
+  width: 6.35rem !important;
+  min-width: 6.35rem !important;
+  max-width: 6.35rem !important;
 }
 
 .accounting-table .table-money {
@@ -3598,8 +3737,153 @@ body.modal-open {
 @media (max-width: 760px) {
   .accounting-table .filterable-table-header[data-column-key="client"],
   .accounting-table .accounting-identity-cell {
-    width: 13.5rem !important;
-    min-width: 13.5rem !important;
-    max-width: 13.5rem !important;
+    width: 11rem !important;
+    min-width: 11rem !important;
+    max-width: 11rem !important;
   }
+}
+
+/* DBCRM_ROUND8_20260901: stable component status alignment, MTZ field flow
+   and denser accounting tables. */
+.component-groups-modern .component-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(430px, 500px);
+  align-items: start;
+}
+
+.component-groups-modern .component-list-row:not(:has(> .component-actions)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.component-list-row .component-main-copy {
+  min-width: 0;
+}
+
+.component-list-row .component-actions {
+  display: grid !important;
+  width: 100%;
+  max-width: 500px;
+  gap: 8px;
+  justify-items: end;
+}
+
+.component-action-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.component-list-row .component-row-quantity-picker {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 500px;
+  white-space: normal;
+}
+
+.component-row-quantity-label {
+  flex: 1 1 190px;
+  text-align: right;
+}
+
+.documents-mtz-layout .documents-mtz-disability-field {
+  grid-column: 1 / -1;
+}
+
+.accounting-table th,
+.accounting-table td {
+  padding-inline: 4px;
+}
+
+.accounting-table .table-column-filter {
+  padding-inline: 4px;
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) {
+  .component-groups-modern .component-list-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .component-list-row .component-actions {
+    width: 100%;
+    max-width: none;
+    justify-items: stretch;
+  }
+
+  .component-action-buttons,
+  .component-list-row .component-row-quantity-picker {
+    max-width: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .component-action-buttons,
+  .component-list-row .component-row-quantity-picker {
+    justify-content: flex-start;
+  }
+
+  .component-row-quantity-label {
+    flex-basis: 100%;
+    text-align: left;
+  }
+}
+
+/* DBCRM_ROUND9_20260901: editable contract/act statuses in the patient list. */
+.client-document-status-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.desktop-entity-table .client-col-document-status {
+  box-sizing: border-box;
+  width: 138px !important;
+  min-width: 138px !important;
+  max-width: 138px !important;
+}
+
+.desktop-entity-table .client-col-document-status .table-column-filter,
+.client-document-status-select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.client-document-status-select {
+  min-height: 34px;
+  padding: 5px 24px 5px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.client-document-status-select:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+@media (max-width: 760px) {
+  .client-document-status-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* DBCRM_ROUND10_20260901: level column titles and filters.
+   Compact patient/accounting columns wrap their headings to a different
+   number of lines.  Reserve the height of the longest heading in each table
+   so every filter starts on the same horizontal line, as it does in the
+   warehouse and agent tables. */
+.clients-page .desktop-entity-table .filterable-table-header:has(.table-column-filter) .table-sort-button {
+  min-height: 3.6em;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+
+.accounting-page .accounting-table .filterable-table-header:has(.table-column-filter) .table-sort-button {
+  min-height: 2.4em;
+  align-items: flex-start;
+  line-height: 1.2;
 }

@@ -101,6 +101,43 @@ def assign_tsr_to_client_components(
     return components
 
 
+@router.patch("/{client_id}/components/prosthetist", response_model=List[schemas.ModuleRead])
+def set_client_components_prosthetist_state(
+    client_id: UUID,
+    payload: schemas.ClientComponentsProsthetistUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        components = crud.set_client_modules_prosthetist_state(
+            db,
+            client_id,
+            payload.client_tsr_id,
+            payload.component_ids,
+            at_prosthetist=payload.at_prosthetist,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    log_action(
+        db,
+        entity="client",
+        entity_id=client_id,
+        action=(
+            "components.prosthetist.assign"
+            if payload.at_prosthetist
+            else "components.prosthetist.return"
+        ),
+        user=current_user,
+        details={
+            "client_tsr_id": str(payload.client_tsr_id),
+            "component_ids": [str(component_id) for component_id in payload.component_ids],
+            "at_prosthetist": payload.at_prosthetist,
+        },
+    )
+    return components
+
+
 @router.get("/{client_id}/tsr", response_model=List[schemas.ClientTsrRead])
 def read_client_tsr(
     client_id: UUID,

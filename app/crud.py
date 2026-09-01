@@ -238,6 +238,8 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "middle_name": client.middle_name,
         "status_code": client.status_code,
         "current_stage": client.current_stage,
+        "contract_status": getattr(client, "contract_status", None),
+        "act_status": getattr(client, "act_status", None),
         "agent_id": client.agent_id,
         "deadline": client.deadline,
         "created_at": client.created_at,
@@ -568,6 +570,8 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         middle_name=client_in.middle_name or "",
         status_code=client_in.status_code,
         current_stage=client_in.current_stage,
+        contract_status=client_in.contract_status,
+        act_status=client_in.act_status,
         agent_id=client_in.agent_id,
         deadline=client_in.deadline,
         notes=client_in.notes,
@@ -809,6 +813,65 @@ def assign_tsr_to_client_modules(
     try:
         db.flush()
         _sync_client_tsr_legacy_fields(db, client_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return db.execute(
+        select(models.Module)
+        .where(models.Module.module_id.in_(unique_ids))
+        .options(
+            selectinload(models.Module.client),
+            selectinload(models.Module.tsr),
+        )
+    ).scalars().all()
+
+
+def set_client_modules_prosthetist_state(
+    db: Session,
+    client_id: UUID,
+    client_tsr_id: UUID,
+    component_ids: List[UUID],
+    *,
+    at_prosthetist: bool,
+) -> List[models.Module]:
+    """Atomically mark selected components of one client TSR as at prosthetist.
+
+    ``prosthetist_keep`` is the canonical warehouse counter, so updating the
+    existing ``MODULES`` rows keeps the client card and warehouse in sync.
+    """
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise ValueError("Клиент не найден")
+    if client.is_archived:
+        raise ValueError("Сначала восстановите клиента из архива")
+
+    assignment = db.get(models.ClientTsr, client_tsr_id)
+    if not assignment or assignment.client_id != client_id:
+        raise ValueError("Выбранный ТСР не принадлежит клиенту")
+
+    unique_ids = list(dict.fromkeys(component_ids))
+    components = db.execute(
+        select(models.Module)
+        .where(models.Module.module_id.in_(unique_ids))
+        .with_for_update()
+    ).scalars().all()
+
+    if len(components) != len(unique_ids):
+        raise ValueError("Одна или несколько комплектующих не найдены")
+    if any(component.client_id != client_id for component in components):
+        raise ValueError("Все выбранные комплектующие должны принадлежать этому клиенту")
+    if any(component.client_tsr_id != client_tsr_id for component in components):
+        raise ValueError("Все выбранные комплектующие должны относиться к выбранному ТСР")
+    if any(component.is_archived for component in components):
+        raise ValueError("Сначала восстановите комплектующие из архива")
+
+    for component in components:
+        quantity = max(1, int(component.quantity or 1))
+        component.prosthetist_keep = quantity if at_prosthetist else 0
+
+    try:
         db.commit()
     except Exception:
         db.rollback()
@@ -2309,4 +2372,3 @@ def update_user_settings(db: Session, user_id: UUID, settings: dict):
     db.commit()
     db.refresh(user)
     return user
-

@@ -30,6 +30,7 @@ import type {
 } from '@/shared/api/generated/types.gen'
 
 export type Agent = AgentRead
+export type DocumentStatus = 'Подписан' | 'Сделан' | 'Отправлен'
 export interface ClientTsr {
   client_tsr_id: string
   client_id: string
@@ -49,6 +50,8 @@ export interface ClientTsr {
 }
 
 export type Client = Omit<ClientRead, 'modules' | 'tsr_items'> & {
+  contract_status?: DocumentStatus | null
+  act_status?: DocumentStatus | null
   prosthetist?: string | null
   is_archived?: boolean
   taxation_system?: 'УСН' | 'ОСНО'
@@ -81,10 +84,14 @@ export type ClientSnils = SnilsRead
 export type ClientSnilsCreate = SnilsCreate
 export type ClientSnilsUpdate = SnilsUpdate
 export type ClientCreatePayload = ClientCreate & {
+  contract_status?: DocumentStatus | null
+  act_status?: DocumentStatus | null
   prosthetist?: string | null
   taxation_system?: 'УСН' | 'ОСНО'
 }
 export type ClientUpdatePayload = ClientUpdate & {
+  contract_status?: DocumentStatus | null
+  act_status?: DocumentStatus | null
   prosthetist?: string | null
   taxation_system?: 'УСН' | 'ОСНО'
   prosthetist_work?: number | null
@@ -292,4 +299,3 @@ export interface ClientContractCoverage {
   uncovered_module_ids: string[]
   uncovered_module_names: string[]
 }
-

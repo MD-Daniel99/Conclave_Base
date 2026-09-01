@@ -13,6 +13,7 @@ import type {
   ClientSnilsUpdate,
   ClientUpdatePayload,
   ClientTsr,
+  ModuleItem,
 } from '@/shared/types/entities'
 
 export interface ListClientsParams {
@@ -64,6 +65,19 @@ export async function assignClientComponentsTsr(
   payload: { component_ids: string[]; tsr_id: string },
 ) {
   await api.patch(`/clients/${clientId}/components/tsr`, payload)
+}
+
+
+export async function setClientComponentsProsthetistState(
+  clientId: string,
+  payload: {
+    client_tsr_id: string
+    component_ids: string[]
+    at_prosthetist: boolean
+  },
+) {
+  const { data } = await api.patch<ModuleItem[]>(`/clients/${clientId}/components/prosthetist`, payload)
+  return data
 }
 
 

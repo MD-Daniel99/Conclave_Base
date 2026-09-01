@@ -31,6 +31,7 @@ import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedb
 import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
 import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
+import { COMPONENT_SUPPLIERS } from '@/shared/lib/componentSuppliers'
 import { calculateTsrRepeatVisitDate, hasAutomaticRepeatVisitTerm } from '@/shared/lib/tsrRepeatTerms'
 import { fetchAgents } from '@/shared/api/agents'
 import { fetchEntityAudit } from '@/shared/api/audit'
@@ -50,6 +51,7 @@ import {
   fetchClientPhones,
   fetchClients,
   restoreClient,
+  setClientComponentsProsthetistState,
   updateClient,
   updateClientPassport,
   updateClientPhone,
@@ -105,6 +107,7 @@ import type {
   ClientSnilsUpdate,
   ClientUpdatePayload,
   ContractGenerationPayload,
+  DocumentStatus,
   ModuleItem,
   ModuleCreatePayload,
   ModuleUpdatePayload,
@@ -175,6 +178,8 @@ type ClientForm = {
   middle_name: string
   status: string
   current_stage: string
+  contract_status: DocumentStatus | ''
+  act_status: DocumentStatus | ''
   agent_id: string
   prosthesis_type: string
   taxation_system: 'УСН' | 'ОСНО'
@@ -200,7 +205,6 @@ type ClientModuleForm = {
   side: string
   ordered: CountInput
   recd: CountInput
-  pending: CountInput
   order_date_acc_num: string
   properties: string
   prosthetist_keep: CountInput
@@ -238,12 +242,22 @@ const DIAGNOSIS_OPTIONS = [
   { value: 'Верхних и нижних конечностей', label: 'Верхних и нижних конечностей' },
 ]
 
+const DOCUMENT_STATUS_OPTIONS: Array<{ value: DocumentStatus; label: string }> = [
+  { value: 'Подписан', label: 'Подписан' },
+  { value: 'Сделан', label: 'Сделан' },
+  { value: 'Отправлен', label: 'Отправлен' },
+]
+
+type ClientDocumentStatusField = 'contract_status' | 'act_status'
+
 const emptyForm: ClientForm = {
   last_name: '',
   first_name: '',
   middle_name: '',
   status: '',
   current_stage: '',
+  contract_status: '',
+  act_status: '',
   agent_id: '',
   prosthesis_type: '',
   taxation_system: 'УСН',
@@ -266,7 +280,6 @@ const emptyModuleForm: ClientModuleForm = {
   side: '',
   ordered: '0',
   recd: '0',
-  pending: '0',
   order_date_acc_num: '-',
   properties: '-',
   prosthetist_keep: '0',
@@ -286,7 +299,7 @@ const workingWarehouseModules = ref<ModuleItem[]>([])
 const stockWarehouseModules = ref<ModuleItem[]>([])
 const auditItems = ref<AuditLogItem[]>([])
 const query = ref('')
-const clientColumnFilters = reactive<Record<string, string>>({ patient: '', prosthetist: '', tsr: '', check_date: '', certificate: '', status: '', stage: '', agent: '', repeat_visit: '' })
+const clientColumnFilters = reactive<Record<string, string>>({ patient: '', prosthetist: '', tsr: '', check_date: '', certificate: '', status: '', stage: '', contract_status: '', act_status: '', agent: '', repeat_visit: '' })
 const clientSortKey = ref<string | null>(null)
 const clientSortDirection = ref<SortDirection>(null)
 const pageLimit = ref(100)
@@ -351,6 +364,7 @@ const loadedDetailTabs = reactive<Record<DetailTab, boolean>>({
   history: false,
 })
 const isSaving = ref(false)
+const inlineDocumentStatusSaving = reactive<Record<string, boolean>>({})
 const error = ref('')
 const successMessage = ref('')
 const lastSavedClientState = ref('')
@@ -571,6 +585,8 @@ function clientColumnValue(client: Client, key: string): unknown {
   if (key === 'certificate') return getClientCertificateTotal(client)
   if (key === 'status') return getClientStatusLabel(client)
   if (key === 'stage') return getClientStageLabel(client)
+  if (key === 'contract_status') return client.contract_status ?? ''
+  if (key === 'act_status') return client.act_status ?? ''
   if (key === 'agent') return getAgentLabel(client.agent_id)
   if (key === 'repeat_visit') return getClientRepeatVisitDates(client)
   return ''
@@ -592,7 +608,7 @@ const filteredClients = computed(() => {
         ? 'number'
         : key === 'check_date' || key === 'repeat_visit'
           ? 'date'
-          : key === 'status' || key === 'stage' || key === 'agent'
+          : key === 'status' || key === 'stage' || key === 'contract_status' || key === 'act_status' || key === 'agent'
             ? 'select'
             : 'text'
       return matchesTableFilter(clientColumnValue(client, key), filter, kind)
@@ -1058,6 +1074,57 @@ function getClientStageLabel(client: Client) {
   return client.stage?.description ?? getOptionLabel(stageOptions.value, client.current_stage, stageFallbackLabels)
 }
 
+function getClientDocumentStatusLabel(value: DocumentStatus | null | undefined) {
+  return DOCUMENT_STATUS_OPTIONS.find((option) => option.value === value)?.label ?? 'Не выбран'
+}
+
+function getInlineDocumentStatusSavingKey(client: Client) {
+  return getClientId(client)
+}
+
+function isInlineDocumentStatusSaving(client: Client) {
+  return Boolean(inlineDocumentStatusSaving[getInlineDocumentStatusSavingKey(client)])
+}
+
+async function updateClientDocumentStatus(
+  client: Client,
+  field: ClientDocumentStatusField,
+  event: Event,
+) {
+  const select = event.target as HTMLSelectElement
+  const nextStatus = DOCUMENT_STATUS_OPTIONS.find((option) => option.value === select.value)?.value
+  const clientId = getClientId(client)
+
+  if (!clientId || !nextStatus || isInlineDocumentStatusSaving(client)) return
+
+  const previousStatus = client[field] ?? null
+  if (previousStatus === nextStatus) return
+
+  const savingKey = getInlineDocumentStatusSavingKey(client)
+  inlineDocumentStatusSaving[savingKey] = true
+  client[field] = nextStatus
+  resetMessages()
+
+  try {
+    const updatedClient = await updateClient(clientId, {
+      [field]: nextStatus,
+    } as ClientUpdatePayload)
+    Object.assign(client, updatedClient)
+
+    if (selectedClient.value && getClientId(selectedClient.value) === clientId) {
+      Object.assign(selectedClient.value, updatedClient)
+    }
+
+    successMessage.value = `${field === 'contract_status' ? 'Статус договоров' : 'Статус актов'}: ${nextStatus}`
+  } catch (caughtError) {
+    client[field] = previousStatus
+    select.value = previousStatus ?? ''
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    delete inlineDocumentStatusSaving[savingKey]
+  }
+}
+
 function getCountedLabels(values: string[]) {
   const counts = new Map<string, number>()
   for (const rawValue of values) {
@@ -1120,6 +1187,7 @@ function getClientCertificateTotal(client: Client) {
 function getClientSearchText(client: Client) {
   return [
     getClientName(client), client.external_id, getClientStatusLabel(client), getClientStageLabel(client),
+    client.contract_status, client.act_status,
     getAgentLabel(client.agent_id), client.notes, client.ipra_code, client.place_of_residence,
     ...(client.phones ?? []).map((phone) => phone.number),
     ...(client.passports ?? []).flatMap((passport) => [
@@ -1223,6 +1291,30 @@ function getPhoneValue(phone: ClientPhone) {
 
 function getModuleName(moduleItem: ModuleItem) {
   return moduleItem.module_name_index ?? moduleItem.module_id ?? 'Комплектующая'
+}
+
+function isModuleAtProsthetist(moduleItem: ModuleItem) {
+  return Number(moduleItem.prosthetist_keep ?? 0) > 0
+}
+
+function hasModuleDeliveryShortfall(moduleItem: ModuleItem) {
+  const ordered = Math.max(0, Number(moduleItem.ordered ?? 0))
+  const received = Math.max(0, Number(moduleItem.recd ?? 0))
+  return ordered > received
+}
+
+function getGroupComponentIds(group: ClientTsrGroup) {
+  return group.components
+    .map((component) => String(component.module_id ?? ''))
+    .filter(Boolean)
+}
+
+function isGroupFullyAtProsthetist(group: ClientTsrGroup) {
+  return group.components.length > 0 && group.components.every(isModuleAtProsthetist)
+}
+
+function isGroupPartiallyAtProsthetist(group: ClientTsrGroup) {
+  return group.components.some(isModuleAtProsthetist) && !isGroupFullyAtProsthetist(group)
 }
 
 function getModuleUnitCount(moduleItem: ModuleItem) {
@@ -1676,7 +1768,6 @@ function fillModuleForm(moduleItem: ModuleItem) {
   moduleForm.side = moduleItem.side ?? ''
   moduleForm.ordered = String(moduleItem.ordered ?? 0)
   moduleForm.recd = String(moduleItem.recd ?? 0)
-  moduleForm.pending = String(moduleItem.pending ?? 0)
   moduleForm.prosthetist_keep = String(moduleItem.prosthetist_keep ?? 0)
   moduleForm.order_date_acc_num = moduleItem.order_date_acc_num ?? '-'
   moduleForm.properties = moduleItem.properties ?? '-'
@@ -1706,7 +1797,6 @@ function buildModulePayload(clientId: string): ModuleCreatePayload {
     side: optionalString(moduleForm.side),
     ordered: parseNonNegativeInteger(moduleForm.ordered),
     recd: parseNonNegativeInteger(moduleForm.recd),
-    pending: parseNonNegativeInteger(moduleForm.pending),
     prosthetist_keep: parseNonNegativeInteger(moduleForm.prosthetist_keep),
     order_date_acc_num: moduleForm.order_date_acc_num.trim() || '-',
     properties: moduleForm.properties.trim() || '-',
@@ -1917,6 +2007,8 @@ function fillForm(client: Client) {
   form.middle_name = String(client.middle_name ?? '')
   form.status = getReferenceValue(client.status_code)
   form.current_stage = getReferenceValue(client.current_stage)
+  form.contract_status = client.contract_status ?? ''
+  form.act_status = client.act_status ?? ''
   form.agent_id = String(client.agent_id ?? '')
   const diagnosis = String(client.prosthesis_type ?? '')
   form.prosthesis_type = DIAGNOSIS_OPTIONS.some((option) => option.value === diagnosis) ? diagnosis : ''
@@ -1944,6 +2036,8 @@ function buildCreatePayload(): ClientCreatePayload {
     middle_name: optionalString(form.middle_name),
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
+    contract_status: form.contract_status || null,
+    act_status: form.act_status || null,
     agent_id: form.agent_id,
     prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
@@ -1959,6 +2053,8 @@ function buildUpdatePayload(): ClientUpdatePayload {
     middle_name: optionalString(form.middle_name),
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
+    contract_status: form.contract_status || null,
+    act_status: form.act_status || null,
     agent_id: form.agent_id,
     prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
@@ -2944,6 +3040,54 @@ async function unassignModule(moduleItem: ModuleItem) {
   }
 }
 
+async function changeClientModulesProsthetistState(
+  group: ClientTsrGroup,
+  componentIds: string[],
+  atProsthetist: boolean,
+) {
+  const clientId = selectedClient.value ? getClientId(selectedClient.value) : ''
+  if (!clientId || !group.clientTsrId || componentIds.length === 0 || isSaving.value) return
+
+  isSaving.value = true
+  resetMessages()
+
+  try {
+    await setClientComponentsProsthetistState(clientId, {
+      client_tsr_id: group.clientTsrId,
+      component_ids: componentIds,
+      at_prosthetist: atProsthetist,
+    })
+    successMessage.value = atProsthetist
+      ? `Передано протезисту: ${componentIds.length} поз.`
+      : `Возвращено от протезиста: ${componentIds.length} поз.`
+    await loadClientTabData('modules', true)
+    await loadClients()
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+    await loadClientTabData('modules', true)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+function handleGroupProsthetistStateChange(group: ClientTsrGroup, event: Event) {
+  void changeClientModulesProsthetistState(
+    group,
+    getGroupComponentIds(group),
+    (event.target as HTMLInputElement).checked,
+  )
+}
+
+function handleModuleProsthetistStateChange(group: ClientTsrGroup, moduleItem: ModuleItem, event: Event) {
+  const componentId = String(moduleItem.module_id ?? '')
+  if (!componentId) return
+  void changeClientModulesProsthetistState(
+    group,
+    [componentId],
+    (event.target as HTMLInputElement).checked,
+  )
+}
+
 async function saveClientModule() {
   resetMessages()
 
@@ -3428,6 +3572,8 @@ onBeforeUnmount(() => {
             <SortableFilterHeader label="Сертификат" column-key="certificate" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.certificate" @sort="sortClients" @update:filter-value="clientColumnFilters.certificate = $event" />
             <SortableFilterHeader label="Статус" column-key="status" filter-kind="select" :options="clientStatusFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.status" @sort="sortClients" @update:filter-value="clientColumnFilters.status = $event" />
             <SortableFilterHeader label="Этап" column-key="stage" filter-kind="select" :options="clientStageFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.stage" @sort="sortClients" @update:filter-value="clientColumnFilters.stage = $event" />
+            <SortableFilterHeader class="client-col-document-status" label="Статус договоров" column-key="contract_status" filter-kind="select" :options="DOCUMENT_STATUS_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.contract_status" @sort="sortClients" @update:filter-value="clientColumnFilters.contract_status = $event" />
+            <SortableFilterHeader class="client-col-document-status" label="Статус актов" column-key="act_status" filter-kind="select" :options="DOCUMENT_STATUS_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.act_status" @sort="sortClients" @update:filter-value="clientColumnFilters.act_status = $event" />
             <SortableFilterHeader label="Агент" column-key="agent" filter-kind="select" :options="clientAgentFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.agent" @sort="sortClients" @update:filter-value="clientColumnFilters.agent = $event" />
             <SortableFilterHeader label="Повторное протезирование" column-key="repeat_visit" filter-kind="date" placeholder="дд.мм.гггг или от..до" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.repeat_visit" @sort="sortClients" @update:filter-value="clientColumnFilters.repeat_visit = $event" />
             <th aria-label="Действия"></th>
@@ -3435,7 +3581,7 @@ onBeforeUnmount(() => {
         </thead>
         <tbody>
           <tr v-if="isLoading" class="no-row-action">
-            <td colspan="12">Загружаем пациентов...</td>
+            <td colspan="14">Загружаем пациентов...</td>
           </tr>
           <tr
             v-for="(client, index) in pagedClients"
@@ -3470,6 +3616,38 @@ onBeforeUnmount(() => {
             <td class="table-money">{{ formatMoney(getClientCertificateTotal(client)) }}</td>
             <td><StatusPill :label="getClientStatusLabel(client)" kind="status" /></td>
             <td><StatusPill :label="getClientStageLabel(client)" kind="stage" /></td>
+            <td class="client-col-document-status" @click.stop>
+              <select
+                class="client-document-status-select"
+                :value="client.contract_status ?? ''"
+                :disabled="isSaving || isInlineDocumentStatusSaving(client)"
+                :aria-label="`Статус договоров: ${getClientName(client)}`"
+                @click.stop
+                @keydown.stop
+                @change="updateClientDocumentStatus(client, 'contract_status', $event)"
+              >
+                <option value="" disabled>Не выбран</option>
+                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`contract-${option.value}`" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </td>
+            <td class="client-col-document-status" @click.stop>
+              <select
+                class="client-document-status-select"
+                :value="client.act_status ?? ''"
+                :disabled="isSaving || isInlineDocumentStatusSaving(client)"
+                :aria-label="`Статус актов: ${getClientName(client)}`"
+                @click.stop
+                @keydown.stop
+                @change="updateClientDocumentStatus(client, 'act_status', $event)"
+              >
+                <option value="" disabled>Не выбран</option>
+                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`act-${option.value}`" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </td>
             <td>{{ getAgentLabel(client.agent_id) }}</td>
             <td>{{ getClientDeadline(client) }}</td>
             <td class="table-actions-cell">
@@ -3501,6 +3679,8 @@ onBeforeUnmount(() => {
           <span>Дата пробития <strong>{{ getClientDate(client) }}</strong></span>
           <span>Статус <strong><StatusPill :label="getClientStatusLabel(client)" kind="status" /></strong></span>
           <span>Этап <strong><StatusPill :label="getClientStageLabel(client)" kind="stage" /></strong></span>
+          <span>Статус договоров <strong>{{ getClientDocumentStatusLabel(client.contract_status) }}</strong></span>
+          <span>Статус актов <strong>{{ getClientDocumentStatusLabel(client.act_status) }}</strong></span>
           <span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span>
           <span>Повторное протезирование<strong>{{ getClientDeadline(client) }}</strong></span>
         </div>
@@ -3649,6 +3829,27 @@ onBeforeUnmount(() => {
               <select v-model="form.prosthesis_type">
                 <option value="">Выбери диагноз</option>
                 <option v-for="option in prosthesisOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="form-grid client-document-status-grid">
+            <label>
+              Статус договоров
+              <select v-model="form.contract_status">
+                <option value="">Не выбран</option>
+                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`form-contract-${option.value}`" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <label>
+              Статус актов
+              <select v-model="form.act_status">
+                <option value="">Не выбран</option>
+                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`form-act-${option.value}`" :value="option.value">
                   {{ option.label }}
                 </option>
               </select>
@@ -4173,7 +4374,10 @@ onBeforeUnmount(() => {
                       </label>
                       <label>
                         Поставщик *
-                        <input v-model="moduleForm.supplier" required />
+                        <input v-model="moduleForm.supplier" list="client-component-suppliers" required />
+                        <datalist id="client-component-suppliers">
+                          <option v-for="supplier in COMPONENT_SUPPLIERS" :key="supplier" :value="supplier" />
+                        </datalist>
                       </label>
                       <label class="component-quantity-field">
                         Количество
@@ -4219,10 +4423,6 @@ onBeforeUnmount(() => {
                       <label>
                         Получено
                         <input v-model="moduleForm.recd" type="number" min="0" step="1" />
-                      </label>
-                      <label>
-                        Ожидается
-                        <input v-model="moduleForm.pending" type="number" min="0" step="1" />
                       </label>
                       <label>
                         У протезиста
@@ -4289,6 +4489,20 @@ onBeforeUnmount(() => {
                   </span>
                 </div>
                 <div class="row-actions">
+                  <label
+                    v-if="group.clientTsrId && group.components.length && !selectedClient?.is_archived"
+                    class="component-prosthetist-toggle component-prosthetist-toggle--group"
+                    @click.stop
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="isGroupFullyAtProsthetist(group)"
+                      :indeterminate="isGroupPartiallyAtProsthetist(group)"
+                      :disabled="isSaving"
+                      @change="handleGroupProsthetistStateChange(group, $event)"
+                    />
+                    <span>Все у протезиста</span>
+                  </label>
                   <strong title="Суммарная себестоимость комплектующих ТСР">{{ formatMoney(getGroupTotalCost(group)) }}</strong>
                   <button
                     v-if="group.clientTsrId && !selectedClient?.is_archived"
@@ -4303,7 +4517,7 @@ onBeforeUnmount(() => {
               </header>
               <div v-if="group.components.length" class="list-stack">
                 <div v-for="moduleItem in group.components" :key="String(moduleItem.module_id)" class="list-row component-list-row">
-                  <div>
+                  <div class="component-main-copy">
                     <button class="link-button component-name-link" type="button" @click="openComponentFromMain(moduleItem)">
                       {{ getModuleName(moduleItem) }}
                     </button>
@@ -4313,15 +4527,53 @@ onBeforeUnmount(() => {
                       себестоимость {{ formatMoney(moduleItem.cost) }} ·
                       цена {{ formatMoney(moduleItem.price) }}
                     </span>
-                    <span class="component-characteristics-line">
-                      Размер: {{ moduleItem.size || '—' }} ·
-                      Жесткость: {{ moduleItem.stiffness || '—' }} ·
-                      Сторона: {{ moduleItem.side || '—' }}
-                    </span>
+                    <div class="component-detail-status-row">
+                      <span class="component-characteristics-line">
+                        Размер: {{ moduleItem.size || '—' }} ·
+                        Жесткость: {{ moduleItem.stiffness || '—' }} ·
+                        Сторона: {{ moduleItem.side || '—' }}
+                      </span>
+                      <span class="component-status-summary">
+                        <span :class="{ 'component-count-status--ordered': Number(moduleItem.ordered || 0) > 0 }">
+                          Заказано <strong>{{ moduleItem.ordered || 0 }}</strong>
+                        </span>
+                        <span :class="{ 'component-count-status--shortfall': hasModuleDeliveryShortfall(moduleItem) }">
+                          Получено <strong>{{ moduleItem.recd || 0 }}</strong>
+                        </span>
+                        <span :class="{ 'component-count-status--prosthetist': isModuleAtProsthetist(moduleItem) }">
+                          У протезиста <strong>{{ moduleItem.prosthetist_keep || 0 }}</strong>
+                        </span>
+                      </span>
+                    </div>
                   </div>
                   <div v-if="!selectedClient?.is_archived" class="row-actions component-actions">
+                    <div class="component-action-buttons">
+                      <label class="component-prosthetist-toggle" @click.stop>
+                        <input
+                          type="checkbox"
+                          :checked="isModuleAtProsthetist(moduleItem)"
+                          :disabled="isSaving || !group.clientTsrId"
+                          @change="handleModuleProsthetistStateChange(group, moduleItem, $event)"
+                        />
+                        <span>У протезиста</span>
+                      </label>
+                      <button
+                        class="ghost-button"
+                        type="button"
+                        title="Изменить комплектующую"
+                        @click="fillModuleForm(moduleItem)"
+                      >
+                        Изменить
+                      </button>
+                      <button class="ghost-button" :disabled="isSaving" type="button" @click="unassignModule(moduleItem)">
+                        На склад
+                      </button>
+                      <button class="danger-button" :disabled="isSaving" type="button" @click="removeClientModule(moduleItem)">
+                        Удалить
+                      </button>
+                    </div>
                     <label v-if="getModuleUnitCount(moduleItem) > 1" class="component-row-quantity-picker" @click.stop>
-                      <span>Для операции</span>
+                      <span class="component-row-quantity-label">Количество для «На склад» / «Удалить»</span>
                       <input
                         :value="getModuleOperationQuantity(moduleItem)"
                         type="number"
@@ -4334,20 +4586,6 @@ onBeforeUnmount(() => {
                       <button class="ghost-button compact-quantity-button" type="button" @click.stop="setModuleOperationQuantity(moduleItem, getModuleUnitCount(moduleItem))">Все</button>
                       <span>из {{ getModuleUnitCount(moduleItem) }}</span>
                     </label>
-                    <button
-                      class="ghost-button"
-                      type="button"
-                      title="Изменить комплектующую"
-                      @click="fillModuleForm(moduleItem)"
-                    >
-                      Изменить
-                    </button>
-                    <button class="ghost-button" :disabled="isSaving" type="button" @click="unassignModule(moduleItem)">
-                      На склад
-                    </button>
-                    <button class="danger-button" :disabled="isSaving" type="button" @click="removeClientModule(moduleItem)">
-                      Удалить
-                    </button>
                   </div>
                 </div>
               </div>
@@ -4666,4 +4904,3 @@ onBeforeUnmount(() => {
     </Teleport>
   </section>
 </template>
-

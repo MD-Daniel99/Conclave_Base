@@ -95,6 +95,14 @@ class Client(Base):
             name="ck_client_taxation_system_allowed",
         ),
         CheckConstraint(
+            "contract_status IS NULL OR contract_status IN ('Подписан', 'Сделан', 'Отправлен')",
+            name="ck_client_contract_status_allowed",
+        ),
+        CheckConstraint(
+            "act_status IS NULL OR act_status IN ('Подписан', 'Сделан', 'Отправлен')",
+            name="ck_client_act_status_allowed",
+        ),
+        CheckConstraint(
             "prosthetist IS NULL OR prosthetist IN ('Дмитрий', 'Никита')",
             name="ck_client_prosthetist_allowed",
         ),
@@ -123,6 +131,8 @@ class Client(Base):
 
     status_code = Column(String(32), ForeignKey("STATUS.status_code"), nullable=False)
     current_stage = Column(String(32), ForeignKey("STAGE.stage_code"), nullable=False)
+    contract_status = Column(String(32), nullable=True)
+    act_status = Column(String(32), nullable=True)
 
     # на агента — запрещаем каскадное удаление (RESTRICT), чтобы случайно не потерять клиентов
     agent_id = Column(UUID(as_uuid=True), ForeignKey("AGENT.agent_id", ondelete="RESTRICT"), nullable=False)
@@ -511,4 +521,3 @@ class ContractAccounting(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     document = relationship("Document", back_populates="contract_accounting")
-

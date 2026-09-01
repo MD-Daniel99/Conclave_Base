@@ -364,7 +364,7 @@ onMounted(async () => {
             <label class="documents-wide-field">Шаблон / ТСР<select v-model="mtzType"><option v-for="item in mtzTemplates" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
             <label>Номер МТЗ<input v-model="mtzNumber" placeholder="Например: 124/26" /></label>
             <label class="mtz-date-field">Дата МТЗ<DateInput v-model="mtzDate" aria-label="Дата МТЗ" /></label>
-            <label class="documents-wide-field">Группа и причина инвалидности<input v-model="disabilityGroupReason" /></label>
+            <label class="documents-wide-field documents-mtz-disability-field">Группа и причина инвалидности<input v-model="disabilityGroupReason" /></label>
             <label class="documents-wide-field">Справка<input v-model="certificateReference" /></label>
             <label class="documents-wide-field">Диагноз<textarea v-model="diagnosis" rows="3" /></label>
             <label>Уровень ампутации<input v-model="amputationLevel" /></label>

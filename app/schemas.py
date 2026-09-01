@@ -27,6 +27,7 @@ BicType = constr(pattern=r'^\d{9}$', strip_whitespace=True)            # 9 ци�
 AccountType = constr(min_length=20, max_length=34, pattern=r'^\d+$', strip_whitespace=True)  # 20..34 цифр
 
 TaxationSystem = Literal["УСН", "ОСНО"]
+DocumentStatus = Literal["Подписан", "Сделан", "Отправлен"]
 Prosthetists = Literal["Дмитрий", "Никита"]
 PlacesOfResidence = Literal["Ивана Сусанина, д. 3", "Большая Почтовая, д. 18/20"]
 PROSTHETIST_ADDRESSES = {
@@ -260,6 +261,8 @@ class ClientBase(BaseModel):
     middle_name: Optional[str] = Field(None, description="Отчество")
     status_code: str = Field(..., description="Статус работы (code)")
     current_stage: str = Field(..., description="Этап работы (code)")
+    contract_status: DocumentStatus | None = None
+    act_status: DocumentStatus | None = None
     agent_id: UUID = Field(..., description="ID агента (UUID)")
     deadline: Optional[datetime] = None
     notes: Optional[str] = None
@@ -316,6 +319,8 @@ class ClientUpdate(BaseModel):
     middle_name: Optional[str] = None
     status_code: Optional[str] = None
     current_stage: Optional[str] = None
+    contract_status: DocumentStatus | None = None
+    act_status: DocumentStatus | None = None
     agent_id: Optional[UUID] = None
     deadline: Optional[datetime] = None
     notes: Optional[str] = None
@@ -402,6 +407,12 @@ class ClientRead(ClientBase):
 class ClientComponentsTsrUpdate(BaseModel):
     component_ids: List[UUID] = Field(..., min_length=1)
     tsr_id: UUID
+
+
+class ClientComponentsProsthetistUpdate(BaseModel):
+    client_tsr_id: UUID
+    component_ids: List[UUID] = Field(..., min_length=1)
+    at_prosthetist: bool
 
 
 # -------------------------
@@ -749,4 +760,3 @@ DocumentRead.model_rebuild()
 
 ClientRead.model_rebuild() 
 UserRead.model_rebuild()
-
