@@ -323,6 +323,28 @@ def _legacy_accounting_value(db: Session, client: models.Client, field_key: str)
     return 0.0
 
 
+def _legacy_accounting_entry(
+    db: Session, client: models.Client, field_key: str
+) -> dict[str, Any] | None:
+    """Build the virtual pre-detailing row for any supported numeric expense field.
+
+    The row is intentionally created from the legacy source (fixed CLIENT column
+    or ACCOUNTING_FIELD_VALUE) so old data can be migrated lazily when the user
+    edits, deletes, or appends detailed expenses.
+    """
+    amount = _legacy_accounting_value(db, client, field_key)
+    if amount == 0.0:
+        return None
+    return {
+        "id": f"legacy-{field_key}",
+        "amount": amount,
+        "description": "Сумма до включения детализации",
+        "created_at": None,
+        "user_id": None,
+        "username": None,
+    }
+
+
 def _normalize_expense_store(value: Any) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(value, dict):
         return {}
@@ -342,6 +364,7 @@ def get_accounting_expense_history(db: Session, client_id: UUID, field_key: str)
     client = db.get(models.Client, client_id)
     if not client:
         raise ValueError("Client not found")
+    field_key = field_key.strip()
     if not _accounting_field_exists(db, field_key):
         raise ValueError("Unknown accounting expense field")
 
@@ -350,18 +373,11 @@ def get_accounting_expense_history(db: Session, client_id: UUID, field_key: str)
     status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
     paid = str(status_store.get(field_key, "paid")).lower() != "unpaid"
 
-    # Старые значения без детализации показываем как один legacy-элемент.
+    # Old values without JSON detail remain visible as one legacy row.
     if not entries:
-        legacy = _legacy_accounting_value(db, client, field_key)
+        legacy = _legacy_accounting_entry(db, client, field_key)
         if legacy:
-            entries = [{
-                "id": f"legacy-{field_key}",
-                "amount": legacy,
-                "description": "Сумма до включения детализации",
-                "created_at": None,
-                "user_id": None,
-                "username": None,
-            }]
+            entries = [legacy]
     return {
         "field_key": field_key,
         "total": _expense_total(entries),
@@ -385,17 +401,12 @@ def add_accounting_expense(
 
     store = _normalize_expense_store(client.accounting_expenses)
     entries = store.setdefault(field_key, [])
+
+    # Lazy migration: preserve a pre-detailing amount as a real first history row.
     if not entries:
-        legacy = _legacy_accounting_value(db, client, field_key)
+        legacy = _legacy_accounting_entry(db, client, field_key)
         if legacy:
-            entries.append({
-                "id": f"legacy-{field_key}",
-                "amount": legacy,
-                "description": "Сумма до включения детализации",
-                "created_at": None,
-                "user_id": None,
-                "username": None,
-            })
+            entries.append(legacy)
 
     entries.append({
         "id": str(uuid.uuid4()),
@@ -412,20 +423,7 @@ def add_accounting_expense(
     else:
         status_store.setdefault(field_key, "paid")
     client.accounting_expense_status = status_store
-    # Materialize the total into legacy columns / custom field values for compatibility.
-    total = _expense_total(entries)
-    if field_key in ACCOUNTING_FIXED_EXPENSE_KEYS:
-        setattr(client, field_key, total)
-    elif field_key.startswith("custom:"):
-        field_id = UUID(field_key.split(":", 1)[1])
-        row = db.query(models.AccountingFieldValue).filter(
-            models.AccountingFieldValue.client_id == client.client_id,
-            models.AccountingFieldValue.field_id == field_id,
-        ).first()
-        if row:
-            row.value_number = total
-        else:
-            db.add(models.AccountingFieldValue(client_id=client.client_id, field_id=field_id, value_number=total))
+    _materialize_accounting_expense_total(db, client, field_key, _expense_total(entries))
     db.add(client)
     db.commit()
     db.refresh(client)
@@ -448,6 +446,25 @@ def _materialize_accounting_expense_total(db: Session, client: models.Client, fi
             db.add(models.AccountingFieldValue(client_id=client.client_id, field_id=field_id, value_number=total))
 
 
+def _materialize_requested_legacy_entry(
+    db: Session,
+    client: models.Client,
+    field_key: str,
+    entry_id: str,
+    entries: list[dict[str, Any]],
+) -> None:
+    """Turn the virtual legacy row into a real JSON row when it is targeted.
+
+    This is the missing compatibility bridge that makes UPDATE/DELETE work for
+    every fixed expense and every active custom numeric expense.
+    """
+    if entries or str(entry_id) != f"legacy-{field_key}":
+        return
+    legacy = _legacy_accounting_entry(db, client, field_key)
+    if legacy:
+        entries.append(legacy)
+
+
 def update_accounting_expense(
     db: Session, client_id: UUID, field_key: str, entry_id: str, payload: schemas.AccountingExpenseUpdate
 ) -> dict[str, Any]:
@@ -459,10 +476,13 @@ def update_accounting_expense(
         raise ValueError("Unknown accounting expense field")
 
     store = _normalize_expense_store(client.accounting_expenses)
-    entries = store.get(field_key, [])
+    entries = store.setdefault(field_key, [])
+    _materialize_requested_legacy_entry(db, client, field_key, entry_id, entries)
+
     entry = next((item for item in entries if str(item.get("id")) == str(entry_id)), None)
     if not entry:
         raise ValueError("Расход не найден")
+
     entry["amount"] = float(payload.amount)
     entry["description"] = payload.description.strip()
     client.accounting_expenses = store
@@ -482,10 +502,13 @@ def delete_accounting_expense(db: Session, client_id: UUID, field_key: str, entr
         raise ValueError("Unknown accounting expense field")
 
     store = _normalize_expense_store(client.accounting_expenses)
-    entries = store.get(field_key, [])
+    entries = store.setdefault(field_key, [])
+    _materialize_requested_legacy_entry(db, client, field_key, entry_id, entries)
+
     index = next((i for i, item in enumerate(entries) if str(item.get("id")) == str(entry_id)), None)
     if index is None:
         raise ValueError("Расход не найден")
+
     entries.pop(index)
     if entries:
         store[field_key] = entries
@@ -503,6 +526,7 @@ def set_accounting_expense_status(db: Session, client_id: UUID, field_key: str, 
     client = db.get(models.Client, client_id)
     if not client:
         raise ValueError("Client not found")
+    field_key = field_key.strip()
     if field_key != "prosthetist_work":
         raise ValueError("Payment status is available only for prosthetist work")
     if not _accounting_field_exists(db, field_key):

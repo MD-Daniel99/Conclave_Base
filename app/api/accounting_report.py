@@ -10,6 +10,8 @@ from app.services.accounting_report import (
     build_accounting_report,
     build_contract_accounting_report,
     build_contract_coverage,
+)
+from app.services.accounting_expenses import (
     get_contract_expense_history as get_contract_expense_history_service,
     add_contract_expense as add_contract_expense_service,
     set_contract_expense_status as set_contract_expense_status_service,
