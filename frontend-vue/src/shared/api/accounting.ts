@@ -70,6 +70,7 @@ export interface AccountingExpenseEntry {
   created_at?: string | null
   user_id?: string | null
   username?: string | null
+  paid?: boolean | null
 }
 
 export interface AccountingExpenseHistory {
@@ -98,7 +99,7 @@ export async function updateClientExpense(
   clientId: string,
   fieldKey: string,
   entryId: string,
-  payload: { amount: number; description: string },
+  payload: { amount: number; description: string; paid?: boolean },
 ) {
   const { data } = await api.patch<AccountingExpenseHistory>(
     `/accounting/clients/${clientId}/expenses/${encodeURIComponent(fieldKey)}/${encodeURIComponent(entryId)}`,
@@ -139,7 +140,7 @@ export async function updateContractExpense(
   documentId: string,
   fieldKey: string,
   entryId: string,
-  payload: { amount: number; description: string },
+  payload: { amount: number; description: string; paid?: boolean },
 ) {
   const { data } = await api.patch<AccountingExpenseHistory>(
     `/accounting/contracts/${documentId}/expenses/${encodeURIComponent(fieldKey)}/${encodeURIComponent(entryId)}`,

@@ -3842,11 +3842,13 @@ body.modal-open {
   width: 138px !important;
   min-width: 138px !important;
   max-width: 138px !important;
+  vertical-align: top;
 }
 
 .desktop-entity-table .client-col-document-status .table-column-filter,
 .client-document-status-select {
   box-sizing: border-box;
+  display: block;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -3886,4 +3888,90 @@ body.modal-open {
   min-height: 2.4em;
   align-items: flex-start;
   line-height: 1.2;
+}
+
+.accounting-expense-partial {
+  background: linear-gradient(90deg, var(--surface) 0 50%, #fff3bd 50% 100%);
+  border-color: #d8c77d;
+  color: #f8fafc;
+  font-weight: 700;
+  text-shadow:
+    0 1px 2px rgb(15 23 42 / 95%),
+    0 0 4px rgb(15 23 42 / 72%);
+}
+.accounting-expense-partial:hover {
+  background: linear-gradient(90deg, var(--surface-elevated) 0 50%, #f3e6a6 50% 100%);
+  color: #fff;
+}
+.accounting-expense-partial .accounting-unpaid-badge {
+  display: table;
+  width: auto;
+  max-width: 100%;
+  margin: 4px auto 0;
+  padding: 2px 6px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 999px;
+  background: rgb(15 23 42 / 76%);
+  color: #fff;
+  text-shadow: none;
+}
+.client-document-status-stack {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  gap: 10px;
+  align-content: start;
+}
+.client-document-status-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  gap: 5px;
+  margin: 0;
+}
+.client-document-status-item > span {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.25;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.document-status-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.document-status-controls label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
+.document-status-controls select { min-width: 130px; }
+.mobile-document-statuses { display: grid; gap: 6px; }
+.mobile-document-statuses > div { display: grid; gap: 2px; }
+.status-choice.compact { padding: 4px 8px; min-height: 28px; font-size: 11px; }
+
+/* DBCRM_ROUND11_20260902: fallback patient statuses when no contract document exists. */
+.client-document-status-select--missing {
+  border-color: rgb(239 68 68 / 72%);
+  background-color: rgb(127 29 29 / 20%);
+  color: #ff9a9a;
+  box-shadow: inset 0 0 0 1px rgb(239 68 68 / 12%);
+}
+
+.client-document-status-select--missing:hover,
+.client-document-status-select--missing:focus {
+  border-color: rgb(248 113 113 / 92%);
+}
+
+.client-document-status-select--missing option:not([value='']) {
+  color: initial;
+}
+
+.client-no-contract-text {
+  color: #ff8f8f;
+  font-weight: 700;
+}
+
+.mobile-document-status-fallback {
+  display: grid;
+  gap: 2px;
 }

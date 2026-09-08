@@ -68,6 +68,7 @@ import {
   generateClientContract,
   generateClientMtz,
   uploadClientDocument,
+  updateDocumentStatus,
   type MtzTemplateOption,
 } from '@/shared/api/documents'
 import { getApiErrorMessage } from '@/shared/api/http'
@@ -249,6 +250,8 @@ const DOCUMENT_STATUS_OPTIONS: Array<{ value: DocumentStatus; label: string }> =
 ]
 
 type ClientDocumentStatusField = 'contract_status' | 'act_status'
+const CONTRACT_DOCUMENT_TYPES = new Set(['llc_contract', 'dmk_contract', 'sdv_contract'])
+
 
 const emptyForm: ClientForm = {
   last_name: '',
@@ -585,8 +588,18 @@ function clientColumnValue(client: Client, key: string): unknown {
   if (key === 'certificate') return getClientCertificateTotal(client)
   if (key === 'status') return getClientStatusLabel(client)
   if (key === 'stage') return getClientStageLabel(client)
-  if (key === 'contract_status') return client.contract_status ?? ''
-  if (key === 'act_status') return client.act_status ?? ''
+  if (key === 'contract_status') {
+    const contracts = getClientContracts(client)
+    return contracts.length
+      ? contracts.map((document) => document.contract_status ?? '').filter(Boolean).join(' ')
+      : client.contract_status ?? ''
+  }
+  if (key === 'act_status') {
+    const contracts = getClientContracts(client)
+    return contracts.length
+      ? contracts.map((document) => document.act_status ?? '').filter(Boolean).join(' ')
+      : client.act_status ?? ''
+  }
   if (key === 'agent') return getAgentLabel(client.agent_id)
   if (key === 'repeat_visit') return getClientRepeatVisitDates(client)
   return ''
@@ -1078,15 +1091,32 @@ function getClientDocumentStatusLabel(value: DocumentStatus | null | undefined) 
   return DOCUMENT_STATUS_OPTIONS.find((option) => option.value === value)?.label ?? 'Не выбран'
 }
 
-function getInlineDocumentStatusSavingKey(client: Client) {
-  return getClientId(client)
+function getClientContracts(client: Client): ClientDocument[] {
+  return (client.documents ?? []).filter((document) => CONTRACT_DOCUMENT_TYPES.has(String(document.document_type ?? '')))
 }
 
-function isInlineDocumentStatusSaving(client: Client) {
-  return Boolean(inlineDocumentStatusSaving[getInlineDocumentStatusSavingKey(client)])
+function getContractDisplayName(document: ClientDocument): string {
+  const date = document.created_at ? formatDate(document.created_at) : 'без даты'
+  return `${getDocumentName(document)} · ${date}`
 }
 
-async function updateClientDocumentStatus(
+function getInlineDocumentStatusSavingKey(document: ClientDocument, field: ClientDocumentStatusField) {
+  return `${String(document.document_id)}:${field}`
+}
+
+function isInlineDocumentStatusSaving(document: ClientDocument, field: ClientDocumentStatusField) {
+  return Boolean(inlineDocumentStatusSaving[getInlineDocumentStatusSavingKey(document, field)])
+}
+
+function getInlineClientStatusSavingKey(client: Client, field: ClientDocumentStatusField) {
+  return `client:${getClientId(client)}:${field}`
+}
+
+function isInlineClientStatusSaving(client: Client, field: ClientDocumentStatusField) {
+  return Boolean(inlineDocumentStatusSaving[getInlineClientStatusSavingKey(client, field)])
+}
+
+async function updateClientFallbackDocumentStatus(
   client: Client,
   field: ClientDocumentStatusField,
   event: Event,
@@ -1094,13 +1124,12 @@ async function updateClientDocumentStatus(
   const select = event.target as HTMLSelectElement
   const nextStatus = DOCUMENT_STATUS_OPTIONS.find((option) => option.value === select.value)?.value
   const clientId = getClientId(client)
-
-  if (!clientId || !nextStatus || isInlineDocumentStatusSaving(client)) return
+  if (!clientId || !nextStatus || isInlineClientStatusSaving(client, field)) return
 
   const previousStatus = client[field] ?? null
   if (previousStatus === nextStatus) return
 
-  const savingKey = getInlineDocumentStatusSavingKey(client)
+  const savingKey = getInlineClientStatusSavingKey(client, field)
   inlineDocumentStatusSaving[savingKey] = true
   client[field] = nextStatus
   resetMessages()
@@ -1118,6 +1147,38 @@ async function updateClientDocumentStatus(
     successMessage.value = `${field === 'contract_status' ? 'Статус договоров' : 'Статус актов'}: ${nextStatus}`
   } catch (caughtError) {
     client[field] = previousStatus
+    select.value = previousStatus ?? ''
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    delete inlineDocumentStatusSaving[savingKey]
+  }
+}
+
+async function updateClientDocumentStatus(
+  client: Client | null,
+  document: ClientDocument,
+  field: ClientDocumentStatusField,
+  event: Event,
+) {
+  const select = event.target as HTMLSelectElement
+  const nextStatus = DOCUMENT_STATUS_OPTIONS.find((option) => option.value === select.value)?.value
+  if (!document.document_id || !nextStatus || isInlineDocumentStatusSaving(document, field)) return
+  const previousStatus = document[field] ?? null
+  if (previousStatus === nextStatus) return
+  const savingKey = getInlineDocumentStatusSavingKey(document, field)
+  inlineDocumentStatusSaving[savingKey] = true
+  document[field] = nextStatus
+  resetMessages()
+  try {
+    const updated = await updateDocumentStatus(String(document.document_id), { [field]: nextStatus })
+    Object.assign(document, updated)
+    const clientDoc = client?.documents?.find((item) => String(item.document_id) === String(document.document_id))
+    if (clientDoc) Object.assign(clientDoc, updated)
+    const selectedDoc = documents.value.find((item) => String(item.document_id) === String(document.document_id))
+    if (selectedDoc) Object.assign(selectedDoc, updated)
+    successMessage.value = `${field === 'contract_status' ? 'Статус договора' : 'Статус актов'}: ${nextStatus}`
+  } catch (caughtError) {
+    document[field] = previousStatus
     select.value = previousStatus ?? ''
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -2007,8 +2068,6 @@ function fillForm(client: Client) {
   form.middle_name = String(client.middle_name ?? '')
   form.status = getReferenceValue(client.status_code)
   form.current_stage = getReferenceValue(client.current_stage)
-  form.contract_status = client.contract_status ?? ''
-  form.act_status = client.act_status ?? ''
   form.agent_id = String(client.agent_id ?? '')
   const diagnosis = String(client.prosthesis_type ?? '')
   form.prosthesis_type = DIAGNOSIS_OPTIONS.some((option) => option.value === diagnosis) ? diagnosis : ''
@@ -2036,8 +2095,6 @@ function buildCreatePayload(): ClientCreatePayload {
     middle_name: optionalString(form.middle_name),
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
-    contract_status: form.contract_status || null,
-    act_status: form.act_status || null,
     agent_id: form.agent_id,
     prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
@@ -2053,8 +2110,6 @@ function buildUpdatePayload(): ClientUpdatePayload {
     middle_name: optionalString(form.middle_name),
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
-    contract_status: form.contract_status || null,
-    act_status: form.act_status || null,
     agent_id: form.agent_id,
     prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
@@ -3300,6 +3355,8 @@ async function generateContract() {
     await generateClientContract(clientId, payload)
     successMessage.value = 'Договор сформирован'
     await loadClientTabData('documents', true)
+    await refreshSelectedClient(clientId, false)
+    await loadClients()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -3617,35 +3674,53 @@ onBeforeUnmount(() => {
             <td><StatusPill :label="getClientStatusLabel(client)" kind="status" /></td>
             <td><StatusPill :label="getClientStageLabel(client)" kind="stage" /></td>
             <td class="client-col-document-status" @click.stop>
+              <div v-if="getClientContracts(client).length" class="client-document-status-stack">
+                <label v-for="document in getClientContracts(client)" :key="`contract-status-${document.document_id}`" class="client-document-status-item">
+                  <span>{{ getContractDisplayName(document) }}</span>
+                  <select class="client-document-status-select" :value="document.contract_status ?? ''" :disabled="isSaving || isInlineDocumentStatusSaving(document, 'contract_status')" @click.stop @keydown.stop @change="updateClientDocumentStatus(client, document, 'contract_status', $event)">
+                    <option value="" disabled>Не выбран</option>
+                    <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`contract-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+              </div>
               <select
+                v-else
                 class="client-document-status-select"
+                :class="{ 'client-document-status-select--missing': !client.contract_status }"
                 :value="client.contract_status ?? ''"
-                :disabled="isSaving || isInlineDocumentStatusSaving(client)"
+                :disabled="isSaving || isInlineClientStatusSaving(client, 'contract_status')"
                 :aria-label="`Статус договоров: ${getClientName(client)}`"
                 @click.stop
                 @keydown.stop
-                @change="updateClientDocumentStatus(client, 'contract_status', $event)"
+                @change="updateClientFallbackDocumentStatus(client, 'contract_status', $event)"
               >
-                <option value="" disabled>Не выбран</option>
-                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`contract-${option.value}`" :value="option.value">
-                  {{ option.label }}
-                </option>
+                <option value="" disabled>Договоров нет</option>
+                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`fallback-contract-${option.value}`" :value="option.value">{{ option.label }}</option>
               </select>
             </td>
             <td class="client-col-document-status" @click.stop>
+              <div v-if="getClientContracts(client).length" class="client-document-status-stack">
+                <label v-for="document in getClientContracts(client)" :key="`act-status-${document.document_id}`" class="client-document-status-item">
+                  <span>{{ getContractDisplayName(document) }}</span>
+                  <select class="client-document-status-select" :value="document.act_status ?? ''" :disabled="isSaving || isInlineDocumentStatusSaving(document, 'act_status')" @click.stop @keydown.stop @change="updateClientDocumentStatus(client, document, 'act_status', $event)">
+                    <option value="" disabled>Не выбран</option>
+                    <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`act-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+              </div>
               <select
+                v-else
                 class="client-document-status-select"
+                :class="{ 'client-document-status-select--missing': !client.act_status }"
                 :value="client.act_status ?? ''"
-                :disabled="isSaving || isInlineDocumentStatusSaving(client)"
+                :disabled="isSaving || isInlineClientStatusSaving(client, 'act_status')"
                 :aria-label="`Статус актов: ${getClientName(client)}`"
                 @click.stop
                 @keydown.stop
-                @change="updateClientDocumentStatus(client, 'act_status', $event)"
+                @change="updateClientFallbackDocumentStatus(client, 'act_status', $event)"
               >
-                <option value="" disabled>Не выбран</option>
-                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`act-${option.value}`" :value="option.value">
-                  {{ option.label }}
-                </option>
+                <option value="" disabled>Договоров нет</option>
+                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`fallback-act-${option.value}`" :value="option.value">{{ option.label }}</option>
               </select>
             </td>
             <td>{{ getAgentLabel(client.agent_id) }}</td>
@@ -3679,8 +3754,19 @@ onBeforeUnmount(() => {
           <span>Дата пробития <strong>{{ getClientDate(client) }}</strong></span>
           <span>Статус <strong><StatusPill :label="getClientStatusLabel(client)" kind="status" /></strong></span>
           <span>Этап <strong><StatusPill :label="getClientStageLabel(client)" kind="stage" /></strong></span>
-          <span>Статус договоров <strong>{{ getClientDocumentStatusLabel(client.contract_status) }}</strong></span>
-          <span>Статус актов <strong>{{ getClientDocumentStatusLabel(client.act_status) }}</strong></span>
+          <div class="mobile-document-statuses">
+            <template v-if="getClientContracts(client).length">
+              <div v-for="document in getClientContracts(client)" :key="`mobile-doc-${document.document_id}`">
+                <strong>{{ getContractDisplayName(document) }}</strong>
+                <span>Договор: {{ getClientDocumentStatusLabel(document.contract_status) }} · Акты: {{ getClientDocumentStatusLabel(document.act_status) }}</span>
+              </div>
+            </template>
+            <div v-else class="mobile-document-status-fallback">
+              <span v-if="client.contract_status">Договор: <strong>{{ getClientDocumentStatusLabel(client.contract_status) }}</strong></span>
+              <span v-if="client.act_status">Акты: <strong>{{ getClientDocumentStatusLabel(client.act_status) }}</strong></span>
+              <span v-if="!client.contract_status && !client.act_status" class="client-no-contract-text">Договоров нет</span>
+            </div>
+          </div>
           <span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span>
           <span>Повторное протезирование<strong>{{ getClientDeadline(client) }}</strong></span>
         </div>
@@ -3829,27 +3915,6 @@ onBeforeUnmount(() => {
               <select v-model="form.prosthesis_type">
                 <option value="">Выбери диагноз</option>
                 <option v-for="option in prosthesisOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-          </div>
-
-          <div class="form-grid client-document-status-grid">
-            <label>
-              Статус договоров
-              <select v-model="form.contract_status">
-                <option value="">Не выбран</option>
-                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`form-contract-${option.value}`" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-            <label>
-              Статус актов
-              <select v-model="form.act_status">
-                <option value="">Не выбран</option>
-                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`form-act-${option.value}`" :value="option.value">
                   {{ option.label }}
                 </option>
               </select>
@@ -4779,6 +4844,10 @@ onBeforeUnmount(() => {
                   {{ getDocumentName(document) }}
                 </strong>
                 <span>{{ document.content_type || 'тип не указан' }} · {{ formatFileSize(document.size) }} · {{ formatDate(document.created_at) }}</span>
+              </div>
+              <div v-if="CONTRACT_DOCUMENT_TYPES.has(String(document.document_type ?? ''))" class="document-status-controls">
+                <label>Статус договора<select :value="document.contract_status ?? ''" @change="updateClientDocumentStatus(selectedClient, document, 'contract_status', $event)"><option value="" disabled>Не выбран</option><option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`doc-contract-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option></select></label>
+                <label>Статус актов<select :value="document.act_status ?? ''" @change="updateClientDocumentStatus(selectedClient, document, 'act_status', $event)"><option value="" disabled>Не выбран</option><option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`doc-act-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option></select></label>
               </div>
               <div class="row-actions">
                 <button v-if="document.document_id" class="ghost-button" type="button" @click="downloadDocument(document)">

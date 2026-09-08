@@ -69,8 +69,10 @@ export type Client = Omit<ClientRead, 'modules' | 'tsr_items'> & {
     created_at?: string | null
     user_id?: string | null
     username?: string | null
+    paid?: boolean | null
   }>>
   accounting_expense_status?: Record<string, string>
+  documents?: ClientDocument[]
   modules?: ComponentItem[]
   tsr_items?: ClientTsr[]
 }
@@ -101,10 +103,10 @@ export type ClientUpdatePayload = ClientUpdate & {
   patient_payment?: number | null
   other_expenses?: number | null
   agency_expenses?: number | null
-  accounting_expenses?: Record<string, Array<{ id: string; amount: number; description: string; created_at?: string | null; user_id?: string | null; username?: string | null }>>
+  accounting_expenses?: Record<string, Array<{ id: string; amount: number; description: string; created_at?: string | null; user_id?: string | null; username?: string | null; paid?: boolean | null }>>
   accounting_expense_status?: Record<string, string>
 }
-export type ClientDocument = DocumentRead & { certificate_id?: string | null }
+export type ClientDocument = DocumentRead & { certificate_id?: string | null; contract_status?: DocumentStatus | null; act_status?: DocumentStatus | null }
 export type ContractGenerationPayload = ContractGeneration & {
   selected_client_tsr_ids?: string[]
   selected_tsr_ids?: string[]

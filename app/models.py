@@ -236,6 +236,8 @@ class Document(Base):
         index=True,
     )
     contract_metadata = Column(JSON, nullable=True)
+    contract_status = Column(String(32), nullable=True)
+    act_status = Column(String(32), nullable=True)
     
     created_at = Column(DateTime(timezone=True), default=datetime.now, server_default=func.now())
 

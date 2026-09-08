@@ -73,3 +73,8 @@ export async function downloadDocumentBlob(documentId: string) {
     contentDisposition: String(response.headers['content-disposition'] ?? ''),
   }
 }
+
+export async function updateDocumentStatus(documentId: string, payload: { contract_status?: string | null; act_status?: string | null }) {
+  const { data } = await api.patch<ClientDocument>(`/documents/${documentId}/status`, payload)
+  return data
+}

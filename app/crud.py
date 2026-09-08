@@ -214,6 +214,13 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         for m in m_q:
             modules_list.append(schemas.ModuleRead.model_validate(m).model_dump())
 
+    documents = db.execute(
+        select(models.Document)
+        .where(models.Document.client_id == client.client_id)
+        .order_by(models.Document.created_at.desc(), models.Document.document_id)
+    ).scalars().all()
+    documents_list = [schemas.DocumentRead.model_validate(item).model_dump() for item in documents]
+
     custom_fields = get_client_custom_field_values(db, client.client_id)
     tsr_items = []
     if "tsr_items" in client.__dict__:
@@ -263,6 +270,7 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "snils": snils_list,
         "modules": modules_list,
         "tsr_items": tsr_items,
+        "documents": documents_list,
         "tsr_code": client.tsr_code,
         "prosthetist_salary": getattr(client, "prosthetist_salary", 0.0),
         "agent_salary": getattr(client, "agent_salary", 0.0),
@@ -378,6 +386,10 @@ def get_accounting_expense_history(db: Session, client_id: UUID, field_key: str)
         legacy = _legacy_accounting_entry(db, client, field_key)
         if legacy:
             entries = [legacy]
+    if field_key == "prosthetist_work":
+        for entry in entries:
+            entry.setdefault("paid", paid)
+        paid = all(bool(entry.get("paid", True)) for entry in entries)
     return {
         "field_key": field_key,
         "total": _expense_total(entries),
@@ -406,6 +418,9 @@ def add_accounting_expense(
     if not entries:
         legacy = _legacy_accounting_entry(db, client, field_key)
         if legacy:
+            if field_key == "prosthetist_work":
+                status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
+                legacy["paid"] = str(status_store.get(field_key, "paid")).lower() != "unpaid"
             entries.append(legacy)
 
     entries.append({
@@ -415,11 +430,12 @@ def add_accounting_expense(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "user_id": str(user.user_id),
         "username": user.username,
+        "paid": (payload.paid is not False) if field_key == "prosthetist_work" else True,
     })
     client.accounting_expenses = store
     status_store = dict(client.accounting_expense_status or {})
     if field_key == "prosthetist_work":
-        status_store[field_key] = "paid" if payload.paid is not False else "unpaid"
+        status_store[field_key] = "paid" if all(bool(item.get("paid", True)) for item in entries) else "unpaid"
     else:
         status_store.setdefault(field_key, "paid")
     client.accounting_expense_status = status_store
@@ -462,6 +478,9 @@ def _materialize_requested_legacy_entry(
         return
     legacy = _legacy_accounting_entry(db, client, field_key)
     if legacy:
+        if field_key == "prosthetist_work":
+            status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
+            legacy["paid"] = str(status_store.get(field_key, "paid")).lower() != "unpaid"
         entries.append(legacy)
 
 
@@ -485,7 +504,13 @@ def update_accounting_expense(
 
     entry["amount"] = float(payload.amount)
     entry["description"] = payload.description.strip()
+    if field_key == "prosthetist_work" and payload.paid is not None:
+        entry["paid"] = bool(payload.paid)
     client.accounting_expenses = store
+    if field_key == "prosthetist_work":
+        status_store = dict(client.accounting_expense_status or {})
+        status_store[field_key] = "paid" if all(bool(item.get("paid", True)) for item in entries) else "unpaid"
+        client.accounting_expense_status = status_store
     _materialize_accounting_expense_total(db, client, field_key, _expense_total(entries))
     db.add(client)
     db.commit()
@@ -531,6 +556,15 @@ def set_accounting_expense_status(db: Session, client_id: UUID, field_key: str, 
         raise ValueError("Payment status is available only for prosthetist work")
     if not _accounting_field_exists(db, field_key):
         raise ValueError("Unknown accounting expense field")
+    store = _normalize_expense_store(client.accounting_expenses)
+    entries = store.setdefault(field_key, [])
+    if not entries:
+        legacy = _legacy_accounting_entry(db, client, field_key)
+        if legacy:
+            entries.append(legacy)
+    for entry in entries:
+        entry["paid"] = bool(paid)
+    client.accounting_expenses = store
     status_store = dict(client.accounting_expense_status or {})
     status_store[field_key] = "paid" if paid else "unpaid"
     client.accounting_expense_status = status_store

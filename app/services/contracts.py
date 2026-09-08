@@ -794,6 +794,8 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     old_documents: list[models.Document] = []
     old_paths: list[str] = []
     preserved_accounting: dict[str, Any] | None = None
+    preserved_contract_status: str | None = None
+    preserved_act_status: str | None = None
     if selected_document_tsr_items:
         candidates = (
             db.query(models.Document)
@@ -817,6 +819,8 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         for old_document in old_documents:
             if preserved_accounting is None:
                 preserved_accounting = _accounting_snapshot(old_document)
+                preserved_contract_status = getattr(old_document, "contract_status", None)
+                preserved_act_status = getattr(old_document, "act_status", None)
             if old_document.storage_path:
                 old_paths.append(old_document.storage_path)
             db.delete(old_document)
@@ -833,6 +837,12 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         document_number=str(getattr(payload, "document_number", "") or "").strip(),
         contract_total=components_cost,
         certificate_amount=certificate_amount,
+        # If statuses were selected in the patient table before the first
+        # contract was generated, carry those fallback values into the actual
+        # document. Once a contract exists the UI switches to per-document
+        # statuses, so the user's prior choice must not appear to disappear.
+        contract_status=preserved_contract_status or client.get("contract_status"),
+        act_status=preserved_act_status or client.get("act_status"),
         certificate_id=certificate_id,
         contract_metadata={
             "certificate_id": str(certificate_id or ""),

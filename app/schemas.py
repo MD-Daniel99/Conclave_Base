@@ -396,6 +396,7 @@ class ClientRead(ClientBase):
 
     modules: Optional[List["ModuleRead"]] = Field(default_factory = list)
     tsr_items: Optional[List[ClientTsrRead]] = Field(default_factory=list)
+    documents: Optional[List["DocumentRead"]] = Field(default_factory=list)
 
     custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
     accounting_expenses: Optional[Dict[str, Any]] = Field(default_factory=dict)
@@ -617,8 +618,15 @@ class DocumentRead(BaseModel):
     certificate_amount: Optional[float] = None
     certificate_id: Optional[UUID] = None
     contract_metadata: Optional[Dict[str, Any]] = None
+    contract_status: DocumentStatus | None = None
+    act_status: DocumentStatus | None = None
     
     model_config = ConfigDict(from_attributes=True)
+
+class DocumentStatusUpdate(BaseModel):
+    contract_status: DocumentStatus | None = None
+    act_status: DocumentStatus | None = None
+
 
 class DocumentType:
     LLC_CONTRACT = "llc_contract"
@@ -738,6 +746,7 @@ class AccountingExpenseCreate(BaseModel):
 class AccountingExpenseUpdate(BaseModel):
     amount: float = Field(..., gt=0)
     description: str = Field(..., min_length=1, max_length=500)
+    paid: Optional[bool] = None
 
 
 class AccountingExpenseEntryRead(BaseModel):
@@ -747,6 +756,7 @@ class AccountingExpenseEntryRead(BaseModel):
     created_at: Optional[datetime] = None
     user_id: Optional[UUID] = None
     username: Optional[str] = None
+    paid: Optional[bool] = None
 
 
 class AccountingExpenseRead(BaseModel):

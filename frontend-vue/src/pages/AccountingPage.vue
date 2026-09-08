@@ -42,6 +42,18 @@ type EditableRow = Record<ExpenseKey, string> & {
   custom: Record<string, string>
 }
 
+const ACCOUNTING_CONTRACT_DOCUMENT_TYPES = new Set([
+  'llc_contract',
+  'dmk_contract',
+  'sdv_contract',
+  // Legacy generated contract types are still valid evidence that a
+  // contract exists, even when they are not editable in the new per-document
+  // status UI.
+  'contract_original',
+  'contract_template',
+  'dmk_instrument',
+])
+
 const expenseColumns: Array<{ key: ExpenseKey; label: string }> = [
   { key: 'prosthetist_work', label: 'Работа протезиста' },
   { key: 'patient_travel', label: 'Проезд пациента' },
@@ -365,8 +377,19 @@ function getClientTaxPercent(client: Client) {
   return client.taxation_system === 'ОСНО' ? taxOsnoPercent.value : taxUsnPercent.value
 }
 
+function clientHasGeneratedContract(client: Client) {
+  return (client.documents ?? []).some((document) =>
+    ACCOUNTING_CONTRACT_DOCUMENT_TYPES.has(String(document.document_type ?? '').trim().toLowerCase()),
+  )
+}
+
 function clientRequiresContract(client: Client) {
-  return coverageByClientId.value.get(getClientId(client))?.requires_contract ?? false
+  // Client rows already include their documents. Prefer that direct source of
+  // truth so a stale/legacy certificate link can never turn an existing
+  // contract into a false red warning. The coverage endpoint remains a
+  // fallback for compatibility.
+  if (clientHasGeneratedContract(client)) return false
+  return coverageByClientId.value.get(getClientId(client))?.requires_contract ?? true
 }
 
 function isFailedClient(client: Client) {
@@ -483,13 +506,21 @@ function getExpenseCellTotal(client: Client, key: string) {
   return parseMoney(client[key as ExpenseKey] ?? 0)
 }
 
-function getExpenseCellPaid(client: Client, key: string) {
-  return key !== 'prosthetist_work' || client.accounting_expense_status?.[key] !== 'unpaid'
+function getExpensePaymentState(client: Client, key: string): 'paid' | 'unpaid' | 'partial' {
+  if (key !== 'prosthetist_work') return 'paid'
+  const entries = getExpenseEntries(client, key)
+  const legacyPaid = client.accounting_expense_status?.[key] !== 'unpaid'
+  if (!entries.length) return legacyPaid ? 'paid' : 'unpaid'
+  const states = entries.map((entry) => entry.paid == null ? legacyPaid : Boolean(entry.paid))
+  if (states.every(Boolean)) return 'paid'
+  if (states.every((value) => !value)) return 'unpaid'
+  return 'partial'
 }
 
-function isExpenseCellUnpaid(client: Client, key: string) {
-  return key === 'prosthetist_work' && !getExpenseCellPaid(client, key)
+function getExpenseCellPaid(client: Client, key: string) {
+  return getExpensePaymentState(client, key) === 'paid'
 }
+
 
 function getExpenseCellLabel(key: string) {
   const fixed = expenseColumns.find((column) => column.key === key)
@@ -539,6 +570,22 @@ function startEditExpense(entry: { id: string; amount: number; description: stri
   pendingDeleteExpenseId.value = null
   editExpenseAmount.value = formatMoneyInput(entry.amount)
   editExpenseDescription.value = entry.description
+}
+
+async function toggleExpenseEntryPaid(entry: { id: string; amount: number; description: string; paid?: boolean | null }) {
+  if (selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  const nextPaid = !(entry.paid ?? true)
+  expenseDialogLoading.value = true
+  try {
+    const client = selectedExpenseClient.value
+    if (!client) return
+    selectedExpenseHistory.value = await updateClientExpense(getClientId(client), 'prosthetist_work', entry.id, { amount: entry.amount, description: entry.description, paid: nextPaid })
+    await loadData()
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    expenseDialogLoading.value = false
+  }
 }
 
 function cancelEditExpense() {
@@ -1058,13 +1105,13 @@ onMounted(async () => {
               <td v-for="column in expenseColumns.filter((item) => isColumnVisible(item.key))" :key="column.key">
                 <button
                   class="accounting-expense-cell"
-                  :class="{ 'accounting-expense-unpaid': isExpenseCellUnpaid(row.client, column.key) }"
+                  :class="{ 'accounting-expense-unpaid': getExpensePaymentState(row.client, column.key) === 'unpaid', 'accounting-expense-partial': getExpensePaymentState(row.client, column.key) === 'partial' }"
                   type="button"
                   :title="`Открыть расходы: ${column.label}`"
                   @click="openExpenseCell(row.client, column.key)"
                 >
                   {{ formatMoney(getExpenseCellTotal(row.client, column.key)) }}
-                  <span v-if="isExpenseCellUnpaid(row.client, column.key)" class="accounting-unpaid-badge">Не оплачено</span>
+                  <span v-if="getExpensePaymentState(row.client, column.key) === 'unpaid'" class="accounting-unpaid-badge">Не оплачено</span><span v-else-if="getExpensePaymentState(row.client, column.key) === 'partial'" class="accounting-unpaid-badge">Частично оплачено</span>
                 </button>
               </td>
               <td
@@ -1171,6 +1218,7 @@ onMounted(async () => {
                   <div class="accounting-expense-entry-meta">
                     <small>{{ entry.username || 'Система' }} · {{ entry.created_at ? formatDateTime(entry.created_at) : 'ранее' }}</small>
                     <div class="accounting-expense-entry-actions">
+                      <button v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="status-choice compact" :class="{ active: entry.paid !== false, unpaid: entry.paid === false }" type="button" :disabled="expenseDialogLoading" @click="toggleExpenseEntryPaid(entry)">{{ entry.paid === false ? 'Не оплачено' : 'Оплачено' }}</button>
                       <button class="ghost-button" type="button" :disabled="expenseDialogLoading" @click="startEditExpense(entry)">Изменить</button>
                       <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="requestDeleteExpense(entry.id)">Удалить</button>
                     </div>
@@ -1189,7 +1237,7 @@ onMounted(async () => {
           </div>
 
           <div v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="accounting-payment-status">
-            <span class="muted">Статус выплаты:</span>
+            <span class="muted">Статус нового расхода:</span>
             <button class="status-choice" :class="{ active: expensePaid }" type="button" @click="changeProsthetistPaymentStatus(true)">Оплачено</button>
             <button class="status-choice unpaid" :class="{ active: !expensePaid }" type="button" @click="changeProsthetistPaymentStatus(false)">Не оплачено</button>
           </div>

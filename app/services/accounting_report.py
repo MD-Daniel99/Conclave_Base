@@ -43,11 +43,21 @@ def accounting_expense_total(client: models.Client, field_key: str) -> float:
     return parse_number(getattr(client, field_key, 0.0)) if field_key in FIXED_EXPENSE_KEYS else 0.0
 
 
-def accounting_expense_paid(client: models.Client, field_key: str) -> bool:
+def accounting_expense_payment_state(client: models.Client, field_key: str) -> str:
     if field_key != "prosthetist_work":
-        return True
-    store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
-    return str(store.get(field_key, "paid")).lower() != "unpaid"
+        return "paid"
+    entries = accounting_expense_entries(client, field_key)
+    status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
+    legacy_paid = str(status_store.get(field_key, "paid")).lower() != "unpaid"
+    if not entries:
+        return "paid" if legacy_paid else "unpaid"
+    states = [bool(item.get("paid", legacy_paid)) for item in entries]
+    if all(states): return "paid"
+    if not any(states): return "unpaid"
+    return "partial"
+
+def accounting_expense_paid(client: models.Client, field_key: str) -> bool:
+    return accounting_expense_payment_state(client, field_key) == "paid"
 
 CONTRACT_EXPENSE_HISTORY_KEY = "__expense_history__"
 
@@ -104,7 +114,14 @@ def get_contract_expense_history(db: Session, document_id: UUID, field_key: str)
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
             entries = [legacy]
-    return {"field_key": field_key, "total": _contract_expense_total(entries), "paid": str(state.get("paid", "paid")).lower() != "unpaid", "entries": entries}
+    legacy_paid = str(state.get("paid", "paid")).lower() != "unpaid"
+    if field_key == "prosthetist_work":
+        for entry in entries:
+            entry.setdefault("paid", legacy_paid)
+        paid = all(bool(entry.get("paid", True)) for entry in entries)
+    else:
+        paid = True
+    return {"field_key": field_key, "total": _contract_expense_total(entries), "paid": paid, "entries": entries}
 
 
 def _write_contract_history(accounting: models.ContractAccounting, store: dict[str, dict[str, Any]]) -> None:
@@ -136,9 +153,11 @@ def add_contract_expense(db: Session, document_id: UUID, payload: Any, user: mod
     if not entries:
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
+            if field_key == "prosthetist_work":
+                legacy["paid"] = str(state.get("paid", "paid")).lower() != "unpaid"
             entries.append(legacy)
-    entries.append({"id": str(uuid4()), "amount": float(payload.amount), "description": payload.description.strip(), "created_at": datetime.now(timezone.utc).isoformat(), "user_id": str(user.user_id), "username": user.username})
-    paid = True if field_key != "prosthetist_work" else payload.paid is not False
+    entries.append({"id": str(uuid4()), "amount": float(payload.amount), "description": payload.description.strip(), "created_at": datetime.now(timezone.utc).isoformat(), "user_id": str(user.user_id), "username": user.username, "paid": (payload.paid is not False) if field_key == "prosthetist_work" else True})
+    paid = True if field_key != "prosthetist_work" else all(bool(item.get("paid", True)) for item in entries)
     store[field_key] = {"entries": entries, "paid": paid}
     _write_contract_history(accounting, store)
     _materialize_contract_expense(accounting, field_key, _contract_expense_total(entries))
@@ -159,6 +178,8 @@ def set_contract_expense_status(db: Session, document_id: UUID, field_key: str, 
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
             entries.append(legacy)
+    for entry in entries:
+        entry["paid"] = bool(paid)
     store[field_key] = {"entries": entries, "paid": bool(paid)}
     _write_contract_history(accounting, store)
     db.commit()
@@ -177,13 +198,18 @@ def update_contract_expense(db: Session, document_id: UUID, field_key: str, entr
     if not entries:
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
+            if field_key == "prosthetist_work":
+                legacy["paid"] = str(state.get("paid", "paid")).lower() != "unpaid"
             entries.append(legacy)
     target = next((item for item in entries if str(item.get("id")) == entry_id), None)
     if target is None:
         raise ValueError("Expense entry not found")
     target["amount"] = float(payload.amount)
     target["description"] = payload.description.strip()
-    store[field_key] = {"entries": entries, "paid": str(state.get("paid", "paid")).lower() != "unpaid"}
+    if field_key == "prosthetist_work" and payload.paid is not None:
+        target["paid"] = bool(payload.paid)
+    paid = True if field_key != "prosthetist_work" else all(bool(item.get("paid", True)) for item in entries)
+    store[field_key] = {"entries": entries, "paid": paid}
     _write_contract_history(accounting, store)
     _materialize_contract_expense(accounting, field_key, _contract_expense_total(entries))
     db.commit()
@@ -202,6 +228,8 @@ def delete_contract_expense(db: Session, document_id: UUID, field_key: str, entr
     if not entries:
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
+            if field_key == "prosthetist_work":
+                legacy["paid"] = str(state.get("paid", "paid")).lower() != "unpaid"
             entries.append(legacy)
     new_entries = [item for item in entries if str(item.get("id")) != entry_id]
     if len(new_entries) == len(entries):
@@ -500,6 +528,7 @@ def build_contract_accounting_report(
         }
         contract_history = _contract_history_store(accounting)
         prosthetist_state = contract_history.get("prosthetist_work") if isinstance(contract_history.get("prosthetist_work"), dict) else {}
+        prosthetist_entries = [dict(item) for item in prosthetist_state.get("entries", []) if isinstance(item, dict)]
         # Status paid/unpaid remains visible, but never removes the expense.
         fixed_expenses = sum(fixed_expenses_by_key.values())
         custom_values = accounting.custom_values or {}
@@ -554,7 +583,11 @@ def build_contract_accounting_report(
             },
             "custom_values": report_custom_values,
             "expense_status": {
-                "prosthetist_work": "unpaid" if str(prosthetist_state.get("paid", "paid")).lower() == "unpaid" else "paid",
+                "prosthetist_work": (
+                    "partial" if prosthetist_entries and any(bool(item.get("paid", str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")) for item in prosthetist_entries) and not all(bool(item.get("paid", str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")) for item in prosthetist_entries)
+                    else "paid" if (all(bool(item.get("paid", str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")) for item in prosthetist_entries) if prosthetist_entries else str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")
+                    else "unpaid"
+                ),
             },
         })
 
@@ -933,7 +966,13 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
             covered_ids.update(contract_component_ids(metadata))
 
         certificate_ids = {str(item.client_tsr_id) for item in (client.tsr_items or [])}
-        requires_contract = bool(certificate_ids - covered_certificate_ids) if certificate_ids else not distinct_contract_keys
+        # The red accounting warning answers one simple question: does the
+        # patient have a generated contract at all?  Contract-to-certificate
+        # links are useful for coverage diagnostics below, but old contracts
+        # may legitimately lack those normalized links.  Treating a missing
+        # certificate link as a missing contract caused false warnings for
+        # patients whose contract document already exists.
+        requires_contract = not bool(distinct_contract_keys)
         uncovered_ids = sorted(module_ids - covered_ids)
         result.append({
             "client_id": str(client.client_id),

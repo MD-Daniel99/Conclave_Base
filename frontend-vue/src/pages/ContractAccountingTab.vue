@@ -441,6 +441,22 @@ function startEditExpense(entry: { id: string; amount: number; description: stri
   pendingDeleteExpenseId.value = null
 }
 
+async function toggleExpenseEntryPaid(entry: { id: string; amount: number; description: string; paid?: boolean | null }) {
+  if (selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  const nextPaid = !(entry.paid ?? true)
+  expenseDialogLoading.value = true
+  try {
+    const row = selectedExpenseRow.value
+    if (!row) return
+    selectedExpenseHistory.value = await updateContractExpense(getDocumentId(row), 'prosthetist_work', entry.id, { amount: entry.amount, description: entry.description, paid: nextPaid })
+    await loadData()
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    expenseDialogLoading.value = false
+  }
+}
+
 function cancelEditExpense() {
   editingExpenseId.value = null
   editExpenseAmount.value = ''
@@ -766,12 +782,12 @@ onMounted(loadData)
             <td v-for="column in expenseColumns.filter((entry) => isColumnVisible(entry.key))" :key="column.key">
               <button
                 class="accounting-expense-cell"
-                :class="{ 'accounting-expense-unpaid': column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid' }"
+                :class="{ 'accounting-expense-unpaid': column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid', 'accounting-expense-partial': column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'partial' }"
                 type="button"
                 @click="openExpenseCell(item.row, column.key)"
               >
                 {{ formatMoney(getExpenseCellTotal(item.row, column.key)) }}
-                <span v-if="column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid'" class="accounting-unpaid-badge">Не оплачено</span>
+                <span v-if="column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid'" class="accounting-unpaid-badge">Не оплачено</span><span v-else-if="column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'partial'" class="accounting-unpaid-badge">Частично оплачено</span>
               </button>
             </td>
             <td
@@ -878,6 +894,7 @@ onMounted(loadData)
                   <div class="accounting-expense-entry-meta">
                     <small>{{ entry.username || 'Система' }} · {{ entry.created_at ? new Date(entry.created_at).toLocaleString('ru-RU') : 'ранее' }}</small>
                     <div class="accounting-expense-entry-actions">
+                      <button v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="status-choice compact" :class="{ active: entry.paid !== false, unpaid: entry.paid === false }" type="button" :disabled="expenseDialogLoading" @click="toggleExpenseEntryPaid(entry)">{{ entry.paid === false ? 'Не оплачено' : 'Оплачено' }}</button>
                       <button class="ghost-button" type="button" :disabled="expenseDialogLoading" @click="startEditExpense(entry)">Изменить</button>
                       <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="requestDeleteExpense(entry.id)">Удалить</button>
                     </div>
@@ -896,7 +913,7 @@ onMounted(loadData)
           </div>
 
           <div v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="accounting-payment-status">
-            <span class="muted">Статус выплаты:</span>
+            <span class="muted">Статус нового расхода:</span>
             <button class="status-choice" :class="{ active: expensePaid }" type="button" @click="changeProsthetistPaymentStatus(true)">Оплачено</button>
             <button class="status-choice unpaid" :class="{ active: !expensePaid }" type="button" @click="changeProsthetistPaymentStatus(false)">Не оплачено</button>
           </div>

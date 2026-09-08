@@ -21,6 +21,7 @@ ALLOWED_CONTENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "dmk_contract", "sdv_contract"})
 
 
 @router.post("/clients/{client_id}/upload", response_model=schemas.DocumentRead)
@@ -75,6 +76,29 @@ def list_mtz_templates(
     current_user: models.User = Depends(get_current_user),
 ):
     return mtz.list_mtz_templates()
+
+
+@router.patch("/{document_id}/status", response_model=schemas.DocumentRead)
+def update_document_status(
+    document_id: UUID,
+    payload: schemas.DocumentStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    doc = crud.get_document(db, document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    if doc.document_type not in CONTRACT_DOCUMENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Статусы доступны только для договоров")
+    before = snapshot(doc)
+    values = payload.model_dump(exclude_unset=True)
+    for key, value in values.items():
+        setattr(doc, key, value)
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    log_action(db, entity="client", entity_id=doc.client_id, action="document.status.update", user=current_user, before=before, after=doc)
+    return doc
 
 
 @router.get("/download/{document_id}")
