@@ -10,7 +10,7 @@ const AgentsPage = () => import('@/pages/AgentsPage.vue')
 const WarehousePage = () => import('@/pages/WarehousePage.vue')
 const AccountingPage = () => import('@/pages/AccountingPage.vue')
 const DocumentsPage = () => import('@/pages/DocumentsPage.vue')
-const TsrReferencesPage = () => import('@/pages/TsrReferencesPage.vue')
+const ReferencesPage = () => import('@/pages/ReferencesPage.vue')
 const AdminUsersPage = () => import('@/pages/AdminUsersPage.vue')
 const SettingsPage = () => import('@/pages/SettingsPage.vue')
 
@@ -63,8 +63,21 @@ export const router = createRouter({
         },
         {
           path: 'tsr-references',
-          name: 'tsr-references',
-          component: TsrReferencesPage,
+          redirect: { name: 'references-tsr' },
+        },
+        {
+          path: 'references',
+          redirect: { name: 'references-tsr' },
+        },
+        {
+          path: 'references/tsr',
+          name: 'references-tsr',
+          component: ReferencesPage,
+        },
+        {
+          path: 'references/components',
+          name: 'references-components',
+          component: ReferencesPage,
         },
         {
           path: 'accounting',

@@ -155,3 +155,25 @@ export async function deleteContractExpense(documentId: string, fieldKey: string
   )
   return data
 }
+
+
+function saveXlsxBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadAccountingClientsXlsx(params: AccountingReportParams = {}) {
+  const response = await api.get<Blob>('/accounting/report.xlsx', { params, responseType: 'blob' })
+  saveXlsxBlob(response.data, 'Бухгалтерия_по_клиентам.xlsx')
+}
+
+export async function downloadAccountingContractsXlsx(params: AccountingReportParams = {}) {
+  const response = await api.get<Blob>('/accounting/contracts.xlsx', { params, responseType: 'blob' })
+  saveXlsxBlob(response.data, 'Бухгалтерия_по_договорам.xlsx')
+}

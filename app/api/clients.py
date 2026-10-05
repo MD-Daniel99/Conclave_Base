@@ -35,10 +35,34 @@ def read_clients(
     agent_id: UUID | None = Query(None),
     current_stage: str | None = Query(None),
     archived: bool = Query(False),
+    workflow_bucket: str | None = Query(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return crud.list_clients(db, skip, limit, q, status, agent_id, current_stage, archived)
+    return crud.list_clients(db, skip, limit, q, status, agent_id, current_stage, archived, workflow_bucket)
+
+
+@router.get("/settings/unpunched-custom-fields", response_model=List[schemas.UnpunchedCustomFieldRead])
+def list_unpunched_custom_fields(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return crud.get_unpunched_custom_fields(db)
+
+
+@router.post("/settings/unpunched-custom-fields", response_model=schemas.UnpunchedCustomFieldRead, status_code=status.HTTP_201_CREATED)
+def create_unpunched_custom_field(payload: schemas.UnpunchedCustomFieldCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    try:
+        field = crud.create_unpunched_custom_field(db, payload.field_name, payload.field_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    log_action(db, entity="unpunched_field", entity_id=field.field_id, action="create", user=current_user, after=field)
+    return field
+
+
+@router.delete("/settings/unpunched-custom-fields/{field_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_unpunched_custom_field(field_id: UUID, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if not crud.delete_unpunched_custom_field(db, field_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Field not found")
+    return None
+
 
 
 @router.get("/{client_id}", response_model=schemas.ClientRead)
@@ -297,6 +321,28 @@ def restore_client(
         db=db,
         current_user=current_user,
     )
+
+
+@router.post("/{client_id}/move/{bucket}", response_model=schemas.ClientRead)
+def move_client_between_lists(
+    client_id: UUID,
+    bucket: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if bucket not in {"unpunched", "work", "completed"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown patient list")
+    before = crud.get_client(db, client_id)
+    if not before:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+    try:
+        after = crud.move_client_to_bucket(db, client_id, bucket=bucket)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not after:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+    log_action(db, entity="client", entity_id=client_id, action=f"list.move.{bucket}", user=current_user, before=before, after=after)
+    return after
 
 
 @router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)

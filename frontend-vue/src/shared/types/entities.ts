@@ -54,6 +54,10 @@ export type Client = Omit<ClientRead, 'modules' | 'tsr_items'> & {
   act_status?: DocumentStatus | null
   prosthetist?: string | null
   is_archived?: boolean
+  workflow_bucket?: 'unpunched' | 'work'
+  precheck_status?: string | null
+  precheck_stage?: string | null
+  unpunched_custom_values?: Record<string, string | number | null>
   taxation_system?: 'УСН' | 'ОСНО'
   prosthetist_work?: number | null
   patient_travel?: number | null
@@ -90,6 +94,10 @@ export type ClientCreatePayload = ClientCreate & {
   act_status?: DocumentStatus | null
   prosthetist?: string | null
   taxation_system?: 'УСН' | 'ОСНО'
+  workflow_bucket?: 'unpunched' | 'work'
+  precheck_status?: string | null
+  precheck_stage?: string | null
+  unpunched_custom_values?: Record<string, string | number | null>
 }
 export type ClientUpdatePayload = ClientUpdate & {
   contract_status?: DocumentStatus | null
@@ -105,6 +113,10 @@ export type ClientUpdatePayload = ClientUpdate & {
   agency_expenses?: number | null
   accounting_expenses?: Record<string, Array<{ id: string; amount: number; description: string; created_at?: string | null; user_id?: string | null; username?: string | null; paid?: boolean | null }>>
   accounting_expense_status?: Record<string, string>
+  workflow_bucket?: 'unpunched' | 'work'
+  precheck_status?: string | null
+  precheck_stage?: string | null
+  unpunched_custom_values?: Record<string, string | number | null>
 }
 export type ClientDocument = DocumentRead & { certificate_id?: string | null; contract_status?: DocumentStatus | null; act_status?: DocumentStatus | null }
 export type ContractGenerationPayload = ContractGeneration & {
@@ -301,3 +313,5 @@ export interface ClientContractCoverage {
   uncovered_module_ids: string[]
   uncovered_module_names: string[]
 }
+
+export interface UnpunchedCustomField { field_id: string; field_name: string; field_type: 'number' | 'text'; is_active: boolean; created_at?: string }

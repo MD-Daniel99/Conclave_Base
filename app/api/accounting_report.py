@@ -1,6 +1,8 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+from io import BytesIO
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
@@ -10,14 +12,13 @@ from app.services.accounting_report import (
     build_accounting_report,
     build_contract_accounting_report,
     build_contract_coverage,
-)
-from app.services.accounting_expenses import (
     get_contract_expense_history as get_contract_expense_history_service,
     add_contract_expense as add_contract_expense_service,
     set_contract_expense_status as set_contract_expense_status_service,
     update_contract_expense as update_contract_expense_service,
     delete_contract_expense as delete_contract_expense_service,
 )
+from app.services.accounting_xlsx import build_clients_accounting_xlsx, build_contracts_accounting_xlsx
 from app.services.audit import log_action, snapshot
 
 router = APIRouter(prefix="/accounting", tags=["accounting"])
@@ -49,6 +50,29 @@ def get_accounting_report(
     )
 
 
+@router.get("/report.xlsx")
+def export_accounting_report_xlsx(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    hide_failed: bool = Query(default=True),
+    tax_percent: float | None = Query(default=None, ge=0),
+    tax_usn_percent: float | None = Query(default=None, ge=0),
+    tax_osno_percent: float = Query(default=15.0, ge=0),
+    acquiring_percent: float = Query(default=1.0, ge=0),
+    vat_percent: float = Query(default=20.0, ge=0),
+    db: Session = Depends(get_db),
+    _current_user=Depends(require_admin),
+):
+    report = build_accounting_report(
+        db, start_date=start_date, end_date=end_date, hide_failed=hide_failed,
+        tax_percent=tax_percent, tax_usn_percent=tax_usn_percent, tax_osno_percent=tax_osno_percent,
+        acquiring_percent=acquiring_percent, vat_percent=vat_percent,
+    )
+    payload = build_clients_accounting_xlsx(db, report)
+    headers = {"Content-Disposition": 'attachment; filename="accounting_clients.xlsx"'}
+    return StreamingResponse(BytesIO(payload), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+
+
 @router.get("/contracts")
 def get_contract_accounting_report(
     start_date: date | None = Query(default=None),
@@ -73,6 +97,29 @@ def get_contract_accounting_report(
         acquiring_percent=acquiring_percent,
         vat_percent=vat_percent,
     )
+
+
+@router.get("/contracts.xlsx")
+def export_contract_accounting_report_xlsx(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    hide_failed: bool = Query(default=True),
+    tax_percent: float | None = Query(default=None, ge=0),
+    tax_usn_percent: float | None = Query(default=None, ge=0),
+    tax_osno_percent: float = Query(default=15.0, ge=0),
+    acquiring_percent: float = Query(default=1.0, ge=0),
+    vat_percent: float = Query(default=20.0, ge=0),
+    db: Session = Depends(get_db),
+    _current_user=Depends(require_admin),
+):
+    report = build_contract_accounting_report(
+        db, start_date=start_date, end_date=end_date, hide_failed=hide_failed,
+        tax_percent=tax_percent, tax_usn_percent=tax_usn_percent, tax_osno_percent=tax_osno_percent,
+        acquiring_percent=acquiring_percent, vat_percent=vat_percent,
+    )
+    payload = build_contracts_accounting_xlsx(db, report)
+    headers = {"Content-Disposition": 'attachment; filename="accounting_contracts.xlsx"'}
+    return StreamingResponse(BytesIO(payload), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
 
 @router.get("/contract-coverage")

@@ -16,6 +16,7 @@ import {
   updateClientExpense,
   deleteClientExpense,
   updateClientExpenseStatus,
+  downloadAccountingClientsXlsx,
 } from '@/shared/api/accounting'
 import { fetchUserSettings, updateUserSettings } from '@/shared/api/auth'
 import { fetchClients } from '@/shared/api/clients'
@@ -115,6 +116,7 @@ const editExpenseAmount = ref('')
 const editExpenseDescription = ref('')
 const pendingDeleteExpenseId = ref<string | null>(null)
 const isLoading = ref(false)
+const isExportingXlsx = ref(false)
 const isSaving = ref(false)
 const isPercentSaving = ref(false)
 const isSettingsReady = ref(false)
@@ -384,11 +386,12 @@ function clientHasGeneratedContract(client: Client) {
 }
 
 function clientRequiresContract(client: Client) {
-  // Client rows already include their documents. Prefer that direct source of
-  // truth so a stale/legacy certificate link can never turn an existing
-  // contract into a false red warning. The coverage endpoint remains a
-  // fallback for compatibility.
+  // A real generated document is the primary source of truth. For legacy
+  // patients, statuses «Сделан», «Отправлен» and «Подписан» also mean that a
+  // contract already exists even if the DOCX itself is not stored in the CRM.
   if (clientHasGeneratedContract(client)) return false
+  const contractStatus = String(client.contract_status ?? '').trim().toLocaleLowerCase('ru-RU')
+  if (['сделан', 'отправлен', 'подписан'].includes(contractStatus)) return false
   return coverageByClientId.value.get(getClientId(client))?.requires_contract ?? true
 }
 
@@ -403,7 +406,10 @@ function getModulesCost(client: Client, visibleCertificateIds: Set<string>) {
   const dateFilterActive = Boolean(startDate.value || endDate.value)
   const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
   return (client.modules ?? []).reduce((sum, component) => {
-    if (component.is_archived || component.accounting_cost_excluded) return sum
+    // ``is_archived`` is inherited from the patient when they are moved to
+    // «Выполненные».  The purchase already happened, so accounting must keep it.
+    // Only an explicitly written-off component is excluded from the live cost.
+    if (component.is_manually_archived || component.accounting_cost_excluded) return sum
     if (dateFilterActive && hasNormalizedCertificates) {
       const certificateId = String(component.client_tsr_id ?? '')
       if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
@@ -416,7 +422,7 @@ function getStockReusedCost(client: Client, visibleCertificateIds: Set<string>) 
   const dateFilterActive = Boolean(startDate.value || endDate.value)
   const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
   return (client.modules ?? []).reduce((sum, component) => {
-    if (component.is_archived || !component.accounting_cost_excluded) return sum
+    if (component.is_manually_archived || !component.accounting_cost_excluded) return sum
     if (dateFilterActive && hasNormalizedCertificates) {
       const certificateId = String(component.client_tsr_id ?? '')
       if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
@@ -807,6 +813,26 @@ async function savePercentSettings() {
   }
 }
  
+async function exportClientsXlsx() {
+  isExportingXlsx.value = true
+  error.value = ''
+  try {
+    await downloadAccountingClientsXlsx({
+      start_date: startDate.value || null,
+      end_date: endDate.value || null,
+      hide_failed: hideFailed.value,
+      tax_usn_percent: taxUsnPercent.value,
+      tax_osno_percent: taxOsnoPercent.value,
+      acquiring_percent: acquiringPercent.value,
+      vat_percent: vatPercent.value,
+    })
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally {
+    isExportingXlsx.value = false
+  }
+}
+
 async function loadData() {
   isLoading.value = true
   error.value = ''
@@ -981,6 +1007,9 @@ onMounted(async () => {
         <div class="inline-search wide-search accounting-query-search accounting-query-search-inline">
           <input v-model="query" placeholder="ФИО, телефон, паспорт, СНИЛС, ТСР или агент" />
         </div>
+        <button class="secondary-button accounting-xlsx-button" type="button" :disabled="isLoading || isExportingXlsx" @click="exportClientsXlsx">
+          {{ isExportingXlsx ? 'Готовим .xlsx…' : 'Скачать .xlsx' }}
+        </button>
       </div>
 
       <details class="accounting-settings-menu">

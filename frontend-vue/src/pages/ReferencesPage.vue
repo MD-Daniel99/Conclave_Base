@@ -1,122 +1,123 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/app/stores/auth'
+import {
+  createNameIndexReference,
+  createTsrReference,
+  deleteNameIndexReference,
+  deleteTsrReference,
+  fetchNameIndexReferences,
+  fetchTsrReferences,
+  updateNameIndexReference,
+  updateTsrReference,
+} from '@/shared/api/references'
 import { getApiErrorMessage } from '@/shared/api/http'
+import { useAppConfirm } from '@/shared/composables/useAppFeedback'
+import type { ReferenceItem } from '@/shared/types/entities'
 
-const auth = useAuthStore()
-const canEdit = computed(() => auth.isAdmin)
+type ReferenceTab = 'tsr' | 'components'
 
-function authToken() {
-  const source = auth as unknown as Record<string, unknown>
-  const direct = source.token ?? source.accessToken ?? source.access_token
-  if (typeof direct === 'string' && direct) return direct
-  for (const key of ['token', 'access_token', 'auth_token']) {
-    const stored = window.localStorage.getItem(key)
-    if (stored) return stored
-  }
-  return ''
-}
+const route = useRoute()
+const router = useRouter()
+const authStore = useAuthStore()
+const confirmAction = useAppConfirm()
 
-type Kind = 'prosthesis' | 'tsr' | 'name_index'
-type RefItem = Record<string, unknown>
-
-type Section = {
-  kind: Kind
-  title: string
-  hint: string
-  endpoint: string
-  valueKey: string
-  idKeys: string[]
-  createKey: string
-}
-
-const sections: Section[] = [
-  {
-    kind: 'prosthesis',
-    title: 'Виды протезов',
-    hint: 'Справочник видов протезов, который также остаётся доступен из карточки клиента.',
-    endpoint: '/references/prosthesis',
-    valueKey: 'name',
-    idKeys: ['id', 'prosthesis_id'],
-    createKey: 'name',
-  },
-  {
-    kind: 'tsr',
-    title: 'Коды ТСР',
-    hint: 'Единый список ТСР для карточек клиентов, комплектующих и документов.',
-    endpoint: '/references/tsr',
-    valueKey: 'full_tsr_code',
-    idKeys: ['id', 'tsr_id'],
-    createKey: 'full_tsr_code',
-  },
-  {
-    kind: 'name_index',
-    title: 'Названия и индексы комплектующих',
-    hint: 'Каталог названий/индексов для склада и комплектующих клиента.',
-    endpoint: '/references/name_index',
-    valueKey: 'name_index',
-    idKeys: ['id', 'name_index_id'],
-    createKey: 'name_index',
-  },
-]
-
-const items = reactive<Record<Kind, RefItem[]>>({ prosthesis: [], tsr: [], name_index: [] })
-const drafts = reactive<Record<Kind, string>>({ prosthesis: '', tsr: '', name_index: '' })
-const searches = reactive<Record<Kind, string>>({ prosthesis: '', tsr: '', name_index: '' })
-const editing = reactive<Record<Kind, string>>({ prosthesis: '', tsr: '', name_index: '' })
-const editValues = reactive<Record<Kind, string>>({ prosthesis: '', tsr: '', name_index: '' })
+const activeTab = ref<ReferenceTab>('tsr')
+const tsrItems = ref<ReferenceItem[]>([])
+const componentItems = ref<ReferenceItem[]>([])
+const query = ref('')
+const draft = ref('')
+const editingId = ref<string | number | null>(null)
 const loading = ref(false)
+const saving = ref(false)
 const error = ref('')
 const success = ref('')
 
-function headers(json = false): Record<string, string> {
-  const token = authToken()
-  return {
-    ...(json ? { 'Content-Type': 'application/json' } : {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  }
-}
+const canManage = computed(() => authStore.isAdmin)
 
-async function api(url: string, init: RequestInit = {}) {
-  const response = await fetch(url, init)
-  if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`
-    try {
-      const body = await response.json()
-      detail = String(body?.detail ?? detail)
-    } catch {
-      // Keep HTTP status.
+const items = computed(() => activeTab.value === 'tsr' ? tsrItems.value : componentItems.value)
+const filtered = computed(() => {
+  const needle = query.value.trim().toLocaleLowerCase('ru-RU')
+  return items.value.filter((item) => !needle || labelOf(item).toLocaleLowerCase('ru-RU').includes(needle))
+})
+
+const pageCopy = computed(() => activeTab.value === 'tsr'
+  ? {
+      eyebrow: 'ТСР',
+      title: 'Справочник ТСР',
+      description: 'Единый справочник ТСР для карточек пациентов, комплектующих и документов.',
+      searchLabel: 'Поиск по коду или названию',
+      searchPlaceholder: 'Например: 8-07-14',
+      listTitle: 'Записи справочника ТСР',
+      editorCreate: 'Добавить ТСР',
+      editorEdit: 'Изменить ТСР',
+      fieldLabel: 'Полный код и наименование ТСР',
+      fieldPlaceholder: 'Код и полное наименование',
+      empty: 'По вашему запросу ТСР не найдены.',
+      readOnlyHint: 'Просмотр доступен всем пользователям. Изменять справочник ТСР может администратор.',
+      footerHint: 'Этот же справочник продолжает работать в карточках пациентов без изменений.',
     }
-    throw new Error(detail)
-  }
-  if (response.status === 204) return null
-  return await response.json()
+  : {
+      eyebrow: 'Комплектующие',
+      title: 'Справочник комплектующих',
+      description: 'Каталог названий и индексов комплектующих. Это тот же справочник, который используется в разделе «Комплектующие» карточки пациента.',
+      searchLabel: 'Поиск по названию или индексу',
+      searchPlaceholder: 'Например: 1C30 или TRIAS',
+      listTitle: 'Названия и индексы комплектующих',
+      editorCreate: 'Добавить комплектующую',
+      editorEdit: 'Изменить запись',
+      fieldLabel: 'Название и индекс',
+      fieldPlaceholder: 'Например: 1C30 — СТОПА TRIAS',
+      empty: 'По вашему запросу комплектующие не найдены.',
+      readOnlyHint: 'Просмотр доступен всем пользователям. Изменять справочник комплектующих может администратор.',
+      footerHint: 'Новые названия, созданные в карточке пациента, также попадают в этот справочник. Удаление используемой записи сервер не разрешит.',
+    },
+)
+
+function tabFromRoute(): ReferenceTab {
+  return route.name === 'references-components' ? 'components' : 'tsr'
 }
 
-function idOf(section: Section, item: RefItem) {
-  for (const key of section.idKeys) {
-    if (item[key]) return String(item[key])
-  }
-  return ''
+function idOf(item: ReferenceItem) {
+  return activeTab.value === 'tsr'
+    ? item.id ?? item.tsr_id ?? ''
+    : item.id ?? item.name_index_id ?? ''
 }
 
-function valueOf(section: Section, item: RefItem) {
-  return String(item[section.valueKey] ?? '')
+function labelOf(item: ReferenceItem) {
+  return activeTab.value === 'tsr'
+    ? String(item.full_tsr_code ?? '')
+    : String(item.name_index ?? item.name ?? '')
 }
 
-function filtered(section: Section) {
-  const needle = searches[section.kind].trim().toLocaleLowerCase('ru-RU')
-  return needle
-    ? items[section.kind].filter((item) => valueOf(section, item).toLocaleLowerCase('ru-RU').includes(needle))
-    : items[section.kind]
+function resetEditor() {
+  draft.value = ''
+  editingId.value = null
+  error.value = ''
+}
+
+function edit(item: ReferenceItem) {
+  draft.value = labelOf(item)
+  editingId.value = idOf(item)
+  error.value = ''
+  success.value = ''
+}
+
+function goTab(tab: ReferenceTab) {
+  void router.push({ name: tab === 'components' ? 'references-components' : 'references-tsr' })
 }
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const result = await Promise.all(sections.map((section) => api(section.endpoint, { headers: headers() })))
-    sections.forEach((section, index) => { items[section.kind] = Array.isArray(result[index]) ? result[index] : [] })
+    const [tsr, components] = await Promise.all([
+      fetchTsrReferences(),
+      fetchNameIndexReferences(),
+    ])
+    tsrItems.value = tsr
+    componentItems.value = components
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
   } finally {
@@ -124,116 +125,158 @@ async function load() {
   }
 }
 
-async function create(section: Section) {
-  const value = drafts[section.kind].trim()
-  if (!value) return
+async function save() {
+  const value = draft.value.trim()
+  if (!value || !canManage.value) return
+
+  saving.value = true
   error.value = ''
+  success.value = ''
   try {
-    await api(section.endpoint, {
-      method: 'POST',
-      headers: headers(true),
-      body: JSON.stringify({ [section.createKey]: value }),
-    })
-    drafts[section.kind] = ''
-    success.value = 'Запись справочника добавлена.'
+    if (activeTab.value === 'tsr') {
+      if (editingId.value) {
+        await updateTsrReference(editingId.value, { full_tsr_code: value })
+        success.value = 'ТСР обновлён.'
+      } else {
+        await createTsrReference({ full_tsr_code: value })
+        success.value = 'ТСР добавлен.'
+      }
+    } else if (editingId.value) {
+      await updateNameIndexReference(editingId.value, { name_index: value })
+      success.value = 'Запись справочника комплектующих обновлена.'
+    } else {
+      await createNameIndexReference({ name_index: value })
+      success.value = 'Запись добавлена в справочник комплектующих.'
+    }
+
+    resetEditor()
     await load()
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
+  } finally {
+    saving.value = false
   }
 }
 
-function startEdit(section: Section, item: RefItem) {
-  editing[section.kind] = idOf(section, item)
-  editValues[section.kind] = valueOf(section, item)
-}
+async function remove(item: ReferenceItem) {
+  const id = idOf(item)
+  const label = labelOf(item)
+  if (!id || !canManage.value) return
 
-async function saveEdit(section: Section) {
-  const id = editing[section.kind]
-  const value = editValues[section.kind].trim()
-  if (!id || !value) return
+  const message = activeTab.value === 'tsr'
+    ? `Удалить ТСР «${label}»?`
+    : `Удалить «${label}» из справочника комплектующих?`
+  if (!(await confirmAction({ message, danger: true }))) return
+
+  saving.value = true
   error.value = ''
+  success.value = ''
   try {
-    await api(`${section.endpoint}/${id}`, {
-      method: 'PUT',
-      headers: headers(true),
-      body: JSON.stringify({ [section.createKey]: value }),
-    })
-    editing[section.kind] = ''
-    editValues[section.kind] = ''
-    success.value = 'Запись справочника обновлена.'
+    if (activeTab.value === 'tsr') {
+      await deleteTsrReference(id)
+      success.value = 'ТСР удалён.'
+    } else {
+      await deleteNameIndexReference(id)
+      success.value = 'Запись справочника комплектующих удалена.'
+    }
+    if (editingId.value === id) resetEditor()
     await load()
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
+  } finally {
+    saving.value = false
   }
 }
 
-async function remove(section: Section, item: RefItem) {
-  const id = idOf(section, item)
-  if (!id || !window.confirm(`Удалить «${valueOf(section, item)}»?`)) return
-  error.value = ''
-  try {
-    await api(`${section.endpoint}/${id}`, { method: 'DELETE', headers: headers() })
-    success.value = 'Запись справочника удалена.'
-    await load()
-  } catch (caught) {
-    error.value = getApiErrorMessage(caught)
-  }
-}
+watch(
+  () => route.name,
+  () => {
+    activeTab.value = tabFromRoute()
+    query.value = ''
+    resetEditor()
+    success.value = ''
+  },
+)
 
-onMounted(load)
+onMounted(async () => {
+  activeTab.value = tabFromRoute()
+  await load()
+})
 </script>
 
 <template>
-  <section class="page-section references-page">
+  <section class="page-section tsr-reference-page references-workspace-page">
     <div class="page-heading">
       <div>
         <p class="eyebrow">Справочники</p>
-        <h1>ТСР и комплектующие</h1>
-        <p class="page-subtitle">Отдельное рабочее место для справочников. Управление в карточках клиентов сохранено.</p>
+        <h1>Справочники</h1>
+        <p class="muted">Единое рабочее место для справочников ТСР и комплектующих. Справочники внутри карточек пациентов сохранены и работают как раньше.</p>
       </div>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Справочники">
+      <button :class="{ active: activeTab === 'tsr' }" type="button" role="tab" :aria-selected="activeTab === 'tsr'" @click="goTab('tsr')">ТСР</button>
+      <button :class="{ active: activeTab === 'components' }" type="button" role="tab" :aria-selected="activeTab === 'components'" @click="goTab('components')">Комплектующие</button>
+    </div>
+
+    <div class="toolbar-form tsr-reference-toolbar">
+      <label>
+        {{ pageCopy.searchLabel }}
+        <input v-model="query" :placeholder="pageCopy.searchPlaceholder" />
+      </label>
+      <span class="muted">Найдено: {{ filtered.length }} · всего: {{ items.length }}</span>
     </div>
 
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="success" class="form-success">{{ success }}</p>
-    <p v-if="loading" class="muted">Загружаем справочники…</p>
 
-    <div class="reference-page-grid">
-      <article v-for="section in sections" :key="section.kind" class="reference-page-card">
-        <div class="reference-page-card-head">
+    <div class="tsr-reference-layout">
+      <section class="detail-panel tsr-reference-list">
+        <div class="form-heading">
           <div>
-            <h2>{{ section.title }}</h2>
-            <p class="muted">{{ section.hint }}</p>
+            <p class="eyebrow">{{ pageCopy.eyebrow }}</p>
+            <h2>{{ pageCopy.listTitle }}</h2>
+            <p class="muted">{{ pageCopy.description }}</p>
           </div>
-          <span class="reference-count">{{ items[section.kind].length }}</span>
         </div>
 
-        <input v-model="searches[section.kind]" class="reference-search" placeholder="Поиск по справочнику" />
-
-        <form v-if="canEdit" class="reference-add-row" @submit.prevent="create(section)">
-          <input v-model="drafts[section.kind]" placeholder="Новая запись" />
-          <button class="primary-button" type="submit" :disabled="!drafts[section.kind].trim()">Добавить</button>
-        </form>
-
-        <div class="reference-page-list">
-          <div v-for="item in filtered(section)" :key="idOf(section, item)" class="reference-page-row">
-            <template v-if="editing[section.kind] === idOf(section, item)">
-              <input v-model="editValues[section.kind]" />
-              <div class="row-actions">
-                <button class="primary-button" type="button" @click="saveEdit(section)">Сохранить</button>
-                <button class="ghost-button" type="button" @click="editing[section.kind] = ''">Отмена</button>
-              </div>
-            </template>
-            <template v-else>
-              <strong>{{ valueOf(section, item) }}</strong>
-              <div v-if="canEdit" class="row-actions">
-                <button class="ghost-button" type="button" @click="startEdit(section, item)">Изменить</button>
-                <button class="danger-button" type="button" @click="remove(section, item)">Удалить</button>
-              </div>
-            </template>
-          </div>
-          <p v-if="filtered(section).length === 0" class="muted">Ничего не найдено.</p>
+        <p v-if="loading" class="muted">Загрузка…</p>
+        <div v-else class="tsr-reference-rows">
+          <article v-for="item in filtered" :key="String(idOf(item))" class="tsr-reference-row">
+            <button class="link-button" type="button" @click="edit(item)">{{ labelOf(item) }}</button>
+            <div v-if="canManage" class="row-actions">
+              <button class="ghost-button" type="button" :disabled="saving" @click="edit(item)">Изменить</button>
+              <button class="danger-button" type="button" :disabled="saving" @click="remove(item)">Удалить</button>
+            </div>
+          </article>
+          <p v-if="!filtered.length" class="form-hint">{{ pageCopy.empty }}</p>
         </div>
-      </article>
+      </section>
+
+      <aside class="detail-panel tsr-reference-editor">
+        <div class="form-heading">
+          <div>
+            <p class="eyebrow">{{ editingId ? 'Редактирование' : 'Новая запись' }}</p>
+            <h2>{{ editingId ? pageCopy.editorEdit : pageCopy.editorCreate }}</h2>
+          </div>
+        </div>
+
+        <template v-if="canManage">
+          <form class="side-form flat-form" @submit.prevent="save">
+            <label>
+              {{ pageCopy.fieldLabel }}
+              <textarea v-if="activeTab === 'tsr'" v-model="draft" rows="5" :placeholder="pageCopy.fieldPlaceholder" required />
+              <input v-else v-model="draft" :placeholder="pageCopy.fieldPlaceholder" required />
+            </label>
+            <div class="row-actions">
+              <button class="primary-button" type="submit" :disabled="saving || !draft.trim()">{{ saving ? 'Сохраняем…' : 'Сохранить' }}</button>
+              <button v-if="editingId" class="ghost-button" type="button" :disabled="saving" @click="resetEditor">Отмена</button>
+            </div>
+          </form>
+        </template>
+        <p v-else class="form-hint">{{ pageCopy.readOnlyHint }}</p>
+        <p class="form-hint">{{ pageCopy.footerHint }}</p>
+      </aside>
     </div>
   </section>
 </template>

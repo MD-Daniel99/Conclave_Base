@@ -14,6 +14,7 @@ import type {
   ClientUpdatePayload,
   ClientTsr,
   ModuleItem,
+  UnpunchedCustomField,
 } from '@/shared/types/entities'
 
 export interface ListClientsParams {
@@ -24,6 +25,7 @@ export interface ListClientsParams {
   agent_id?: string
   current_stage?: string
   archived?: boolean
+  workflow_bucket?: 'unpunched' | 'work'
 }
 
 export async function fetchClients(params: ListClientsParams = {}) {
@@ -160,7 +162,27 @@ export async function updateClientSnils(snilsId: string, payload: ClientSnilsUpd
   const { data } = await api.patch<ClientSnils>(`/snils/${snilsId}`, payload)
   return data
 }
-
+ 
 export async function deleteClientSnils(snilsId: string) {
   await api.delete(`/snils/${snilsId}`)
+}
+
+
+export async function moveClientToList(clientId: string, bucket: 'unpunched' | 'work' | 'completed') {
+  const { data } = await api.post<Client>(`/clients/${clientId}/move/${bucket}`)
+  return data
+}
+
+export async function fetchUnpunchedCustomFields() {
+  const { data } = await api.get<UnpunchedCustomField[]>('/clients/settings/unpunched-custom-fields')
+  return data
+}
+
+export async function createUnpunchedCustomField(payload: { field_name: string; field_type: 'number' | 'text' }) {
+  const { data } = await api.post<UnpunchedCustomField>('/clients/settings/unpunched-custom-fields', payload)
+  return data
+}
+
+export async function deleteUnpunchedCustomField(fieldId: string) {
+  await api.delete(`/clients/settings/unpunched-custom-fields/${fieldId}`)
 }

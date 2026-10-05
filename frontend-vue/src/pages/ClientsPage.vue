@@ -57,6 +57,10 @@ import {
   updateClientPhone,
   updateClientSnils,
   updateClientTsr,
+  moveClientToList,
+  fetchUnpunchedCustomFields,
+  createUnpunchedCustomField,
+  deleteUnpunchedCustomField,
 } from '@/shared/api/clients'
 import {
   deleteDocument,
@@ -113,6 +117,7 @@ import type {
   ModuleCreatePayload,
   ModuleUpdatePayload,
   ReferenceItem,
+  UnpunchedCustomField,
 } from '@/shared/types/entities'
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -189,7 +194,7 @@ type ClientForm = {
 
 type ClientTab = 'main' | 'identity' | 'phones' | 'modules' | 'documents' | 'history'
 type DetailTab = Exclude<ClientTab, 'main'>
-type ClientListMode = 'active' | 'archive'
+type ClientListMode = 'unpunched' | 'active' | 'archive'
 type CountInput = string | number
 type ComponentEntryMode = 'new' | 'catalog' | 'warehouse'
 
@@ -252,6 +257,36 @@ const DOCUMENT_STATUS_OPTIONS: Array<{ value: DocumentStatus; label: string }> =
 type ClientDocumentStatusField = 'contract_status' | 'act_status'
 const CONTRACT_DOCUMENT_TYPES = new Set(['llc_contract', 'dmk_contract', 'sdv_contract'])
 
+const PRECHECK_STATUS_OPTIONS = [
+  'Работа с документами', 'Выполняется', 'Отменен', 'Выполнен',
+].map((value) => ({ value, label: value }))
+const PRECHECK_STAGE_OPTIONS = [
+  'Справка об инвалидности', 'МТЗ', 'ИПРА', 'Ожидаем Сертификат', 'Пробитие сертификата',
+  'Ожидание комплектующих', 'Договор отправлен на подпись', 'Протезирование', 'Выполнен',
+  'Отменен', 'Необходима поддача сертификата', 'Вызов на протезирование',
+].map((value) => ({ value, label: value }))
+
+type PrecheckTone = 'info' | 'warn' | 'success' | 'danger' | 'secondary'
+
+function getPrecheckStatusTone(value?: string | null): PrecheckTone {
+  switch (String(value || 'Работа с документами').trim()) {
+    case 'Выполнен': return 'success'
+    case 'Отменен': return 'danger'
+    case 'Выполняется': return 'warn'
+    case 'Работа с документами': return 'info'
+    default: return 'secondary'
+  }
+}
+
+function getPrecheckStageTone(value?: string | null): PrecheckTone {
+  const stage = String(value || 'Справка об инвалидности').trim()
+  if (stage === 'Выполнен') return 'success'
+  if (stage === 'Отменен') return 'danger'
+  if (['Ожидаем Сертификат', 'Ожидание комплектующих', 'Необходима поддача сертификата'].includes(stage)) return 'warn'
+  if (['Справка об инвалидности', 'МТЗ', 'ИПРА', 'Пробитие сертификата', 'Договор отправлен на подпись', 'Протезирование', 'Вызов на протезирование'].includes(stage)) return 'info'
+  return 'secondary'
+}
+
 
 const emptyForm: ClientForm = {
   last_name: '',
@@ -303,11 +338,15 @@ const stockWarehouseModules = ref<ModuleItem[]>([])
 const auditItems = ref<AuditLogItem[]>([])
 const query = ref('')
 const clientColumnFilters = reactive<Record<string, string>>({ patient: '', prosthetist: '', tsr: '', check_date: '', certificate: '', status: '', stage: '', contract_status: '', act_status: '', agent: '', repeat_visit: '' })
+const unpunchedColumnFilters = reactive<Record<string, string>>({ patient: '', agent: '', precheck_status: '', precheck_stage: '', prosthesis: '' })
+const unpunchedCustomFields = ref<UnpunchedCustomField[]>([])
+const newUnpunchedFieldName = ref('')
+const newUnpunchedFieldType = ref<'number' | 'text'>('text')
 const clientSortKey = ref<string | null>(null)
 const clientSortDirection = ref<SortDirection>(null)
 const pageLimit = ref(100)
 const currentPage = ref(1)
-const activeClientListMode = ref<ClientListMode>('active')
+const activeClientListMode = ref<ClientListMode>('unpunched')
 const selectedClientIds = ref<string[]>([])
 const selectedClient = ref<Client | null>(null)
 const isClientCardOpen = ref(false)
@@ -400,7 +439,7 @@ const isClientPersisted = computed(() => Boolean(selectedClient.value && getClie
 const modalMessageId = computed(() => (error.value ? 'client-modal-error' : successMessage.value ? 'client-modal-success' : undefined))
 const activeClientFilterCount = computed(() => [
   query.value.trim(),
-  ...Object.values(clientColumnFilters).map((value) => value.trim()),
+  ...(activeClientListMode.value === 'unpunched' ? Object.values(unpunchedColumnFilters) : Object.values(clientColumnFilters)).map((value) => value.trim()),
 ].filter(Boolean).length)
 const CLIENT_TAB_LABELS: Record<ClientTab, string> = {
   main: 'Основное',
@@ -580,6 +619,10 @@ const clientStatusFilterOptions = computed(() => statusOptions.value.map((option
 const clientStageFilterOptions = computed(() => stageOptions.value.map((option) => ({ value: option.label, label: option.label })))
 
 function clientColumnValue(client: Client, key: string): unknown {
+  if (key === 'precheck_status') return client.precheck_status ?? 'Работа с документами'
+  if (key === 'precheck_stage') return client.precheck_stage ?? 'Справка об инвалидности'
+  if (key === 'prosthesis') return getClientTsrLabel(client)
+  if (key.startsWith('precustom:')) return client.unpunched_custom_values?.[key.slice('precustom:'.length)] ?? ''
   if (key === 'number') return client.external_id ?? getClientId(client)
   if (key === 'patient') return `${getClientName(client)} ${getClientPrimaryPhone(client)}`
   if (key === 'prosthetist') return getClientProsthetistLabel(client)
@@ -615,16 +658,19 @@ function sortClients(key: string) {
 const filteredClients = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase('ru-RU')
   const filtered = clients.value.filter((client) => {
-    if (needle && !getClientSearchText(client).includes(needle)) return false
-    return Object.entries(clientColumnFilters).every(([key, filter]) => {
-      const kind = key === 'number' || key === 'certificate'
+    const extraSearch = Object.values(client.unpunched_custom_values ?? {}).join(' ').toLocaleLowerCase('ru-RU')
+    if (needle && !(`${getClientSearchText(client)} ${extraSearch}`).includes(needle)) return false
+    const filters = activeClientListMode.value === 'unpunched' ? unpunchedColumnFilters : clientColumnFilters
+    return Object.entries(filters).every(([key, filter]) => {
+      const kind = key === 'number' || key === 'certificate' || key.startsWith('precustom:number:')
         ? 'number'
         : key === 'check_date' || key === 'repeat_visit'
           ? 'date'
-          : key === 'status' || key === 'stage' || key === 'contract_status' || key === 'act_status' || key === 'agent'
+          : key === 'status' || key === 'stage' || key === 'contract_status' || key === 'act_status' || key === 'agent' || key === 'precheck_status' || key === 'precheck_stage'
             ? 'select'
             : 'text'
-      return matchesTableFilter(clientColumnValue(client, key), filter, kind)
+      const normalizedKey = key.startsWith('precustom:number:') ? `precustom:${key.split(':').slice(2).join(':')}` : key
+      return matchesTableFilter(clientColumnValue(client, normalizedKey), filter, kind)
     })
   })
   return sortTableRows(filtered, clientSortKey.value, clientSortDirection.value, clientColumnValue)
@@ -1055,28 +1101,32 @@ function getClientInitials(client: Client) {
 }
 
 function getClientActions(client: Client): ActionMenuItem[] {
-  const isArchived = activeClientListMode.value === 'archive'
-
+  const moves: ActionMenuItem[] = []
+  if (activeClientListMode.value !== 'unpunched') moves.push({ label: 'В Не пробитые пациенты', icon: RotateCcw, disabled: isSaving.value, action: () => moveSingleClient(client, 'unpunched') })
+  if (activeClientListMode.value !== 'active') moves.push({ label: 'В работу', icon: RotateCcw, disabled: isSaving.value, action: () => moveSingleClient(client, 'work') })
+  if (activeClientListMode.value !== 'archive') moves.push({ label: 'В Выполненные', icon: Archive, disabled: isSaving.value, action: () => moveSingleClient(client, 'completed') })
   return [
-    {
-      label: 'Открыть карточку',
-      icon: Eye,
-      action: () => selectClient(client),
-    },
-    {
-      label: isArchived ? 'Восстановить' : 'Переместить в Выполненные',
-      icon: isArchived ? RotateCcw : Archive,
-      disabled: isSaving.value,
-      action: () => changeClientArchiveState(client, !isArchived),
-    },
-    {
-      label: 'Удалить',
-      icon: Trash2,
-      danger: true,
-      disabled: isSaving.value,
-      action: () => removeClient(client),
-    },
+    { label: 'Открыть карточку', icon: Eye, action: () => selectClient(client) },
+    ...moves,
+    { label: 'Удалить', icon: Trash2, danger: true, disabled: isSaving.value, action: () => removeClient(client) },
   ]
+}
+
+async function moveSingleClient(client: Client, bucket: 'unpunched' | 'work' | 'completed') {
+  const clientId = getClientId(client)
+  if (!clientId) return
+  const labels = { unpunched: 'Не пробитые пациенты', work: 'В работе', completed: 'Выполненные' }
+  if (!(await confirmAction({ header: 'Перемещение пациента', message: `Переместить пациента «${getClientName(client)}» в «${labels[bucket]}»?`, acceptLabel: 'Переместить' }))) return
+  isSaving.value = true
+  resetMessages()
+  try {
+    await moveClientToList(clientId, bucket)
+    successMessage.value = `Пациент перемещён в «${labels[bucket]}»`
+    if (selectedClient.value && getClientId(selectedClient.value) === clientId) isClientCardOpen.value = false
+    await loadClients()
+  } catch (caughtError) {
+    error.value = getApiErrorMessage(caughtError)
+  } finally { isSaving.value = false }
 }
 
 function getClientStatusLabel(client: Client) {
@@ -1248,7 +1298,7 @@ function getClientCertificateTotal(client: Client) {
 function getClientSearchText(client: Client) {
   return [
     getClientName(client), client.external_id, getClientStatusLabel(client), getClientStageLabel(client),
-    client.contract_status, client.act_status,
+    client.precheck_status, client.precheck_stage, client.contract_status, client.act_status,
     getAgentLabel(client.agent_id), client.notes, client.ipra_code, client.place_of_residence,
     ...(client.phones ?? []).map((phone) => phone.number),
     ...(client.passports ?? []).flatMap((passport) => [
@@ -1547,6 +1597,25 @@ function selectAllContractTsrGroups() {
 function clearContractTsrSelection() {
   selectedContractClientTsrIds.value = []
   selectedContractModuleIds.value = []
+}
+
+async function persistDirtyClientTsrDrafts(clientId: string) {
+  // The main «Сохранить изменения» button must save the TSR card fields too.
+  // They live in CLIENT_TSR rather than CLIENT, so a plain updateClient() call
+  // cannot persist certificate date/price/prosthetist values.
+  const draftIds = Object.keys(clientTsrDrafts)
+
+  for (const clientTsrId of draftIds) {
+    const draft = clientTsrDrafts[clientTsrId]
+    if (!draft) continue
+
+    await updateClientTsr(clientId, clientTsrId, {
+      check_date: draft.checkDate || null,
+      certificate_price: draft.certificatePrice.trim() || null,
+      prosthetist: draft.prosthetist || null,
+    })
+    delete clientTsrDrafts[clientTsrId]
+  }
 }
 
 async function persistSelectedContractTsrDrafts(clientId: string) {
@@ -2099,6 +2168,11 @@ function buildCreatePayload(): ClientCreatePayload {
     prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
     notes: optionalString(form.notes),
+    // A newly created patient has no punched certificate yet, so the single
+    // source of truth is the dedicated «Не пробитые пациенты» workspace.
+    // The patient is moved to «В работе» automatically after a certificate
+    // check date is saved, or can be moved manually with the existing actions.
+    workflow_bucket: 'unpunched',
     phones: [],
   }
 }
@@ -2135,6 +2209,11 @@ async function ensureClientExists() {
 
   selectedClient.value = createdClient
   fillForm(createdClient)
+  if (activeClientListMode.value !== 'unpunched') {
+    activeClientListMode.value = 'unpunched'
+    selectedClientIds.value = []
+    currentPage.value = 1
+  }
   await refreshSelectedClient(clientId)
   await loadClients()
 
@@ -2165,6 +2244,61 @@ function validateClientForm() {
   return true
 }
 
+async function updatePrecheckField(client: Client, field: 'precheck_status' | 'precheck_stage', value: string) {
+  const id = getClientId(client)
+  if (!id || !value) return
+  try {
+    const updated = await updateClient(id, { [field]: value } as ClientUpdatePayload)
+    Object.assign(client, updated)
+  } catch (caughtError) { error.value = getApiErrorMessage(caughtError) }
+}
+
+async function updateUnpunchedCustomValue(client: Client, field: UnpunchedCustomField, value: string) {
+  const id = getClientId(client)
+  if (!id) return
+  const values = { ...(client.unpunched_custom_values ?? {}) }
+  if (field.field_type === 'number') {
+    const normalized = value.trim().replace(',', '.')
+    const parsed = normalized === '' ? null : Number(normalized)
+    if (parsed !== null && !Number.isFinite(parsed)) {
+      error.value = `Поле «${field.field_name}» должно быть числом.`
+      return
+    }
+    values[field.field_id] = parsed
+  } else {
+    values[field.field_id] = value
+  }
+  try {
+    const updated = await updateClient(id, { unpunched_custom_values: values } as ClientUpdatePayload)
+    Object.assign(client, updated)
+  } catch (caughtError) { error.value = getApiErrorMessage(caughtError) }
+}
+
+async function loadUnpunchedFields() {
+  try { unpunchedCustomFields.value = await fetchUnpunchedCustomFields() }
+  catch (caughtError) { error.value = getApiErrorMessage(caughtError) }
+}
+
+async function addUnpunchedField() {
+  const name = newUnpunchedFieldName.value.trim()
+  if (!name) return
+  try {
+    await createUnpunchedCustomField({ field_name: name, field_type: newUnpunchedFieldType.value })
+    newUnpunchedFieldName.value = ''
+    await loadUnpunchedFields()
+  } catch (caughtError) { error.value = getApiErrorMessage(caughtError) }
+}
+
+async function removeUnpunchedField(field: UnpunchedCustomField) {
+  if (!(await confirmAction({ message: `Удалить поле «${field.field_name}»?`, danger: true }))) return
+  try {
+    await deleteUnpunchedCustomField(field.field_id)
+    delete unpunchedColumnFilters[`precustom:${field.field_id}`]
+    delete unpunchedColumnFilters[`precustom:number:${field.field_id}`]
+    await loadUnpunchedFields()
+  } catch (caughtError) { error.value = getApiErrorMessage(caughtError) }
+}
+
 async function loadClients() {
   isLoading.value = true
   error.value = ''
@@ -2174,6 +2308,7 @@ async function loadClients() {
       skip: 0,
       limit: 100000,
       archived: activeClientListMode.value === 'archive',
+      workflow_bucket: activeClientListMode.value === 'archive' ? undefined : (activeClientListMode.value === 'unpunched' ? 'unpunched' : 'work'),
     })
     const availableIds = new Set(clients.value.map(getClientId))
     selectedClientIds.value = selectedClientIds.value.filter((id) => availableIds.has(id))
@@ -2191,6 +2326,7 @@ function applyClientFilters() {
 function resetClientFilters() {
   query.value = ''
   Object.keys(clientColumnFilters).forEach((key) => { clientColumnFilters[key] = '' })
+  Object.keys(unpunchedColumnFilters).forEach((key) => { unpunchedColumnFilters[key] = '' })
   clientSortKey.value = null
   clientSortDirection.value = null
   currentPage.value = 1
@@ -2240,15 +2376,14 @@ function handleToggleClient(client: Client, event: Event) {
   toggleClientSelection(client, (event.target as HTMLInputElement).checked)
 }
 
-async function runBulkClientAction(action: 'archive' | 'restore' | 'delete') {
+async function runBulkClientAction(action: 'unpunched' | 'work' | 'archive' | 'restore' | 'delete') {
   const items = selectedClients.value
   if (!items.length) return
 
-  const actionLabel = action === 'archive'
-    ? 'переместить в Выполненные'
-    : action === 'restore'
-      ? 'восстановить'
-      : 'удалить'
+  const actionLabel = action === 'archive' ? 'переместить в Выполненные'
+    : action === 'unpunched' ? 'переместить в Не пробитые пациенты'
+      : action === 'work' || action === 'restore' ? 'переместить в В работе'
+        : 'удалить'
   if (!(await confirmAction({
     header: 'Множественная операция',
     message: `${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} выбранных пациентов (${items.length})?`,
@@ -2263,8 +2398,9 @@ async function runBulkClientAction(action: 'archive' | 'restore' | 'delete') {
   for (const client of items) {
     const id = getClientId(client)
     try {
-      if (action === 'archive') await archiveClient(id)
-      else if (action === 'restore') await restoreClient(id)
+      if (action === 'archive') await moveClientToList(id, 'completed')
+      else if (action === 'unpunched') await moveClientToList(id, 'unpunched')
+      else if (action === 'work' || action === 'restore') await moveClientToList(id, 'work')
       else await deleteClient(id)
       completed += 1
     } catch (caughtError) {
@@ -2436,7 +2572,11 @@ async function openClientFromRoute(rawClientId: unknown) {
 
   try {
     const client = await fetchClient(clientId)
-    const targetMode: ClientListMode = client.is_archived ? 'archive' : 'active'
+    const targetMode: ClientListMode = client.is_archived
+      ? 'archive'
+      : client.workflow_bucket === 'unpunched'
+        ? 'unpunched'
+        : 'active'
 
     if (activeClientListMode.value !== targetMode) {
       activeClientListMode.value = targetMode
@@ -2475,6 +2615,12 @@ async function saveClient() {
       const wasArchived = Boolean(selectedClient.value.is_archived)
       const updatedClient = await updateClient(clientId, buildUpdatePayload())
 
+      // Certificate fields shown in «Основное» belong to CLIENT_TSR, not CLIENT.
+      // Save every edited TSR card together with the main form so the global
+      // save button cannot silently discard date/price/prosthetist changes —
+      // including when this same save moves the patient to «Выполненные».
+      await persistDirtyClientTsrDrafts(clientId)
+
       if (!wasArchived && updatedClient.is_archived) {
         await finishAutomaticArchive(updatedClient)
         return
@@ -2483,8 +2629,20 @@ async function saveClient() {
       selectedClient.value = updatedClient
       fillForm(updatedClient)
       await refreshSelectedClient(clientId)
+
+      const movedFromUnpunchedToWork = activeClientListMode.value === 'unpunched'
+        && selectedClient.value?.workflow_bucket === 'work'
+        && !selectedClient.value?.is_archived
+      if (movedFromUnpunchedToWork) {
+        activeClientListMode.value = 'active'
+        selectedClientIds.value = []
+        currentPage.value = 1
+        successMessage.value = 'Пациент обновлён и перемещён в «В работе» после пробития сертификата.'
+      } else {
+        successMessage.value = 'Пациент обновлен'
+      }
+
       await reloadActiveDetailTab()
-      successMessage.value = 'Пациент обновлен'
     } else {
       const createdClient = await createClient(buildCreatePayload())
 
@@ -2496,9 +2654,14 @@ async function saveClient() {
       const clientId = getClientId(createdClient)
       selectedClient.value = createdClient
       fillForm(createdClient)
+      if (activeClientListMode.value !== 'unpunched') {
+        activeClientListMode.value = 'unpunched'
+        selectedClientIds.value = []
+        currentPage.value = 1
+      }
       await refreshSelectedClient(clientId)
       await reloadActiveDetailTab()
-      successMessage.value = 'Пациент создан'
+      successMessage.value = 'Пациент создан в «Не пробитые пациенты»'
     }
 
     await loadClients()
@@ -2977,7 +3140,14 @@ async function saveClientTsrDetails(group: ClientTsrGroup) {
       prosthetist: draft.prosthetist || null,
     })
     delete clientTsrDrafts[group.clientTsrId]
-    successMessage.value = 'Данные ТСР сохранены.'
+    if (draft.checkDate && activeClientListMode.value === 'unpunched') {
+      activeClientListMode.value = 'active'
+      selectedClientIds.value = []
+      currentPage.value = 1
+      successMessage.value = 'Данные ТСР сохранены. Пациент перемещён в «В работе» после пробития сертификата.'
+    } else {
+      successMessage.value = 'Данные ТСР сохранены.'
+    }
     await refreshSelectedClient(clientId, false)
     await loadClients()
   } catch (caughtError) {
@@ -3458,7 +3628,7 @@ watch(isClientCardOpen, (isOpen) => {
   setBodyModalLock(isOpen)
 })
 
-watch([query, pageLimit, clientColumnFilters], () => { currentPage.value = 1 }, { deep: true })
+watch([query, pageLimit, clientColumnFilters, unpunchedColumnFilters], () => { currentPage.value = 1 }, { deep: true })
 
 watch(
   () => route.query.client_id,
@@ -3513,7 +3683,7 @@ onBeforeRouteLeave(async () => {
 
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
-  await Promise.all([loadClients(), loadReferences(), loadContractTemplates(), loadMtzTemplateOptions()])
+  await Promise.all([loadClients(), loadReferences(), loadContractTemplates(), loadMtzTemplateOptions(), loadUnpunchedFields()])
   await openClientFromRoute(route.query.client_id)
 })
 
@@ -3534,7 +3704,7 @@ onBeforeUnmount(() => {
         </p>
       </div>
       <button
-        v-if="activeClientListMode === 'active'"
+        v-if="activeClientListMode !== 'archive'"
         class="primary-button"
         type="button"
         @click="openNewClient"
@@ -3545,6 +3715,9 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="tabs" role="tablist" aria-label="Разделы пациентов">
+      <button :class="{ active: activeClientListMode === 'unpunched' }" type="button" @click="switchClientListMode('unpunched')">
+        Не пробитые пациенты
+      </button>
       <button :class="{ active: activeClientListMode === 'active' }" type="button" @click="switchClientListMode('active')">
         В работе
       </button>
@@ -3580,36 +3753,91 @@ onBeforeUnmount(() => {
       </div>
     </form>
 
+    <details v-if="activeClientListMode === 'unpunched'" class="accounting-settings-menu unpunched-settings-menu">
+      <summary>Настройки таблицы и полей</summary>
+      <div class="toolbar-form accounting-toolbar">
+        <input v-model="newUnpunchedFieldName" placeholder="Новое поле" />
+        <select v-model="newUnpunchedFieldType">
+          <option value="text">Текст</option>
+          <option value="number">Число</option>
+        </select>
+        <button class="secondary-button" type="button" :disabled="isSaving || !newUnpunchedFieldName.trim()" @click="addUnpunchedField">Добавить поле</button>
+      </div>
+      <div v-if="unpunchedCustomFields.length" class="field-chip-row">
+        <button v-for="field in unpunchedCustomFields" :key="field.field_id" class="field-chip" type="button" @click="removeUnpunchedField(field)">
+          {{ field.field_name }} · {{ field.field_type === 'number' ? 'число' : 'текст' }} ×
+        </button>
+      </div>
+      <p class="form-hint">Кастомные поля отображаются только в таблице «Не пробитые пациенты»; их значения сохраняются у конкретного пациента.</p>
+    </details>
+
     <p v-if="error && !isClientCardOpen" class="form-error">{{ error }}</p>
     <p v-if="successMessage && !isClientCardOpen" class="form-success">{{ successMessage }}</p>
 
     <div v-if="selectedClientIds.length" class="bulk-action-bar">
       <strong>Выбрано пациентов: {{ selectedClientIds.length }}</strong>
       <div class="row-actions">
-        <button
-          v-if="activeClientListMode === 'active'"
-          class="secondary-button"
-          type="button"
-          :disabled="isSaving"
-          @click="runBulkClientAction('archive')"
-        >
-          В Выполненные
-        </button>
-        <button
-          v-else
-          class="secondary-button"
-          type="button"
-          :disabled="isSaving"
-          @click="runBulkClientAction('restore')"
-        >
-          Восстановить
-        </button>
+        <button v-if="activeClientListMode !== 'unpunched'" class="secondary-button" type="button" :disabled="isSaving" @click="runBulkClientAction('unpunched')">В Не пробитые</button>
+        <button v-if="activeClientListMode !== 'active'" class="secondary-button" type="button" :disabled="isSaving" @click="runBulkClientAction('work')">В работу</button>
+        <button v-if="activeClientListMode !== 'archive'" class="secondary-button" type="button" :disabled="isSaving" @click="runBulkClientAction('archive')">В Выполненные</button>
         <button class="ghost-button danger-button" type="button" :disabled="isSaving" @click="runBulkClientAction('delete')">Удалить</button>
         <button class="ghost-button" type="button" :disabled="isSaving" @click="selectedClientIds = []">Снять выбор</button>
       </div>
     </div>
 
-    <div class="table-wrap desktop-entity-table">
+    <div v-if="activeClientListMode === 'unpunched'" class="table-wrap desktop-entity-table unpunched-patients-table">
+      <table>
+        <thead>
+          <tr>
+            <th class="selection-cell"><input type="checkbox" aria-label="Выбрать всех пациентов на странице" :checked="allPagedClientsSelected" @change="handleToggleAllClients" /></th>
+            <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="clientSortKey" :sort-direction="clientSortDirection" @sort="sortClients" />
+            <SortableFilterHeader label="Пациент" column-key="patient" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.patient" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.patient = $event" />
+            <SortableFilterHeader label="Агент" column-key="agent" filter-kind="select" :options="clientAgentFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.agent" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.agent = $event" />
+            <SortableFilterHeader label="Статус" column-key="precheck_status" filter-kind="select" :options="PRECHECK_STATUS_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.precheck_status" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.precheck_status = $event" />
+            <SortableFilterHeader label="Этап" column-key="precheck_stage" filter-kind="select" :options="PRECHECK_STAGE_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.precheck_stage" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.precheck_stage = $event" />
+            <SortableFilterHeader label="Вид протеза" column-key="prosthesis" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.prosthesis" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.prosthesis = $event" />
+            <SortableFilterHeader
+              v-for="field in unpunchedCustomFields"
+              :key="field.field_id"
+              :label="field.field_name"
+              :column-key="`precustom:${field.field_id}`"
+              :filter-kind="field.field_type === 'number' ? 'number' : 'text'"
+              :sort-key="clientSortKey"
+              :sort-direction="clientSortDirection"
+              :filter-value="unpunchedColumnFilters[field.field_type === 'number' ? `precustom:number:${field.field_id}` : `precustom:${field.field_id}`] || ''"
+              @sort="sortClients"
+              @update:filter-value="unpunchedColumnFilters[field.field_type === 'number' ? `precustom:number:${field.field_id}` : `precustom:${field.field_id}`] = $event"
+            />
+            <th aria-label="Действия"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-if="isLoading" class="no-row-action"><td :colspan="8 + unpunchedCustomFields.length">Загружаем пациентов...</td></tr>
+          <tr v-for="(client, index) in pagedClients" v-else :key="String(client.client_id ?? client.external_id)" :class="{ selected: isClientSelected(client) || (selectedClient && getClientId(selectedClient) === getClientId(client)) }" tabindex="0" @click="selectClient(client)" @keydown.enter="selectClient(client)">
+            <td class="selection-cell" @click.stop><input type="checkbox" :aria-label="`Выбрать пациента: ${getClientName(client)}`" :checked="isClientSelected(client)" @change="handleToggleClient(client, $event)" /></td>
+            <td>{{ currentSkip + index + 1 }}</td>
+            <td class="entity-cell"><div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div></td>
+            <td>{{ getAgentLabel(client.agent_id) }}</td>
+            <td @click.stop><select :class="['table-select', 'precheck-table-select', `precheck-tone-${getPrecheckStatusTone(client.precheck_status)}`]" :value="client.precheck_status || 'Работа с документами'" @change="updatePrecheckField(client, 'precheck_status', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
+            <td @click.stop><select :class="['table-select', 'precheck-table-select', `precheck-tone-${getPrecheckStageTone(client.precheck_stage)}`]" :value="client.precheck_stage || 'Справка об инвалидности'" @change="updatePrecheckField(client, 'precheck_stage', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STAGE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
+            <td class="table-tsr">{{ getClientTsrLabel(client) }}</td>
+            <td v-for="field in unpunchedCustomFields" :key="field.field_id" @click.stop>
+              <input class="table-input precheck-custom-input" :type="field.field_type === 'number' ? 'number' : 'text'" :value="client.unpunched_custom_values?.[field.field_id] ?? ''" @change="updateUnpunchedCustomValue(client, field, ($event.target as HTMLInputElement).value)" />
+            </td>
+            <td class="table-actions-cell"><ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" /></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div v-if="!isLoading && activeClientListMode === 'unpunched'" class="mobile-entity-list">
+      <article v-for="client in pagedClients" :key="String(client.client_id ?? client.external_id)" class="mobile-entity-card" @click="selectClient(client)">
+        <div class="mobile-entity-card-header"><div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div><ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" /></div>
+        <div class="mobile-entity-card-details"><span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span><span>Статус <strong :class="['precheck-mobile-tone', `precheck-tone-${getPrecheckStatusTone(client.precheck_status)}`]">{{ client.precheck_status || 'Работа с документами' }}</strong></span><span>Этап <strong :class="['precheck-mobile-tone', `precheck-tone-${getPrecheckStageTone(client.precheck_stage)}`]">{{ client.precheck_stage || 'Справка об инвалидности' }}</strong></span><span>Вид протеза <strong>{{ getClientTsrLabel(client) }}</strong></span><span v-for="field in unpunchedCustomFields" :key="field.field_id">{{ field.field_name }} <strong>{{ client.unpunched_custom_values?.[field.field_id] ?? '—' }}</strong></span></div>
+      </article>
+    </div>
+
+    <div v-if="activeClientListMode !== 'unpunched'" class="table-wrap desktop-entity-table">
       <table>
         <thead>
           <tr>
@@ -3733,7 +3961,7 @@ onBeforeUnmount(() => {
       </table>
     </div>
 
-    <div v-if="!isLoading" class="mobile-entity-list">
+    <div v-if="!isLoading && activeClientListMode !== 'unpunched'" class="mobile-entity-list">
       <article
         v-for="client in pagedClients"
         :key="String(client.client_id ?? client.external_id)"

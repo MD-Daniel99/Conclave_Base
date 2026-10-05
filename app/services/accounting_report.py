@@ -776,7 +776,11 @@ def _contract_component_cost_breakdown(
         included = 0.0
         reused = 0.0
         for module in client_modules:
-            if str(module.module_id) not in selected_ids or module.is_archived:
+            # ``is_archived`` is also set automatically when the owner patient is
+            # moved to «Выполненные».  That workflow transition must never erase
+            # an expense that has already happened.  Only an explicitly written-
+            # off component (``is_manually_archived``) is excluded here.
+            if str(module.module_id) not in selected_ids or bool(getattr(module, "is_manually_archived", False)):
                 continue
             if bool(getattr(module, "accounting_cost_excluded", False)):
                 reused += parse_number(module.cost)
@@ -856,7 +860,11 @@ def sum_client_module_cost(
     # DBCRM_UPDATE_20260831: accounting stock cost
     total = 0.0
     for module in modules:
-        if module.is_archived or bool(getattr(module, "accounting_cost_excluded", False)):
+        # Completing/archiving a patient automatically marks all of the patient's
+        # components as archived for UI purposes.  Accounting is historical, so
+        # that inherited flag must not remove an already incurred component cost.
+        # Keep excluding only components that were explicitly written off.
+        if bool(getattr(module, "is_manually_archived", False)) or bool(getattr(module, "accounting_cost_excluded", False)):
             continue
         if date_filter_active and has_normalized_certificates:
             module_certificate_id = str(module.client_tsr_id or "")
@@ -875,7 +883,7 @@ def sum_client_stock_reused_cost(
 ) -> float:
     total = 0.0
     for module in modules:
-        if module.is_archived or not bool(getattr(module, "accounting_cost_excluded", False)):
+        if bool(getattr(module, "is_manually_archived", False)) or not bool(getattr(module, "accounting_cost_excluded", False)):
             continue
         if date_filter_active and has_normalized_certificates:
             module_certificate_id = str(module.client_tsr_id or "")
@@ -967,12 +975,14 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
 
         certificate_ids = {str(item.client_tsr_id) for item in (client.tsr_items or [])}
         # The red accounting warning answers one simple question: does the
-        # patient have a generated contract at all?  Contract-to-certificate
-        # links are useful for coverage diagnostics below, but old contracts
-        # may legitimately lack those normalized links.  Treating a missing
-        # certificate link as a missing contract caused false warnings for
-        # patients whose contract document already exists.
-        requires_contract = not bool(distinct_contract_keys)
+        # patient already have a contract? Generated DOCX contracts are the
+        # primary source of truth. Some legacy patients had contracts handled
+        # before this CRM started storing generated documents, so any status
+        # that logically means the contract already exists must count too.
+        existing_contract_statuses = {"сделан", "отправлен", "подписан"}
+        legacy_contract_status = str(getattr(client, "contract_status", "") or "").strip().casefold()
+        has_legacy_contract_status = legacy_contract_status in existing_contract_statuses
+        requires_contract = not bool(distinct_contract_keys) and not has_legacy_contract_status
         uncovered_ids = sorted(module_ids - covered_ids)
         result.append({
             "client_id": str(client.client_id),

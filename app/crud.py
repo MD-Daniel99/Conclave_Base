@@ -261,6 +261,10 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "place_of_residence": client.place_of_residence,
         "prosthetist": client.prosthetist,
         "is_archived": bool(client.is_archived),
+        "workflow_bucket": getattr(client, "workflow_bucket", "work") or "work",
+        "precheck_status": getattr(client, "precheck_status", "Работа с документами") or "Работа с документами",
+        "precheck_stage": getattr(client, "precheck_stage", "Справка об инвалидности") or "Справка об инвалидности",
+        "unpunched_custom_values": getattr(client, "unpunched_custom_values", None) or {},
         # вложенные
         "agent": agent_summary,
         "status": status_summary,
@@ -649,6 +653,13 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         patient_payment=client_in.patient_payment,
         other_expenses=client_in.other_expenses,
         agency_expenses=client_in.agency_expenses,
+        # New patients belong to «Не пробитые» until there is an actual
+        # certificate check date.  Do not let the caller accidentally create
+        # an unpunched patient straight in «В работе».
+        workflow_bucket="work" if client_in.check_date else "unpunched",
+        precheck_status=client_in.precheck_status,
+        precheck_stage=client_in.precheck_stage,
+        unpunched_custom_values=client_in.unpunched_custom_values or {},
     )
 
     db.add(client)
@@ -700,6 +711,7 @@ def list_clients(
     agent_id: Optional[UUID] = None,
     current_stage: Optional[str] = None, 
     archived: bool = False,
+    workflow_bucket: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Возвращает список клиентов с вложенными сущностями (agent, status, stage, phones, passports, snils).
@@ -716,6 +728,8 @@ def list_clients(
     )
 
     conditions = [models.Client.is_archived.is_(archived)]
+    if not archived and workflow_bucket in {"unpunched", "work"}:
+        conditions.append(models.Client.workflow_bucket == workflow_bucket)
     if q:
         like = f"%{q}%"
         conditions.append(
@@ -818,6 +832,45 @@ def set_client_archive_state(
         return None
 
     _apply_client_archive_state(db, client, is_archived=is_archived)
+    if not is_archived:
+        # Историческая кнопка «Восстановить» всегда возвращает пациента в «В работе».
+        # Для перемещения именно в «Не пробитые» используется отдельный endpoint move/unpunched.
+        client.workflow_bucket = "work"
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return get_client(db, client_id)
+
+
+def move_client_to_bucket(
+    db: Session,
+    client_id: UUID,
+    *,
+    bucket: str,
+) -> Optional[Dict[str, Any]]:
+    """Move a patient between the three patient workspaces.
+
+    ``completed`` continues to use the application's existing archive state,
+    while the two active workspaces are distinguished by ``workflow_bucket``.
+    Keeping the transition here (instead of directly in the API layer) also
+    preserves the existing component archive/restore synchronization.
+    """
+    if bucket not in {"unpunched", "work", "completed"}:
+        raise ValueError("Unknown patient list")
+
+    client = db.get(models.Client, client_id)
+    if not client:
+        return None
+
+    if bucket == "completed":
+        _apply_client_archive_state(db, client, is_archived=True)
+    else:
+        _apply_client_archive_state(db, client, is_archived=False)
+        client.workflow_bucket = bucket
 
     try:
         db.commit()
@@ -1018,6 +1071,8 @@ def create_client_tsr(db: Session, client_id: UUID, payload: schemas.ClientTsrCr
     try:
         db.flush()
         _sync_client_tsr_legacy_fields(db, client_id)
+        if payload.check_date and getattr(client, "workflow_bucket", "work") == "unpunched":
+            client.workflow_bucket = "work"
         db.commit()
     except Exception:
         db.rollback()
@@ -1064,6 +1119,9 @@ def update_client_tsr(
     try:
         db.flush()
         _sync_client_tsr_legacy_fields(db, client_id)
+        client = db.get(models.Client, client_id)
+        if client and item.check_date and getattr(client, "workflow_bucket", "work") == "unpunched":
+            client.workflow_bucket = "work"
         db.commit()
     except Exception:
         db.rollback()
@@ -2332,6 +2390,43 @@ def _parse_custom_number(value: Any, field_name: str) -> Optional[float]:
         return float(cleaned)
     except ValueError as exc:
         raise ValueError(f"Поле '{field_name}' должно быть числом. Получено: {raw}") from exc
+
+def get_unpunched_custom_fields(db: Session, active_only: bool = True):
+    stmt = select(models.UnpunchedCustomField)
+    if active_only:
+        stmt = stmt.where(models.UnpunchedCustomField.is_active == True)
+    return db.execute(stmt.order_by(models.UnpunchedCustomField.created_at, models.UnpunchedCustomField.field_name)).scalars().all()
+
+
+def create_unpunched_custom_field(db: Session, field_name: str, field_type: str):
+    field_name = (field_name or "").strip()
+    if not field_name:
+        raise ValueError("Название поля не может быть пустым")
+    if field_type not in {"number", "text"}:
+        raise ValueError("Тип поля должен быть number или text")
+    existing = db.execute(select(models.UnpunchedCustomField).where(func.lower(models.UnpunchedCustomField.field_name) == field_name.lower())).scalars().first()
+    if existing:
+        raise ValueError("Поле с таким названием уже существует")
+    field = models.UnpunchedCustomField(field_name=field_name, field_type=field_type)
+    db.add(field)
+    db.commit()
+    db.refresh(field)
+    return field
+
+
+def delete_unpunched_custom_field(db: Session, field_id: UUID) -> bool:
+    field = db.get(models.UnpunchedCustomField, field_id)
+    if not field:
+        return False
+    field_key = str(field_id)
+    for client in db.execute(select(models.Client)).scalars().all():
+        values = dict(client.unpunched_custom_values or {})
+        if field_key in values:
+            values.pop(field_key, None)
+            client.unpunched_custom_values = values
+    db.delete(field)
+    db.commit()
+    return True
 
 def get_accounting_custom_fields(db: Session, active_only: bool = True):
     stmt = select(models.AccountingCustomField)

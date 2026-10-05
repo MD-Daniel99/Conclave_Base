@@ -13,6 +13,7 @@ import {
   updateContractExpense,
   deleteContractExpense,
   updateContractExpenseStatus,
+  downloadAccountingContractsXlsx,
 } from '@/shared/api/accounting'
 import { getApiErrorMessage } from '@/shared/api/http'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
@@ -82,6 +83,7 @@ const contractColumnFilters = reactive<Record<string, string>>({})
 const contractSortKey = ref<string | null>(null)
 const contractSortDirection = ref<SortDirection>(null)
 const isLoading = ref(false)
+const isExportingXlsx = ref(false)
 const isSaving = ref(false)
 const error = ref('')
 const success = ref('')
@@ -357,6 +359,26 @@ function resetContractFilters() {
 
 function visibleColumnCount() {
   return availableColumns.value.filter((column) => isColumnVisible(column.key)).length + 1
+}
+
+async function exportContractsXlsx() {
+  isExportingXlsx.value = true
+  error.value = ''
+  try {
+    await downloadAccountingContractsXlsx({
+      start_date: startDate.value || null,
+      end_date: endDate.value || null,
+      hide_failed: hideFailed.value,
+      tax_usn_percent: props.taxUsnPercent,
+      tax_osno_percent: props.taxOsnoPercent,
+      acquiring_percent: props.acquiringPercent,
+      vat_percent: props.vatPercent,
+    })
+  } catch (caught) {
+    error.value = getApiErrorMessage(caught)
+  } finally {
+    isExportingXlsx.value = false
+  }
 }
 
 async function loadData() {
@@ -656,6 +678,9 @@ onMounted(loadData)
       <div class="inline-search wide-search accounting-query-search accounting-query-search-inline">
         <input v-model="query" placeholder="Договор или клиент" />
       </div>
+      <button class="secondary-button accounting-xlsx-button" type="button" :disabled="isLoading || isExportingXlsx" @click="exportContractsXlsx">
+        {{ isExportingXlsx ? 'Готовим .xlsx…' : 'Скачать .xlsx' }}
+      </button>
     </div>
 
     <details class="accounting-settings-menu">

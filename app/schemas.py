@@ -30,6 +30,22 @@ TaxationSystem = Literal["УСН", "ОСНО"]
 DocumentStatus = Literal["Подписан", "Сделан", "Отправлен"]
 Prosthetists = Literal["Дмитрий", "Никита"]
 PlacesOfResidence = Literal["Ивана Сусанина, д. 3", "Большая Почтовая, д. 18/20"]
+WorkflowBucket = Literal["unpunched", "work"]
+PrecheckStatus = Literal["Работа с документами", "Выполняется", "Отменен", "Выполнен"]
+PrecheckStage = Literal[
+    "Справка об инвалидности",
+    "МТЗ",
+    "ИПРА",
+    "Ожидаем Сертификат",
+    "Пробитие сертификата",
+    "Ожидание комплектующих",
+    "Договор отправлен на подпись",
+    "Протезирование",
+    "Выполнен",
+    "Отменен",
+    "Необходима поддача сертификата",
+    "Вызов на протезирование",
+]
 PROSTHETIST_ADDRESSES = {
     "Дмитрий": "Ивана Сусанина, д. 3",
     "Никита": "Большая Почтовая, д. 18/20",
@@ -286,6 +302,10 @@ class ClientBase(BaseModel):
     patient_payment: float = 0.0
     other_expenses: float = 0.0
     agency_expenses: float = 0.0
+    workflow_bucket: WorkflowBucket = "unpunched"
+    precheck_status: PrecheckStatus = "Работа с документами"
+    precheck_stage: PrecheckStage = "Справка об инвалидности"
+    unpunched_custom_values: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -345,6 +365,10 @@ class ClientUpdate(BaseModel):
     patient_payment: Optional[float] = None
     other_expenses: Optional[float] = None
     agency_expenses: Optional[float] = None
+    workflow_bucket: Optional[WorkflowBucket] = None
+    precheck_status: Optional[PrecheckStatus] = None
+    precheck_stage: Optional[PrecheckStage] = None
+    unpunched_custom_values: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
     def _strip_strings(cls, values: dict) -> dict:
@@ -713,6 +737,20 @@ class ModuleNameIndexRead(BaseModel):
 # -------------------------
 # Accounting Custom Fields
 # -------------------------
+class UnpunchedCustomFieldBase(BaseModel):
+    field_name: str
+    field_type: Literal["number", "text"]
+
+class UnpunchedCustomFieldCreate(UnpunchedCustomFieldBase):
+    pass
+
+class UnpunchedCustomFieldRead(UnpunchedCustomFieldBase):
+    field_id: UUID
+    is_active: bool
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AccountingCustomFieldBase(BaseModel):
     field_name: str
     field_type: str  # 'number' или 'text'

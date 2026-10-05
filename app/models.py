@@ -161,6 +161,12 @@ class Client(Base):
         server_default=text("false"),
         index=True,
     )
+    # Отдельная рабочая корзина для пациентов до пробития сертификата.
+    # Завершённые по-прежнему определяются через is_archived.
+    workflow_bucket = Column(String(16), nullable=False, default="unpunched", server_default=text("'unpunched'"), index=True)
+    precheck_status = Column(String(64), nullable=False, default="Работа с документами", server_default=text("'Работа с документами'"))
+    precheck_stage = Column(String(96), nullable=False, default="Справка об инвалидности", server_default=text("'Справка об инвалидности'"))
+    unpunched_custom_values = Column(JSON, nullable=False, default=dict, server_default=text("'{}'::json"))
 
     prosthesis_type = Column(String(255), nullable=True)
     # Legacy mirror for old reports/templates. The normalized source of truth is CLIENT_TSR.
@@ -471,6 +477,16 @@ class ModuleNameIndex(Base):
     __tablename__ = "REF_NameIndex"
     name_index_id = Column(UUID(as_uuid = True), primary_key = True, default = gen_uuid)
     name_index = Column(Text, nullable = True, unique = True)
+
+
+class UnpunchedCustomField(Base):
+    __tablename__ = "UNPUNCHED_CUSTOM_FIELD"
+
+    field_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    field_name = Column(String(128), unique=True, nullable=False)
+    field_type = Column(String(16), nullable=False)  # 'number' | 'text'
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 # --- ACCOUNTING CUSTOM FIELDS ---
 class AccountingCustomField(Base):
