@@ -354,26 +354,42 @@ def build_accounting_report(
             item for item in certificate_items
             if date_in_range(item["date"], start_date, end_date)
         ]
-        if (start_date or end_date) and not visible_certificates:
-            continue
-
-        revenue = sum(item["amount"] for item in visible_certificates)
-        selected_certificate_ids = {
-            item["certificate_id"] for item in visible_certificates if item["certificate_id"]
+        client_tsr_dates = {
+            str(item.client_tsr_id): normalize_date(item.check_date)
+            for item in (client.tsr_items or [])
         }
-        has_normalized_certificates = any(item["certificate_id"] for item in certificate_items)
+        client_tsr_created_dates = {
+            str(item.client_tsr_id): normalize_date(item.created_at)
+            for item in (client.tsr_items or [])
+        }
+        # Once normalized CLIENT_TSR rows exist they are the source of truth for
+        # certificate dates.  Do not mix the legacy CLIENT.check_date into this
+        # calculation: it can contain an old/imported value and move component
+        # costs into the wrong month.
+        client_accounting_date = client_component_accounting_date(client, client_tsr_dates)
         modules_cost = sum_client_module_cost(
             client.modules or [],
-            selected_certificate_ids=selected_certificate_ids,
-            date_filter_active=bool(start_date or end_date),
-            has_normalized_certificates=has_normalized_certificates,
+            start_date=start_date,
+            end_date=end_date,
+            client_tsr_dates=client_tsr_dates,
+            client_tsr_created_dates=client_tsr_created_dates,
+            client_accounting_date=client_accounting_date,
         )
         stock_reused_cost = sum_client_stock_reused_cost(
             client.modules or [],
-            selected_certificate_ids=selected_certificate_ids,
-            date_filter_active=bool(start_date or end_date),
-            has_normalized_certificates=has_normalized_certificates,
+            start_date=start_date,
+            end_date=end_date,
+            client_tsr_dates=client_tsr_dates,
+            client_tsr_created_dates=client_tsr_created_dates,
+            client_accounting_date=client_accounting_date,
         )
+        # A period may contain an incurred component cost even when the related
+        # TSR has no punched certificate yet.  Such a client must remain visible
+        # in accounting; otherwise the monthly report silently loses real costs.
+        if (start_date or end_date) and not visible_certificates and modules_cost <= 0:
+            continue
+
+        revenue = sum(item["amount"] for item in visible_certificates)
 
         # Payment status is informational.  Work performed by the prosthetist
         # is an expense regardless of whether that payable has already been paid.
@@ -850,12 +866,72 @@ def client_certificate_items(client: models.Client) -> list[dict[str, Any]]:
     }]
 
 
+def client_component_accounting_date(
+    client: models.Client,
+    client_tsr_dates: dict[str, date | None],
+) -> date | None:
+    """Return the patient-level business date used for unpunched TSR costs.
+
+    CLIENT_TSR is the normalized source of truth.  Legacy CLIENT.check_date is
+    consulted only when the patient has no normalized TSR assignments at all.
+    """
+    normalized_dates = [value for value in client_tsr_dates.values() if value is not None]
+    if getattr(client, "tsr_items", None):
+        return max(normalized_dates, default=None)
+    return normalize_date(getattr(client, "check_date", None))
+
+
+def module_accounting_date(
+    module: models.Module,
+    client_tsr_dates: dict[str, date | None] | None = None,
+    client_tsr_created_dates: dict[str, date | None] | None = None,
+    client_accounting_date: date | None = None,
+) -> date | None:
+    """Return the business date that places a component into one period.
+
+    Priority is deliberate:
+
+    1. If the component belongs to a concrete CLIENT_TSR that has a punched
+       certificate date, use that date.
+    2. Otherwise, if the patient has *any* punched certificate, use the latest
+       punched date for the patient.  This is the accounting fallback for
+       components attached to an unpunched/legacy TSR.  Technical timestamps
+       such as ``created_at`` must not override that business date: imported or
+       re-assigned components may have been written to the database later than
+       the month in which the patient's certificate/work belongs.
+    3. Only when the patient has no punched dates at all do we fall back to the
+       concrete CLIENT_TSR creation date and then the component creation date.
+
+    The function always returns a single date, so a component is never counted
+    in more than one accounting period.
+    """
+    client_tsr_id = str(getattr(module, "client_tsr_id", None) or "")
+
+    if client_tsr_id and client_tsr_dates is not None:
+        tsr_date = client_tsr_dates.get(client_tsr_id)
+        if tsr_date is not None:
+            return tsr_date
+
+    patient_date = normalize_date(client_accounting_date)
+    if patient_date is not None:
+        return patient_date
+
+    if client_tsr_id and client_tsr_created_dates is not None:
+        tsr_created = client_tsr_created_dates.get(client_tsr_id)
+        if tsr_created is not None:
+            return tsr_created
+
+    return normalize_date(getattr(module, "created_at", None))
+
+
 def sum_client_module_cost(
     modules: Iterable[models.Module],
     *,
-    selected_certificate_ids: set[str],
-    date_filter_active: bool,
-    has_normalized_certificates: bool,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    client_tsr_dates: dict[str, date | None] | None = None,
+    client_tsr_created_dates: dict[str, date | None] | None = None,
+    client_accounting_date: date | None = None,
 ) -> float:
     # DBCRM_UPDATE_20260831: accounting stock cost
     total = 0.0
@@ -866,10 +942,17 @@ def sum_client_module_cost(
         # Keep excluding only components that were explicitly written off.
         if bool(getattr(module, "is_manually_archived", False)) or bool(getattr(module, "accounting_cost_excluded", False)):
             continue
-        if date_filter_active and has_normalized_certificates:
-            module_certificate_id = str(module.client_tsr_id or "")
-            if not module_certificate_id or module_certificate_id not in selected_certificate_ids:
-                continue
+        if not date_in_range(
+            module_accounting_date(
+                module,
+                client_tsr_dates,
+                client_tsr_created_dates,
+                client_accounting_date,
+            ),
+            start_date,
+            end_date,
+        ):
+            continue
         total += parse_number(module.cost)
     return total
 
@@ -877,18 +960,27 @@ def sum_client_module_cost(
 def sum_client_stock_reused_cost(
     modules: Iterable[models.Module],
     *,
-    selected_certificate_ids: set[str],
-    date_filter_active: bool,
-    has_normalized_certificates: bool,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    client_tsr_dates: dict[str, date | None] | None = None,
+    client_tsr_created_dates: dict[str, date | None] | None = None,
+    client_accounting_date: date | None = None,
 ) -> float:
     total = 0.0
     for module in modules:
         if bool(getattr(module, "is_manually_archived", False)) or not bool(getattr(module, "accounting_cost_excluded", False)):
             continue
-        if date_filter_active and has_normalized_certificates:
-            module_certificate_id = str(module.client_tsr_id or "")
-            if not module_certificate_id or module_certificate_id not in selected_certificate_ids:
-                continue
+        if not date_in_range(
+            module_accounting_date(
+                module,
+                client_tsr_dates,
+                client_tsr_created_dates,
+                client_accounting_date,
+            ),
+            start_date,
+            end_date,
+        ):
+            continue
         total += parse_number(module.cost)
     return total
 

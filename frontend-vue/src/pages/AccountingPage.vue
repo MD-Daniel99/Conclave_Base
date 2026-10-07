@@ -104,6 +104,7 @@ const accountingSortKey = ref<string | null>(null)
 const accountingSortDirection = ref<SortDirection>(null)
 const editableRows = reactive<Record<string, EditableRow>>({})
 const selectedExpenseClient = ref<Client | null>(null)
+const selectedAccountingCardClientId = ref<string | null>(null)
 const selectedExpenseFieldKey = ref('')
 const selectedExpenseFieldLabel = ref('')
 const selectedExpenseHistory = ref<Awaited<ReturnType<typeof fetchClientExpenseHistory>> | null>(null)
@@ -192,7 +193,7 @@ const filteredClients = computed(() => {
   const normalizedQuery = query.value.trim().toLocaleLowerCase('ru-RU')
   return clients.value.filter((client) => {
     if (hideFailed.value && isFailedClient(client)) return false
-    if ((startDate.value || endDate.value) && getVisibleCertificateSlices(client).length === 0) return false
+    if ((startDate.value || endDate.value) && getVisibleCertificateSlices(client).length === 0 && getModulesCost(client) <= 0) return false
     return !normalizedQuery || clientSearchText(client).includes(normalizedQuery)
   })
 })
@@ -200,10 +201,9 @@ const filteredClients = computed(() => {
 const calculatedRows = computed(() =>
   filteredClients.value.map((client) => {
     const certificateSlices = getVisibleCertificateSlices(client)
-    const certificateIds = new Set(certificateSlices.map((item) => item.id).filter(Boolean))
     const rawCertificate = certificateSlices.reduce((sum, item) => sum + item.amount, 0)
-    const rawModulesCost = getModulesCost(client, certificateIds)
-    const stockReusedCost = getStockReusedCost(client, certificateIds)
+    const rawModulesCost = getModulesCost(client)
+    const stockReusedCost = getStockReusedCost(client)
     const fixedExpenses = expenseColumns.reduce((sum, column) => (
       sum + getExpenseCellTotal(client, column.key)
     ), 0)
@@ -293,6 +293,49 @@ const pagedRows = computed(() => {
   const start = (currentPage.value - 1) * pageLimit.value
   return rows.value.slice(start, start + pageLimit.value)
 })
+
+const selectedAccountingCardRow = computed(() => (
+  selectedAccountingCardClientId.value
+    ? calculatedRows.value.find((row) => getClientId(row.client) === selectedAccountingCardClientId.value) ?? null
+    : null
+))
+
+const accountingPeriodLabel = computed(() => {
+  if (!startDate.value && !endDate.value) return 'За весь период'
+  if (startDate.value && endDate.value) return `${startDate.value} — ${endDate.value}`
+  if (startDate.value) return `С ${startDate.value}`
+  return `По ${endDate.value}`
+})
+
+function toggleAccountingCard(row: (typeof calculatedRows.value)[number]) {
+  const clientId = getClientId(row.client)
+  selectedAccountingCardClientId.value = selectedAccountingCardClientId.value === clientId ? null : clientId
+}
+
+function closeAccountingCard() {
+  selectedAccountingCardClientId.value = null
+}
+
+function accountingCardExpenseRows(row: (typeof calculatedRows.value)[number]) {
+  return expenseColumns.map((column) => ({
+    key: column.key,
+    label: column.label,
+    value: getExpenseCellTotal(row.client, column.key),
+    entries: (row.client.accounting_expenses?.[column.key] ?? []).filter((entry) => parseMoney(entry.amount) !== 0),
+  })).filter((item) => item.value !== 0)
+}
+
+function accountingCardCustomExpenseRows(row: (typeof calculatedRows.value)[number]) {
+  return numericCustomFields.value.map((field) => {
+    const key = getCustomColumnKey(field)
+    return {
+      key,
+      label: getFieldName(field),
+      value: getExpenseCellTotal(row.client, key),
+      entries: (row.client.accounting_expenses?.[key] ?? []).filter((entry) => parseMoney(entry.amount) !== 0),
+    }
+  }).filter((item) => item.value !== 0)
+}
 
 const hasPreviousPage = computed(() => currentPage.value > 1)
 const hasNextPage = computed(() => currentPage.value * pageLimit.value < rows.value.length)
@@ -402,33 +445,41 @@ function isFailedClient(client: Client) {
   return ['fail', 'hold', 'cancel', 'отказ', 'отлож', 'отмен'].some((token) => text.includes(token))
 }
 
-function getModulesCost(client: Client, visibleCertificateIds: Set<string>) {
-  const dateFilterActive = Boolean(startDate.value || endDate.value)
-  const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
-  return (client.modules ?? []).reduce((sum, component) => {
-    // ``is_archived`` is inherited from the patient when they are moved to
-    // «Выполненные».  The purchase already happened, so accounting must keep it.
-    // Only an explicitly written-off component is excluded from the live cost.
-    if (component.is_manually_archived || component.accounting_cost_excluded) return sum
-    if (dateFilterActive && hasNormalizedCertificates) {
-      const certificateId = String(component.client_tsr_id ?? '')
-      if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
-    }
-    return sum + parseMoney(component.cost)
-  }, 0)
+function componentAccountingDate(client: Client, component: NonNullable<Client['modules']>[number]) {
+  const clientTsrId = String(component.client_tsr_id ?? '')
+  if (clientTsrId) {
+    const linkedTsr = (client.tsr_items ?? []).find((item) => String(item.client_tsr_id ?? '') === clientTsrId)
+    const punchedDate = String(linkedTsr?.check_date ?? '').slice(0, 10)
+    if (punchedDate) return punchedDate
+  }
+  return String(component.created_at ?? '').slice(0, 10)
 }
 
-function getStockReusedCost(client: Client, visibleCertificateIds: Set<string>) {
-  const dateFilterActive = Boolean(startDate.value || endDate.value)
-  const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
-  return (client.modules ?? []).reduce((sum, component) => {
-    if (component.is_manually_archived || !component.accounting_cost_excluded) return sum
-    if (dateFilterActive && hasNormalizedCertificates) {
-      const certificateId = String(component.client_tsr_id ?? '')
-      if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
-    }
-    return sum + parseMoney(component.cost)
-  }, 0)
+function componentIsVisibleInPeriod(client: Client, component: NonNullable<Client['modules']>[number]) {
+  if (!startDate.value && !endDate.value) return true
+  const accountingDate = componentAccountingDate(client, component)
+  if (!accountingDate) return false
+  if (startDate.value && accountingDate < startDate.value) return false
+  if (endDate.value && accountingDate > endDate.value) return false
+  return true
+}
+
+function visibleAccountingComponents(client: Client, stockReused: boolean) {
+  return (client.modules ?? []).filter((component) => {
+    // ``is_archived`` follows the patient workflow and is intentionally ignored
+    // here.  Only an explicit write-off removes a historical component cost.
+    if (component.is_manually_archived) return false
+    if (Boolean(component.accounting_cost_excluded) !== stockReused) return false
+    return componentIsVisibleInPeriod(client, component)
+  })
+}
+
+function getModulesCost(client: Client) {
+  return visibleAccountingComponents(client, false).reduce((sum, component) => sum + parseMoney(component.cost), 0)
+}
+
+function getStockReusedCost(client: Client) {
+  return visibleAccountingComponents(client, true).reduce((sum, component) => sum + parseMoney(component.cost), 0)
 }
 
 function getFieldId(field: AccountingCustomField) {
@@ -1118,13 +1169,23 @@ onMounted(async () => {
               :class="{ 'contract-required-row': clientRequiresContract(row.client) }"
             >
               <td v-if="isColumnVisible('client')" class="accounting-identity-cell">
-                <button class="link-button accounting-client-link" type="button" @click="openClientCard(row.client)">
-                  <strong>{{ getClientName(row.client) }}</strong>
-                  <span class="muted">{{ getTaxationSystem(row.client) }} · дата пробития {{ getCheckDate(row.client) || '—' }}</span>
-                  <span v-if="clientRequiresContract(row.client)" class="contract-warning">
-                    Необходимо сделать договор
-                  </span>
-                </button>
+                <div class="accounting-client-sticky-content">
+                  <label class="accounting-card-checkbox" :title="`Открыть бухгалтерскую карточку: ${getClientName(row.client)}`">
+                    <input
+                      type="checkbox"
+                      :checked="selectedAccountingCardClientId === getClientId(row.client)"
+                      :aria-label="`Открыть бухгалтерскую карточку пациента ${getClientName(row.client)}`"
+                      @change="toggleAccountingCard(row)"
+                    />
+                  </label>
+                  <button class="link-button accounting-client-link" type="button" @click="openClientCard(row.client)">
+                    <strong>{{ getClientName(row.client) }}</strong>
+                    <span class="muted">{{ getTaxationSystem(row.client) }} · дата пробития {{ getCheckDate(row.client) || '—' }}</span>
+                    <span v-if="clientRequiresContract(row.client)" class="contract-warning">
+                      Необходимо сделать договор
+                    </span>
+                  </button>
+                </div>
               </td>
               <td v-if="isColumnVisible('certificate')" class="table-money">{{ formatMoney(row.certificate) }}</td>
               <td v-if="isColumnVisible('modules_cost')" class="table-money">
@@ -1205,6 +1266,99 @@ onMounted(async () => {
       </div>
     </template>
 
+
+    <div v-if="selectedAccountingCardRow" class="accounting-patient-card-modal" role="dialog" aria-modal="true" aria-label="Бухгалтерская карточка пациента">
+      <div class="accounting-expense-backdrop" @click="closeAccountingCard"></div>
+      <section class="accounting-patient-card-dialog">
+        <header class="accounting-patient-card-head">
+          <div>
+            <p class="eyebrow">Бухгалтерская карточка · {{ accountingPeriodLabel }}</p>
+            <h2>{{ getClientName(selectedAccountingCardRow.client) }}</h2>
+            <p class="muted">{{ getTaxationSystem(selectedAccountingCardRow.client) }} · дата пробития {{ getCheckDate(selectedAccountingCardRow.client) || '—' }}</p>
+          </div>
+          <button class="ghost-button" type="button" @click="closeAccountingCard">Закрыть</button>
+        </header>
+
+        <div class="accounting-patient-card-metrics">
+          <article>
+            <span>Сертификаты</span>
+            <strong>{{ formatMoney(selectedAccountingCardRow.certificate) }}</strong>
+          </article>
+          <article>
+            <span>Комплектующие</span>
+            <strong>{{ formatMoney(selectedAccountingCardRow.modulesCost) }}</strong>
+            <small v-if="selectedAccountingCardRow.stockReusedCost">Со склада: {{ formatMoney(selectedAccountingCardRow.stockReusedCost) }}</small>
+          </article>
+          <article>
+            <span>Все расходы</span>
+            <strong>{{ formatMoney(selectedAccountingCardRow.totalExpenses) }}</strong>
+          </article>
+          <article :class="{ negative: selectedAccountingCardRow.profit < 0 }">
+            <span>Прибыль</span>
+            <strong>{{ formatMoney(selectedAccountingCardRow.profit) }}</strong>
+          </article>
+        </div>
+
+        <div class="accounting-patient-card-grid">
+          <section class="accounting-patient-card-section">
+            <div class="accounting-patient-card-section-head">
+              <h3>Комплектующие</h3>
+              <span>{{ visibleAccountingComponents(selectedAccountingCardRow.client, false).length }} поз.</span>
+            </div>
+            <div v-if="visibleAccountingComponents(selectedAccountingCardRow.client, false).length" class="accounting-patient-card-list">
+              <div v-for="component in visibleAccountingComponents(selectedAccountingCardRow.client, false)" :key="component.module_id" class="accounting-patient-card-line">
+                <div>
+                  <strong>{{ component.module_name_index || component.properties || 'Комплектующая' }}</strong>
+                  <small>{{ componentAccountingDate(selectedAccountingCardRow.client, component) || 'дата не указана' }}</small>
+                </div>
+                <b>{{ formatMoney(parseMoney(component.cost)) }}</b>
+              </div>
+            </div>
+            <p v-else class="muted">В выбранном периоде затрат на новые комплектующие нет.</p>
+            <div v-if="visibleAccountingComponents(selectedAccountingCardRow.client, true).length" class="accounting-patient-card-stock">
+              <strong>Комплектующие со склада</strong>
+              <span>{{ formatMoney(selectedAccountingCardRow.stockReusedCost) }}</span>
+              <small>Показаны справочно и повторно в расходы не включаются.</small>
+            </div>
+          </section>
+
+          <section class="accounting-patient-card-section">
+            <div class="accounting-patient-card-section-head">
+              <h3>Прочие расходы</h3>
+              <span>{{ formatMoney(selectedAccountingCardRow.fixedExpenses + selectedAccountingCardRow.customExpenses) }}</span>
+            </div>
+            <div v-if="accountingCardExpenseRows(selectedAccountingCardRow).length || accountingCardCustomExpenseRows(selectedAccountingCardRow).length" class="accounting-patient-card-list">
+              <div v-for="item in [...accountingCardExpenseRows(selectedAccountingCardRow), ...accountingCardCustomExpenseRows(selectedAccountingCardRow)]" :key="item.key" class="accounting-patient-card-expense-group">
+                <div class="accounting-patient-card-line">
+                  <span>{{ item.label }}</span><b>{{ formatMoney(item.value) }}</b>
+                </div>
+                <div v-if="item.entries.length" class="accounting-patient-card-expense-details">
+                  <div v-for="entry in item.entries" :key="entry.id">
+                    <span>{{ entry.description || 'Расход' }}</span>
+                    <small v-if="item.key === 'prosthetist_work'">{{ entry.paid === false ? 'Не оплачено' : 'Оплачено' }}</small>
+                    <b>{{ formatMoney(parseMoney(entry.amount)) }}</b>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p v-else class="muted">Дополнительных расходов нет.</p>
+          </section>
+
+          <section class="accounting-patient-card-section accounting-patient-card-section-wide">
+            <div class="accounting-patient-card-section-head">
+              <h3>Налоги и итог</h3>
+            </div>
+            <div class="accounting-patient-card-summary">
+              <div><span>НДС</span><strong>{{ formatMoney(selectedAccountingCardRow.vat) }}</strong></div>
+              <div><span>Налог · {{ getTaxationSystem(selectedAccountingCardRow.client) }}</span><strong>{{ formatMoney(selectedAccountingCardRow.tax) }}</strong></div>
+              <div><span>Эквайринг</span><strong>{{ formatMoney(selectedAccountingCardRow.acquiring) }}</strong></div>
+              <div><span>Расходы всего</span><strong>{{ formatMoney(selectedAccountingCardRow.totalExpenses) }}</strong></div>
+              <div class="accounting-patient-card-profit" :class="{ negative: selectedAccountingCardRow.profit < 0 }"><span>Прибыль</span><strong>{{ formatMoney(selectedAccountingCardRow.profit) }}</strong></div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
 
     <div v-if="selectedExpenseClient" class="accounting-expense-modal" role="dialog" aria-modal="true">
       <div class="accounting-expense-backdrop" @click="closeExpenseCell"></div>

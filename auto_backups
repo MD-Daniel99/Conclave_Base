@@ -6,4 +6,6 @@ DB_NAME="documents_db"
 DB_HOST="localhost"
 DB_PORT="5432"
 
-docker exec -t db_postgres pg_dump -U "DB_USER" -d "DB_NAME" | gzip > db_backups/backup.sql.gz
+current_date=$(date +"%Y-%m-%d")
+
+docker exec -t db_postgres pg_dump -U "DB_USER" -d "DB_NAME" | gzip > db_backups/backup_$current_date.sql.gz
