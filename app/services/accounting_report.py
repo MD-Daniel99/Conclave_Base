@@ -17,8 +17,9 @@ GENERATED_DOCUMENT_TYPES = frozenset({
     "contract_original",
     "contract_template",
     "sdv_contract",
+    "zet_contract",
 })
-CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "dmk_contract", "sdv_contract"})
+CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "zet_contract", "dmk_contract", "sdv_contract"})
 FIXED_EXPENSE_KEYS = (
     "prosthetist_work",
     "patient_travel",
@@ -346,6 +347,11 @@ def build_accounting_report(
     }
 
     for client in clients:
+        # «Не пробитые пациенты» ещё не вошли в бухгалтерский контур.
+        # Их сертификаты, комплектующие и документы не должны попадать ни в
+        # месячный отчёт, ни в отчёт за весь период до перевода в «В работе».
+        if str(getattr(client, "workflow_bucket", "work") or "work") == "unpunched":
+            continue
         if hide_failed and is_failed_client(client):
             continue
 
@@ -518,6 +524,9 @@ def build_contract_accounting_report(
     seen_certificate_keys: set[str] = set()
 
     for accounting in records:
+        contract_client = getattr(getattr(accounting, "document", None), "client", None)
+        if contract_client is not None and str(getattr(contract_client, "workflow_bucket", "work") or "work") == "unpunched":
+            continue
         document = accounting.document
         if not document or not document.client:
             continue
@@ -1033,6 +1042,8 @@ def build_contract_coverage(db: Session) -> list[dict[str, Any]]:
     )
     result: list[dict[str, Any]] = []
     for client in clients:
+        if str(getattr(client, "workflow_bucket", "work") or "work") == "unpunched":
+            continue
         modules = [module for module in (client.modules or []) if not module.is_archived]
         module_ids = {str(module.module_id) for module in modules}
         module_names = {

@@ -170,13 +170,36 @@ function formatSeries(value: string): string {
   return digits.slice(0, 2) + ' ' + digits.slice(2);
 }
 
+// Форматирование телефона: +7 908 576-21-45
+function formatPhoneNumber(raw: string): string {
+  const trimmed = (raw || '').trim()
+  const digits = trimmed.replace(/\D/g, '')
+  // Неполные номера не трогаем — вернём как есть
+  if (digits.length < 10) return trimmed
+  let normalized = digits
+  if (normalized[0] === '8') normalized = '7' + normalized.slice(1)
+  else if (normalized[0] !== '7') normalized = '7' + normalized
+  if (normalized.length > 11) normalized = normalized.slice(0, 11)
+  if (normalized.length !== 11) return trimmed
+  return `+7 ${normalized.slice(1, 4)} ${normalized.slice(4, 7)}-${normalized.slice(7, 9)}-${normalized.slice(9, 11)}`
+}
+
 type ContractTemplateOption = { value: string; label: string }
 
 const contractTemplateOptions = ref<ContractTemplateOption[]>([
   { value: 'llc_contract', label: 'ООО Смарт Движение · Договор' },
+  { value: 'zet_contract', label: 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ» · Договор' },
   { value: 'dmk_contract', label: 'ИП ДМК · Договор' },
   { value: 'dmk_instrument', label: 'ИП ДМК · Акт' },
 ])
+
+function normalizePerformerCompany(value: unknown): string {
+  const company = String(value ?? '')
+  if (company === 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»' || company === 'ООО "Смарт Движение"') {
+    return company
+  }
+  return ''
+}
 
 type ClientForm = {
   last_name: string
@@ -187,6 +210,7 @@ type ClientForm = {
   contract_status: DocumentStatus | ''
   act_status: DocumentStatus | ''
   agent_id: string
+  performer_company: string
   prosthesis_type: string
   taxation_system: 'УСН' | 'ОСНО'
   notes: string
@@ -255,7 +279,7 @@ const DOCUMENT_STATUS_OPTIONS: Array<{ value: DocumentStatus; label: string }> =
 ]
 
 type ClientDocumentStatusField = 'contract_status' | 'act_status'
-const CONTRACT_DOCUMENT_TYPES = new Set(['llc_contract', 'dmk_contract', 'sdv_contract'])
+const CONTRACT_DOCUMENT_TYPES = new Set(['llc_contract', 'zet_contract', 'dmk_contract', 'sdv_contract'])
 
 const PRECHECK_STATUS_OPTIONS = [
   'Работа с документами', 'Выполняется', 'Отменен', 'Выполнен',
@@ -265,27 +289,6 @@ const PRECHECK_STAGE_OPTIONS = [
   'Ожидание комплектующих', 'Договор отправлен на подпись', 'Протезирование', 'Выполнен',
   'Отменен', 'Необходима поддача сертификата', 'Вызов на протезирование',
 ].map((value) => ({ value, label: value }))
-
-type PrecheckTone = 'info' | 'warn' | 'success' | 'danger' | 'secondary'
-
-function getPrecheckStatusTone(value?: string | null): PrecheckTone {
-  switch (String(value || 'Работа с документами').trim()) {
-    case 'Выполнен': return 'success'
-    case 'Отменен': return 'danger'
-    case 'Выполняется': return 'warn'
-    case 'Работа с документами': return 'info'
-    default: return 'secondary'
-  }
-}
-
-function getPrecheckStageTone(value?: string | null): PrecheckTone {
-  const stage = String(value || 'Справка об инвалидности').trim()
-  if (stage === 'Выполнен') return 'success'
-  if (stage === 'Отменен') return 'danger'
-  if (['Ожидаем Сертификат', 'Ожидание комплектующих', 'Необходима поддача сертификата'].includes(stage)) return 'warn'
-  if (['Справка об инвалидности', 'МТЗ', 'ИПРА', 'Пробитие сертификата', 'Договор отправлен на подпись', 'Протезирование', 'Вызов на протезирование'].includes(stage)) return 'info'
-  return 'secondary'
-}
 
 
 const emptyForm: ClientForm = {
@@ -297,6 +300,7 @@ const emptyForm: ClientForm = {
   contract_status: '',
   act_status: '',
   agent_id: '',
+  performer_company: '',
   prosthesis_type: '',
   taxation_system: 'УСН',
   notes: '',
@@ -1397,7 +1401,7 @@ function getFilenameFromDisposition(contentDisposition?: string) {
 }
 
 function getPhoneValue(phone: ClientPhone) {
-  return phone.number || '-'
+  return phone.number ? formatPhoneNumber(phone.number) : '-'
 }
 
 function getModuleName(moduleItem: ModuleItem) {
@@ -1599,25 +1603,6 @@ function clearContractTsrSelection() {
   selectedContractModuleIds.value = []
 }
 
-async function persistDirtyClientTsrDrafts(clientId: string) {
-  // The main «Сохранить изменения» button must save the TSR card fields too.
-  // They live in CLIENT_TSR rather than CLIENT, so a plain updateClient() call
-  // cannot persist certificate date/price/prosthetist values.
-  const draftIds = Object.keys(clientTsrDrafts)
-
-  for (const clientTsrId of draftIds) {
-    const draft = clientTsrDrafts[clientTsrId]
-    if (!draft) continue
-
-    await updateClientTsr(clientId, clientTsrId, {
-      check_date: draft.checkDate || null,
-      certificate_price: draft.certificatePrice.trim() || null,
-      prosthetist: draft.prosthetist || null,
-    })
-    delete clientTsrDrafts[clientTsrId]
-  }
-}
-
 async function persistSelectedContractTsrDrafts(clientId: string) {
   const selectedGroups = contractTsrGroups.value.filter(
     (group) => group.clientTsrId && selectedContractClientTsrIds.value.includes(group.clientTsrId),
@@ -1696,7 +1681,7 @@ function getContractPrefixForTemplate(templateType: string) {
   return 'СД'
 }
 
-const showExtendedContractDates = computed(() => contractType.value === 'llc_contract')
+const showExtendedContractDates = computed(() => ['llc_contract', 'zet_contract'].includes(contractType.value))
 const selectedMtzTemplate = computed(() => mtzTemplateOptions.value.find((item) => item.value === mtzType.value))
 const mtzAutofillData = computed(() => {
   const client = selectedClient.value
@@ -2138,6 +2123,7 @@ function fillForm(client: Client) {
   form.status = getReferenceValue(client.status_code)
   form.current_stage = getReferenceValue(client.current_stage)
   form.agent_id = String(client.agent_id ?? '')
+  form.performer_company = normalizePerformerCompany(client.performer_company)
   const diagnosis = String(client.prosthesis_type ?? '')
   form.prosthesis_type = DIAGNOSIS_OPTIONS.some((option) => option.value === diagnosis) ? diagnosis : ''
   form.taxation_system = client.taxation_system === 'ОСНО' ? 'ОСНО' : 'УСН'
@@ -2165,6 +2151,7 @@ function buildCreatePayload(): ClientCreatePayload {
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
     agent_id: form.agent_id,
+    performer_company: optionalString(form.performer_company),
     prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
     notes: optionalString(form.notes),
@@ -2185,6 +2172,7 @@ function buildUpdatePayload(): ClientUpdatePayload {
     status_code: form.status.trim(),
     current_stage: form.current_stage.trim(),
     agent_id: form.agent_id,
+    performer_company: optionalString(form.performer_company),
     prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
     notes: optionalString(form.notes),
@@ -2615,12 +2603,6 @@ async function saveClient() {
       const wasArchived = Boolean(selectedClient.value.is_archived)
       const updatedClient = await updateClient(clientId, buildUpdatePayload())
 
-      // Certificate fields shown in «Основное» belong to CLIENT_TSR, not CLIENT.
-      // Save every edited TSR card together with the main form so the global
-      // save button cannot silently discard date/price/prosthetist changes —
-      // including when this same save moves the patient to «Выполненные».
-      await persistDirtyClientTsrDrafts(clientId)
-
       if (!wasArchived && updatedClient.is_archived) {
         await finishAutomaticArchive(updatedClient)
         return
@@ -2629,20 +2611,8 @@ async function saveClient() {
       selectedClient.value = updatedClient
       fillForm(updatedClient)
       await refreshSelectedClient(clientId)
-
-      const movedFromUnpunchedToWork = activeClientListMode.value === 'unpunched'
-        && selectedClient.value?.workflow_bucket === 'work'
-        && !selectedClient.value?.is_archived
-      if (movedFromUnpunchedToWork) {
-        activeClientListMode.value = 'active'
-        selectedClientIds.value = []
-        currentPage.value = 1
-        successMessage.value = 'Пациент обновлён и перемещён в «В работе» после пробития сертификата.'
-      } else {
-        successMessage.value = 'Пациент обновлен'
-      }
-
       await reloadActiveDetailTab()
+      successMessage.value = 'Пациент обновлен'
     } else {
       const createdClient = await createClient(buildCreatePayload())
 
@@ -2754,9 +2724,8 @@ function startEditPhone(phone: ClientPhone) {
   if (!phone.phone_id) {
     return
   }
-
   editingPhoneId.value = phone.phone_id
-  newPhone.phone = getPhoneValue(phone)
+  newPhone.phone = phone.number ? formatPhoneNumber(phone.number) : ''
   newPhone.comment = ''
   resetMessages()
   rememberPhoneDraftState()
@@ -2774,6 +2743,12 @@ async function addPhone() {
     return
   }
 
+  const formattedPhone = formatPhoneNumber(newPhone.phone)
+  if (formattedPhone.replace(/\D/g, '').length !== 11) {
+    error.value = 'Введите корректный номер телефона (11 цифр).'
+    return
+  }
+
   isSaving.value = true
   resetMessages()
 
@@ -2785,10 +2760,10 @@ async function addPhone() {
     }
 
     if (editingPhoneId.value) {
-      await updateClientPhone(editingPhoneId.value, { number: newPhone.phone.trim() })
+      await updateClientPhone(editingPhoneId.value, { number: formattedPhone })
       successMessage.value = 'Телефон обновлен'
     } else {
-      await createClientPhone(clientId, { number: newPhone.phone.trim() })
+      await createClientPhone(clientId, { number: formattedPhone })
       successMessage.value = 'Телефон добавлен'
     }
 
@@ -3818,8 +3793,8 @@ onBeforeUnmount(() => {
             <td>{{ currentSkip + index + 1 }}</td>
             <td class="entity-cell"><div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div></td>
             <td>{{ getAgentLabel(client.agent_id) }}</td>
-            <td @click.stop><select :class="['table-select', 'precheck-table-select', `precheck-tone-${getPrecheckStatusTone(client.precheck_status)}`]" :value="client.precheck_status || 'Работа с документами'" @change="updatePrecheckField(client, 'precheck_status', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
-            <td @click.stop><select :class="['table-select', 'precheck-table-select', `precheck-tone-${getPrecheckStageTone(client.precheck_stage)}`]" :value="client.precheck_stage || 'Справка об инвалидности'" @change="updatePrecheckField(client, 'precheck_stage', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STAGE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
+            <td @click.stop><select class="table-select precheck-table-select" :value="client.precheck_status || 'Работа с документами'" @change="updatePrecheckField(client, 'precheck_status', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
+            <td @click.stop><select class="table-select precheck-table-select" :value="client.precheck_stage || 'Справка об инвалидности'" @change="updatePrecheckField(client, 'precheck_stage', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STAGE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
             <td class="table-tsr">{{ getClientTsrLabel(client) }}</td>
             <td v-for="field in unpunchedCustomFields" :key="field.field_id" @click.stop>
               <input class="table-input precheck-custom-input" :type="field.field_type === 'number' ? 'number' : 'text'" :value="client.unpunched_custom_values?.[field.field_id] ?? ''" @change="updateUnpunchedCustomValue(client, field, ($event.target as HTMLInputElement).value)" />
@@ -3833,7 +3808,7 @@ onBeforeUnmount(() => {
     <div v-if="!isLoading && activeClientListMode === 'unpunched'" class="mobile-entity-list">
       <article v-for="client in pagedClients" :key="String(client.client_id ?? client.external_id)" class="mobile-entity-card" @click="selectClient(client)">
         <div class="mobile-entity-card-header"><div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div><ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" /></div>
-        <div class="mobile-entity-card-details"><span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span><span>Статус <strong :class="['precheck-mobile-tone', `precheck-tone-${getPrecheckStatusTone(client.precheck_status)}`]">{{ client.precheck_status || 'Работа с документами' }}</strong></span><span>Этап <strong :class="['precheck-mobile-tone', `precheck-tone-${getPrecheckStageTone(client.precheck_stage)}`]">{{ client.precheck_stage || 'Справка об инвалидности' }}</strong></span><span>Вид протеза <strong>{{ getClientTsrLabel(client) }}</strong></span><span v-for="field in unpunchedCustomFields" :key="field.field_id">{{ field.field_name }} <strong>{{ client.unpunched_custom_values?.[field.field_id] ?? '—' }}</strong></span></div>
+        <div class="mobile-entity-card-details"><span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span><span>Статус <strong>{{ client.precheck_status || 'Работа с документами' }}</strong></span><span>Этап <strong>{{ client.precheck_stage || 'Справка об инвалидности' }}</strong></span><span>Вид протеза <strong>{{ getClientTsrLabel(client) }}</strong></span><span v-for="field in unpunchedCustomFields" :key="field.field_id">{{ field.field_name }} <strong>{{ client.unpunched_custom_values?.[field.field_id] ?? '—' }}</strong></span></div>
       </article>
     </div>
 
@@ -4160,6 +4135,14 @@ onBeforeUnmount(() => {
               </select>
             </label>
             <label>
+              Организация
+              <select v-model="form.performer_company">
+                <option value="">Не выбрана</option>
+                <option value="ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»">ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»</option>
+                <option value='ООО "Смарт Движение"'>ООО "Смарт Движение"</option>
+              </select>
+            </label>
+            <label>
               Налогообложение
               <select v-model="form.taxation_system">
                 <option value="УСН">6%</option>
@@ -4460,7 +4443,11 @@ onBeforeUnmount(() => {
           </form>
           <div class="form-heading"><h2>Телефоны</h2></div>
           <form class="toolbar-form compact-toolbar" @submit.prevent="addPhone">
-            <input v-model="newPhone.phone" placeholder="Телефон" />
+            <input
+    v-model="newPhone.phone"
+    placeholder="Телефон"
+    @blur="newPhone.phone = formatPhoneNumber(newPhone.phone)"
+  />
             <button class="secondary-button" :disabled="isSaving || !newPhone.phone.trim()" type="submit">
               {{ editingPhoneId ? 'Обновить' : 'Добавить' }}
             </button>
@@ -4567,7 +4554,7 @@ onBeforeUnmount(() => {
                     role="tab"
                     :aria-selected="componentEntryMode === 'warehouse'"
                     @click="setComponentEntryMode('warehouse')"
-                  >
+                  >     
                     <PackageOpen :size="16" aria-hidden="true" />
                     Выбрать со склада
                     <span class="component-mode-count">{{ workingWarehouseUnitCount + stockWarehouseUnitCount }}</span>

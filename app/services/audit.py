@@ -25,6 +25,7 @@ ENTITY_LABELS = {
     "reference": "Справочник",
     "accounting_field": "Поле бухгалтерии",
     "system": "Системный справочник",
+    "task": "Задача",
 }
 
 MISSING_ID_LABELS = {
@@ -132,6 +133,8 @@ def _subject_from_snapshot(entity: str, value: Any) -> str:
             or value.get("stage_code")
             or ""
         ).strip()
+    if entity == "task":
+        return str(value.get("title") or "").strip()
     return ""
 
 

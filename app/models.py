@@ -17,7 +17,7 @@
 
 from sqlalchemy import (
     Column, String, Text, Date, Integer, DateTime, ForeignKey, JSON, BigInteger, text, func, Float, Boolean, Sequence,
-    CheckConstraint,
+    CheckConstraint, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -136,6 +136,8 @@ class Client(Base):
 
     # на агента — запрещаем каскадное удаление (RESTRICT), чтобы случайно не потерять клиентов
     agent_id = Column(UUID(as_uuid=True), ForeignKey("AGENT.agent_id", ondelete="RESTRICT"), nullable=False)
+    # Юридическое лицо/организация, от имени которой ведётся работа с пациентом.
+    performer_company = Column(String(128), nullable=True)
     deadline = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -406,6 +408,103 @@ class User(Base):
 
     def __repr__(self):
         return f"<User {self.username} ({self.role})>"
+
+class Task(Base):
+    __tablename__ = "TASK"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('planned', 'in_progress', 'done', 'cancelled')",
+            name="ck_task_status_allowed",
+        ),
+        CheckConstraint(
+            "priority IN ('low', 'normal', 'high', 'urgent')",
+            name="ck_task_priority_allowed",
+        ),
+        CheckConstraint(
+            "due_at >= start_at",
+            name="ck_task_due_after_start",
+        ),
+    )
+
+    task_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    start_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    due_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    all_day = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    status = Column(String(32), nullable=False, default="planned", server_default=text("'planned'"), index=True)
+    priority = Column(String(16), nullable=False, default="normal", server_default=text("'normal'"), index=True)
+    color = Column(String(16), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("USERS.user_id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    creator = relationship("User", foreign_keys=[created_by])
+    assignments = relationship(
+        "TaskAssignee",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    notifications = relationship(
+        "TaskNotification",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class TaskAssignee(Base):
+    __tablename__ = "TASK_ASSIGNEE"
+
+    task_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("TASK.task_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("USERS.user_id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    assigned_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    assigned_by = Column(UUID(as_uuid=True), ForeignKey("USERS.user_id", ondelete="SET NULL"), nullable=True)
+
+    task = relationship("Task", back_populates="assignments")
+    user = relationship("User", foreign_keys=[user_id])
+    assigner = relationship("User", foreign_keys=[assigned_by])
+
+
+class TaskNotification(Base):
+    __tablename__ = "TASK_NOTIFICATION"
+    __table_args__ = (
+        UniqueConstraint("task_id", "user_id", "kind", name="uq_task_notification_task_user_kind"),
+    )
+
+    notification_id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("USERS.user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    task_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("TASK.task_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind = Column(String(32), nullable=False)
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    read_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    user = relationship("User", foreign_keys=[user_id])
+    task = relationship("Task", back_populates="notifications")
+
 
 class ProsthesisRef(Base):
     """Legacy reference retained for API/backward compatibility."""

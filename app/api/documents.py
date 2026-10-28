@@ -21,7 +21,7 @@ ALLOWED_CONTENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "dmk_contract", "sdv_contract"})
+CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "zet_contract", "dmk_contract", "sdv_contract"})
 
 
 @router.post("/clients/{client_id}/upload", response_model=schemas.DocumentRead)

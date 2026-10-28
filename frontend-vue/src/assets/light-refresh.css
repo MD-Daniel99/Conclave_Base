@@ -4419,3 +4419,205 @@ body.modal-open {
     max-width: 12.5rem !important;
   }
 }
+
+/* Calendar / task notifications */
+.task-notification-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.task-notification-button {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft, #33445f);
+  background: var(--surface-muted, #17263b);
+  color: var(--text-primary, #dbe5f2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.task-notification-button:hover {
+  border-color: #7c5ce0;
+  background: #1c2d46;
+  transform: translateY(-1px);
+}
+
+.task-notification-badge {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  border: 2px solid #101d2f;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
+}
+
+.task-notification-panel {
+  position: absolute;
+  z-index: 1500;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(390px, calc(100vw - 24px));
+  max-height: min(580px, calc(100vh - 90px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid #3b4c66;
+  border-radius: 16px;
+  background: #14243a;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
+}
+
+.task-notification-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 15px;
+  border-bottom: 1px solid #2f415b;
+}
+
+.task-notification-header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.task-notification-header strong {
+  color: #edf3fb;
+  font-size: 14px;
+}
+
+.task-notification-header span {
+  color: #8193ab;
+  font-size: 11px;
+}
+
+.task-notification-header button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #3a4c66;
+  border-radius: 10px;
+  background: #102036;
+  color: #b9c7d8;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.task-notification-list {
+  overflow-y: auto;
+  max-height: 440px;
+}
+
+.task-notification-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid rgba(74, 95, 124, .38);
+  background: transparent;
+  color: #dce6f4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-notification-item:hover {
+  background: rgba(255,255,255,.035);
+}
+
+.task-notification-item.unread {
+  background: rgba(124, 58, 237, .09);
+}
+
+.task-notification-item.overdue.unread {
+  background: rgba(239, 68, 68, .09);
+}
+
+.task-notification-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #52657f;
+}
+
+.task-notification-item.unread .task-notification-dot {
+  background: #8b5cf6;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, .12);
+}
+
+.task-notification-item.overdue .task-notification-dot {
+  background: #ef4444;
+}
+
+.task-notification-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.task-notification-copy strong {
+  color: #eef3fa;
+  font-size: 13px;
+}
+
+.task-notification-copy > span {
+  color: #9badc3;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.task-notification-copy small {
+  color: #687b95;
+  font-size: 10px;
+}
+
+.task-notification-empty {
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: #7e91aa;
+  font-size: 12px;
+}
+
+.task-notification-footer {
+  display: block;
+  padding: 11px 14px;
+  border-top: 1px solid #2f415b;
+  color: #c4b5fd;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.task-notification-footer:hover {
+  background: rgba(124, 58, 237, .08);
+}
+
+@media (max-width: 720px) {
+  .task-notification-panel {
+    position: fixed;
+    top: 70px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+}

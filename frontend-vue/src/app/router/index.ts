@@ -5,6 +5,7 @@ import LoginPage from '@/pages/LoginPage.vue'
 
 const AppLayout = () => import('@/widgets/layout/AppLayout.vue')
 const DashboardPage = () => import('@/pages/DashboardPage.vue')
+const CalendarPage = () => import('@/pages/CalendarPage.vue')
 const ClientsPage = () => import('@/pages/ClientsPage.vue')
 const AgentsPage = () => import('@/pages/AgentsPage.vue')
 const WarehousePage = () => import('@/pages/WarehousePage.vue')
@@ -31,6 +32,11 @@ export const router = createRouter({
           path: '',
           name: 'dashboard',
           component: DashboardPage,
+        },
+        {
+          path: 'calendar',
+          name: 'calendar',
+          component: CalendarPage,
         },
         {
           path: 'clients',

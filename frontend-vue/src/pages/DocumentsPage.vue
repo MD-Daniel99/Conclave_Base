@@ -58,7 +58,7 @@ function clientName(client: Client) {
 }
 
 const sortedClients = computed(() => [...clients.value].sort((a, b) => clientName(a).localeCompare(clientName(b), 'ru')))
-const isLlcContract = computed(() => contractType.value === 'llc_contract')
+const isLlcContract = computed(() => ['llc_contract', 'zet_contract'].includes(contractType.value))
 const clientTsrItems = computed(() => selectedClient.value?.tsr_items ?? [])
 const clientModules = computed(() => (selectedClient.value?.modules ?? []).filter((item) => !item.is_archived))
 const selectedTsrSet = computed(() => new Set(selectedClientTsrIds.value))

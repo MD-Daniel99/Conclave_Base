@@ -51,6 +51,7 @@ export interface ClientTsr {
 
 export type Client = Omit<ClientRead, 'modules' | 'tsr_items'> & {
   contract_status?: DocumentStatus | null
+  performer_company?: string | null
   act_status?: DocumentStatus | null
   prosthetist?: string | null
   is_archived?: boolean
@@ -90,6 +91,7 @@ export type ClientSnils = SnilsRead
 export type ClientSnilsCreate = SnilsCreate
 export type ClientSnilsUpdate = SnilsUpdate
 export type ClientCreatePayload = ClientCreate & {
+  performer_company?: string | null
   contract_status?: DocumentStatus | null
   act_status?: DocumentStatus | null
   prosthetist?: string | null
@@ -100,6 +102,7 @@ export type ClientCreatePayload = ClientCreate & {
   unpunched_custom_values?: Record<string, string | number | null>
 }
 export type ClientUpdatePayload = ClientUpdate & {
+  performer_company?: string | null
   contract_status?: DocumentStatus | null
   act_status?: DocumentStatus | null
   prosthetist?: string | null

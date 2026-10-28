@@ -30,6 +30,7 @@ TaxationSystem = Literal["УСН", "ОСНО"]
 DocumentStatus = Literal["Подписан", "Сделан", "Отправлен"]
 Prosthetists = Literal["Дмитрий", "Никита"]
 PlacesOfResidence = Literal["Ивана Сусанина, д. 3", "Большая Почтовая, д. 18/20"]
+PerformerCompany = Literal["ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»", 'ООО "Смарт Движение"']
 WorkflowBucket = Literal["unpunched", "work"]
 PrecheckStatus = Literal["Работа с документами", "Выполняется", "Отменен", "Выполнен"]
 PrecheckStage = Literal[
@@ -280,6 +281,7 @@ class ClientBase(BaseModel):
     contract_status: DocumentStatus | None = None
     act_status: DocumentStatus | None = None
     agent_id: UUID = Field(..., description="ID агента (UUID)")
+    performer_company: PerformerCompany | None = None
     deadline: Optional[datetime] = None
     notes: Optional[str] = None
     check_date: Optional[date] = None
@@ -342,6 +344,7 @@ class ClientUpdate(BaseModel):
     contract_status: DocumentStatus | None = None
     act_status: DocumentStatus | None = None
     agent_id: Optional[UUID] = None
+    performer_company: Optional[PerformerCompany] = None
     deadline: Optional[datetime] = None
     notes: Optional[str] = None
     phones: Optional[List[PhoneCreate]] = None
@@ -808,3 +811,76 @@ DocumentRead.model_rebuild()
 
 ClientRead.model_rebuild() 
 UserRead.model_rebuild()
+
+# --- Calendar / task manager ---
+TaskStatus = Literal["planned", "in_progress", "done", "cancelled"]
+TaskPriority = Literal["low", "normal", "high", "urgent"]
+
+
+class TaskUserRead(BaseModel):
+    user_id: UUID
+    username: str
+    role: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TaskCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    start_at: datetime
+    due_at: datetime
+    all_day: bool = False
+    status: TaskStatus = "planned"
+    priority: TaskPriority = "normal"
+    color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    assignee_ids: List[UUID] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_task_period(self):
+        if self.due_at < self.start_at:
+            raise ValueError("Срок завершения не может быть раньше начала задачи")
+        return self
+
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    start_at: Optional[datetime] = None
+    due_at: Optional[datetime] = None
+    all_day: Optional[bool] = None
+    status: Optional[TaskStatus] = None
+    priority: Optional[TaskPriority] = None
+    color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    assignee_ids: Optional[List[UUID]] = None
+
+
+class TaskRead(BaseModel):
+    task_id: UUID
+    title: str
+    description: Optional[str] = None
+    start_at: datetime
+    due_at: datetime
+    all_day: bool
+    status: TaskStatus
+    priority: TaskPriority
+    color: Optional[str] = None
+    created_by: Optional[UUID] = None
+    creator: Optional[TaskUserRead] = None
+    assignees: List[TaskUserRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class TaskNotificationRead(BaseModel):
+    notification_id: UUID
+    user_id: UUID
+    task_id: UUID
+    kind: str
+    title: str
+    body: Optional[str] = None
+    created_at: datetime
+    read_at: Optional[datetime] = None
+    task_title: Optional[str] = None
+    task_due_at: Optional[datetime] = None

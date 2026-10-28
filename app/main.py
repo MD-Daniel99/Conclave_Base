@@ -29,6 +29,7 @@ from app.api import (
     stages,
     status as status_module,
     accounting_report,
+    tasks,
 )
 
 # Для разработки оставляем create_all, но для production/миграции на Vue лучше перейти на Alembic.
@@ -120,6 +121,7 @@ app.include_router(references.router, prefix="/references", tags=["references"])
 app.include_router(accounting.router, prefix="/accounting", tags=["accounting"])
 app.include_router(audit.router, prefix="/audit", tags=["audit"])
 app.include_router(accounting_report.router)
+app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 
 
 @app.get("/health")

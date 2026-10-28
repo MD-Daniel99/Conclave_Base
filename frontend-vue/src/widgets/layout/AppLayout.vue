@@ -4,6 +4,9 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Drawer from 'primevue/drawer'
 import Menu from 'primevue/menu'
 import {
+  Bell,
+  CalendarDays,
+  CheckCheck,
   ChevronDown,
   FileText,
   Handshake,
@@ -24,6 +27,7 @@ import {
 
 import { useAuthStore } from '@/app/stores/auth'
 import { touchPresence } from '@/shared/api/auth'
+import { fetchTaskNotifications, markAllTaskNotificationsRead, markTaskNotificationRead, type TaskNotification } from '@/shared/api/tasks'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -32,6 +36,11 @@ const isSidebarCollapsed = ref(localStorage.getItem('db.sidebar.collapsed') === 
 const isMobileMenuOpen = ref(false)
 const profileMenu = ref<InstanceType<typeof Menu> | null>(null)
 let presenceTimer: number | undefined
+let notificationTimer: number | undefined
+const notifications = ref<TaskNotification[]>([])
+const isNotificationsOpen = ref(false)
+const notificationsLoading = ref(false)
+const unreadNotifications = computed(() => notifications.value.filter((item) => !item.read_at).length)
 
 type NavigationItem = {
   to: string
@@ -43,6 +52,7 @@ type NavigationItem = {
 
 const allNavigationItems: NavigationItem[] = [
   { to: '/', label: 'Обзор', icon: LayoutDashboard },
+  { to: '/calendar', label: 'Календарь', icon: CalendarDays },
   { to: '/clients', label: 'Пациенты', icon: UsersRound },
   { to: '/agents', label: 'Агенты', icon: Handshake },
   { to: '/warehouse', label: 'Склад', icon: PackageOpen },
@@ -74,6 +84,7 @@ const navigationItems = computed(() => allNavigationItems.filter((item) => !item
 const pageTitle = computed(() => {
   const titles: Record<string, string> = {
     dashboard: 'Обзор',
+    calendar: 'Календарь и задачи',
     clients: 'Клиенты',
     agents: 'Агенты',
     warehouse: 'Склад',
@@ -132,13 +143,83 @@ async function refreshPresence() {
   }
 }
 
+async function refreshNotifications(silent = true) {
+  if (!authStore.isAuthenticated) return
+  if (!silent) notificationsLoading.value = true
+  try {
+    notifications.value = await fetchTaskNotifications(false, 30)
+  } catch {
+    // Notifications are auxiliary and must never interrupt navigation.
+  } finally {
+    if (!silent) notificationsLoading.value = false
+  }
+}
+
+async function toggleNotifications() {
+  isNotificationsOpen.value = !isNotificationsOpen.value
+  if (isNotificationsOpen.value) await refreshNotifications(false)
+}
+
+async function openNotification(item: TaskNotification) {
+  if (!item.read_at) {
+    try {
+      await markTaskNotificationRead(item.notification_id)
+      item.read_at = new Date().toISOString()
+    } catch {
+      // Navigation to the task is still useful even when marking failed.
+    }
+  }
+  isNotificationsOpen.value = false
+  await router.push({ name: 'calendar', query: { task: item.task_id } })
+}
+
+async function markAllNotifications() {
+  try {
+    await markAllTaskNotificationsRead()
+    const now = new Date().toISOString()
+    notifications.value = notifications.value.map((item) => ({ ...item, read_at: item.read_at ?? now }))
+  } catch {
+    // Keep the panel functional; the next poll will retry naturally.
+  }
+}
+
+function notificationTime(value: string) {
+  const date = new Date(value)
+  const diff = Date.now() - date.getTime()
+  if (diff < 60_000) return 'только что'
+  if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60_000))} мин. назад`
+  if (diff < 86_400_000) return `${Math.max(1, Math.floor(diff / 3_600_000))} ч. назад`
+  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date)
+}
+
+function onAppVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    void refreshPresence()
+    void refreshNotifications()
+  }
+}
+
+function onNotificationOutsidePointerDown(event: PointerEvent) {
+  if (!isNotificationsOpen.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.task-notification-wrap')) return
+  isNotificationsOpen.value = false
+}
+
 onMounted(() => {
   void refreshPresence()
+  void refreshNotifications()
   presenceTimer = window.setInterval(() => { void refreshPresence() }, 30_000)
+  notificationTimer = window.setInterval(() => { void refreshNotifications() }, 20_000)
+  document.addEventListener('visibilitychange', onAppVisibilityChange)
+  document.addEventListener('pointerdown', onNotificationOutsidePointerDown)
 })
 
 onBeforeUnmount(() => {
   if (presenceTimer) window.clearInterval(presenceTimer)
+  if (notificationTimer) window.clearInterval(notificationTimer)
+  document.removeEventListener('visibilitychange', onAppVisibilityChange)
+  document.removeEventListener('pointerdown', onNotificationOutsidePointerDown)
 })
 
 function logout() {
@@ -150,6 +231,7 @@ watch(
   () => route.fullPath,
   () => {
     isMobileMenuOpen.value = false
+    isNotificationsOpen.value = false
   },
 )
 </script>
@@ -226,6 +308,50 @@ watch(
         </div>
 
         <div class="topbar-context">
+          <div class="task-notification-wrap">
+            <button
+              class="task-notification-button"
+              type="button"
+              :aria-label="unreadNotifications ? `Уведомления: ${unreadNotifications} новых` : 'Уведомления'"
+              :aria-expanded="isNotificationsOpen"
+              @click="toggleNotifications"
+            >
+              <Bell :size="19" aria-hidden="true" />
+              <span v-if="unreadNotifications" class="task-notification-badge">{{ unreadNotifications > 99 ? '99+' : unreadNotifications }}</span>
+            </button>
+            <div v-if="isNotificationsOpen" class="task-notification-panel">
+              <header class="task-notification-header">
+                <div>
+                  <strong>Уведомления</strong>
+                  <span>{{ unreadNotifications ? `${unreadNotifications} непрочитанных` : 'Всё просмотрено' }}</span>
+                </div>
+                <button v-if="unreadNotifications" type="button" title="Прочитать все" @click="markAllNotifications"><CheckCheck :size="17" /></button>
+              </header>
+              <div class="task-notification-list">
+                <button
+                  v-for="item in notifications"
+                  :key="item.notification_id"
+                  type="button"
+                  class="task-notification-item"
+                  :class="{ unread: !item.read_at, overdue: item.kind === 'overdue' }"
+                  @click="openNotification(item)"
+                >
+                  <span class="task-notification-dot"></span>
+                  <span class="task-notification-copy">
+                    <strong>{{ item.title }}</strong>
+                    <span>{{ item.body || item.task_title }}</span>
+                    <small>{{ notificationTime(item.created_at) }}</small>
+                  </span>
+                </button>
+                <div v-if="!notifications.length && !notificationsLoading" class="task-notification-empty">
+                  <Bell :size="25" />
+                  <span>Новых уведомлений нет</span>
+                </div>
+                <div v-if="notificationsLoading && !notifications.length" class="task-notification-empty">Загрузка…</div>
+              </div>
+              <RouterLink class="task-notification-footer" to="/calendar" @click="isNotificationsOpen = false">Открыть календарь</RouterLink>
+            </div>
+          </div>
           <span class="topbar-date">{{ currentDate }}</span>
           <button
             class="topbar-profile-button"

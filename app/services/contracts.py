@@ -20,6 +20,11 @@ TEMPLATES_CONFIG: dict[str, dict[str, str]] = {
         "label": "ООО Смарт Движение · Договор",
         "file_prefix": "ООО Договор",
     },
+    "zet_contract": {
+        "filename": "zet_contract.docx",
+        "label": "ООО «ПрОП ДВИЖЕНИЕ ЗЕТ» · Договор",
+        "file_prefix": "Договор ПрОП ДВИЖЕНИЕ ЗЕТ",
+    },
     "dmk_contract": {
         "filename": "dmk_contract.docx",
         "label": "ИП ДМК · Договор",
@@ -39,6 +44,7 @@ TEMPLATE_ALIASES = {
     "contract_template": "llc_contract",
     "sdv_contract": "llc_contract",
     "SDV_contract": "llc_contract",
+    "ZET_contract": "zet_contract",
 }
 
 
@@ -57,7 +63,7 @@ def get_next_contract_number(db: Session) -> str:
     """
     existing_numbers = db.execute(
         select(models.Document.document_number)
-        .where(models.Document.document_type.in_(("llc_contract", "dmk_contract")))
+        .where(models.Document.document_type.in_(("llc_contract", "zet_contract", "dmk_contract")))
     ).scalars().all()
     contract_count = sum(
         1
@@ -155,17 +161,20 @@ def get_initials(last_name: str | None, first_name: str | None, middle_name: str
     return f"{last} {first_initial}{middle_initial}".strip()
 
 
+TSR_CODE_PATTERN = r"(?<!\d)\d+(?:\(\d+\))?-\d{2}-\d{2}(?:-\d{2})?(?!\d)"
+
+
 def extract_tsr_numeric(tsr_code: str | None) -> str:
     if not tsr_code:
         return ""
-    match = re.search(r"\d{1,2}-\d{2}[-.\d]*", tsr_code)
+    match = re.search(TSR_CODE_PATTERN, tsr_code)
     return match.group(0) if match else ""
 
 
 def extract_tsr_literals(tsr_code: str | None) -> str:
     if not tsr_code:
         return ""
-    text_part = re.sub(r"\d{1,2}-\d{2}[-.\d]*", "", tsr_code)
+    text_part = re.sub(TSR_CODE_PATTERN, "", tsr_code)
     return text_part.strip(" .,-")
 
 
@@ -458,10 +467,11 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     passport = latest_by_created(client.get("passports") or [])
     snils = latest_by_created(client.get("snils") or [])
     phones = client.get("phones") or []
-    modules = select_llc_modules(client, payload) if template_key == "llc_contract" else (client.get("modules") or [])
+    certificate_contract = template_key in {"llc_contract", "zet_contract"}
+    modules = select_llc_modules(client, payload) if certificate_contract else (client.get("modules") or [])
     selected_client_tsr_items = (
         select_llc_tsr_items(client, payload, modules)
-        if template_key == "llc_contract"
+        if certificate_contract
         else []
     )
 
@@ -495,7 +505,7 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     clean_prosthesis_type = re.sub(r"(?i)^протез\s+", "", prosthesis_type)
     contract_items = (
         build_llc_contract_items(modules, selected_client_tsr_items)
-        if template_key == "llc_contract"
+        if certificate_contract
         else build_contract_items(client, modules)
     )
 
@@ -503,7 +513,7 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     certificate_sum = parse_money(client.get("certificate_price"))
     total_sum = (
         sum(parse_money(item.get("raw_total_price")) for item in contract_items)
-        if template_key == "llc_contract"
+        if certificate_contract
         else (module_sum or certificate_sum)
     )
 
@@ -534,7 +544,7 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
         "КодПодразделения": passport.get("department_code", "______"),
         "АдресРегистрацииЗаказчика": passport.get("registration_address", "__________________"),
         "МестоРожденияЗаказчика": passport.get("birth_place", ""),
-        "Телефон_заказчика": phone,
+        #"Телефон_заказчика": phone,
         "СНИЛСЗаказчика": snils_number,
         "НомерИПРА": client.get("ipra_code") or "",
         "ДатаВыдачиИПРА": format_date_ru(snils.get("issued_date") if snils else None),
@@ -665,7 +675,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
 
     selected_document_components = (
         select_llc_modules(client, payload)
-        if template_key == "llc_contract"
+        if template_key in {"llc_contract", "zet_contract"}
         else (client.get("modules") or [])
     )
     component_accounting_flags = {
@@ -680,7 +690,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
 
     selected_document_tsr_items = (
         select_llc_tsr_items(client, payload, selected_document_components)
-        if template_key == "llc_contract"
+        if template_key in {"llc_contract", "zet_contract"}
         else []
     )
     selected_certificate = selected_document_tsr_items[0] if selected_document_tsr_items else None
@@ -696,7 +706,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         else None
     )
 
-    if template_key in {"llc_contract", "dmk_contract"}:
+    if template_key in {"llc_contract", "zet_contract", "dmk_contract"}:
         # Serialize number allocation inside the current DB transaction. The UI
         # only previews the next number; the server remains the source of truth.
         if db.get_bind().dialect.name == "postgresql":
@@ -772,7 +782,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
             ],
         }
         for item in selected_document_tsr_items
-    ] if template_key == "llc_contract" else []
+    ] if template_key in {"llc_contract", "zet_contract"} else []
 
     # DBCRM_UPDATE_20260831: stock reuse snapshot
     components_cost = sum(
@@ -794,14 +804,12 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     old_documents: list[models.Document] = []
     old_paths: list[str] = []
     preserved_accounting: dict[str, Any] | None = None
-    preserved_contract_status: str | None = None
-    preserved_act_status: str | None = None
     if selected_document_tsr_items:
         candidates = (
             db.query(models.Document)
             .filter(
                 models.Document.client_id == client_id,
-                models.Document.document_type.in_(("llc_contract", "dmk_contract", "sdv_contract")),
+                models.Document.document_type.in_(("llc_contract", "zet_contract", "dmk_contract", "sdv_contract")),
             )
             .order_by(models.Document.created_at.desc(), models.Document.document_id.desc())
             .all()
@@ -819,8 +827,6 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         for old_document in old_documents:
             if preserved_accounting is None:
                 preserved_accounting = _accounting_snapshot(old_document)
-                preserved_contract_status = getattr(old_document, "contract_status", None)
-                preserved_act_status = getattr(old_document, "act_status", None)
             if old_document.storage_path:
                 old_paths.append(old_document.storage_path)
             db.delete(old_document)
@@ -837,12 +843,6 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         document_number=str(getattr(payload, "document_number", "") or "").strip(),
         contract_total=components_cost,
         certificate_amount=certificate_amount,
-        # If statuses were selected in the patient table before the first
-        # contract was generated, carry those fallback values into the actual
-        # document. Once a contract exists the UI switches to per-document
-        # statuses, so the user's prior choice must not appear to disappear.
-        contract_status=preserved_contract_status or client.get("contract_status"),
-        act_status=preserved_act_status or client.get("act_status"),
         certificate_id=certificate_id,
         contract_metadata={
             "certificate_id": str(certificate_id or ""),
@@ -873,7 +873,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
     db.add(db_doc)
     try:
         db.flush()
-        if template_key in {"llc_contract", "dmk_contract"}:
+        if template_key in {"llc_contract", "zet_contract", "dmk_contract"}:
             db.add(models.ContractAccounting(
                 document_id=db_doc.document_id,
                 **(preserved_accounting or {}),
