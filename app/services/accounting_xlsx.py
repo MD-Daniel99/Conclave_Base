@@ -28,12 +28,21 @@ EXPENSE_LABELS = {
     "agency_expenses": "Агентские расходы",
 }
 
+def _shows_payment_status(field_key: str, performer_company: str | None) -> bool:
+    """The patient payout is tracked for every organisation; agent fees for two LLCs."""
+    return field_key in {"prosthetist_work", "patient_payment"} or (
+        field_key == "agency_expenses"
+        and (str(performer_company or "").strip() or 'ООО "Смарт Движение"')
+        in {'ООО "Смарт Движение"', "ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»"}
+    )
+
+
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 
 
 def _client_expense_history(client: models.Client, field_key: str, legacy_value: float) -> dict[str, Any]:
     entries = [dict(item) for item in accounting_expense_entries(client, field_key)]
-    state = accounting_expense_payment_state(client, field_key) if field_key == "prosthetist_work" else "paid"
+    state = accounting_expense_payment_state(client, field_key)
     if not entries and legacy_value > 0:
         entries = [{
             "id": f"legacy-{field_key}",
@@ -43,8 +52,8 @@ def _client_expense_history(client: models.Client, field_key: str, legacy_value:
             "username": None,
             "paid": state == "paid",
         }]
-    if field_key == "prosthetist_work":
-        fallback_paid = state != "unpaid"
+    if field_key in {"prosthetist_work", "patient_payment", "agency_expenses"}:
+        fallback_paid = str((client.accounting_expense_status or {}).get(field_key, "paid")).lower() != "unpaid"
         for entry in entries:
             entry.setdefault("paid", fallback_paid)
     return {"entries": entries, "paid": state == "paid"}
@@ -148,7 +157,7 @@ def _append_client_details(wb: Workbook, db: Session, report: dict[str, Any]) ->
             history = _client_expense_history(client_model, field_key, legacy_value)
             for entry in history.get("entries", []):
                 paid_label = ""
-                if field_key == "prosthetist_work":
+                if _shows_payment_status(field_key, client_model.performer_company):
                     paid_label = "Оплачено" if bool(entry.get("paid", history.get("paid", True))) else "Не оплачено"
                 ws.append([
                     client.get("full_name") or client.get("short_name") or "",
@@ -228,7 +237,7 @@ def _append_contract_details(wb: Workbook, db: Session, report: dict[str, Any]) 
                 continue
             for entry in history.get("entries", []):
                 paid_label = ""
-                if field_key == "prosthetist_work":
+                if _shows_payment_status(field_key, row.get("client", {}).get("performer_company")):
                     paid_label = "Оплачено" if bool(entry.get("paid", history.get("paid", True))) else "Не оплачено"
                 ws.append([
                     document.get("filename") or document.get("document_number") or "",

@@ -258,7 +258,10 @@ def _client_to_dict(db: Session, client: models.Client) -> Dict[str, Any]:
         "email": getattr(client, "email", None),
         "certificate_price": client.certificate_price,
         "taxation_system": client.taxation_system or "УСН",
+        "tax_percent_override": getattr(client, "tax_percent_override", None),
+        "vat_percent": float(getattr(client, "vat_percent", 20.0) or 0.0),
         "ipra_code": client.ipra_code,
+        "mse_reference": getattr(client, "mse_reference", None),
         "place_of_residence": client.place_of_residence,
         "prosthetist": client.prosthetist,
         "is_archived": bool(client.is_archived),
@@ -373,6 +376,16 @@ def _expense_total(entries: list[dict[str, Any]]) -> float:
     return sum(float(item.get("amount") or 0.0) for item in entries)
 
 
+def _client_supports_agent_payment(client: models.Client, field_key: str) -> bool:
+    return (field_key == "agency_expenses" and
+            (str(client.performer_company or "").strip() or 'ООО "Смарт Движение"') in {
+                'ООО "Смарт Движение"', "ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»"})
+
+
+def _client_payment_trackable(client: models.Client, field_key: str) -> bool:
+    return field_key in {"prosthetist_work", "patient_payment"} or _client_supports_agent_payment(client, field_key)
+
+
 def get_accounting_expense_history(db: Session, client_id: UUID, field_key: str) -> dict[str, Any]:
     client = db.get(models.Client, client_id)
     if not client:
@@ -391,7 +404,7 @@ def get_accounting_expense_history(db: Session, client_id: UUID, field_key: str)
         legacy = _legacy_accounting_entry(db, client, field_key)
         if legacy:
             entries = [legacy]
-    if field_key == "prosthetist_work":
+    if _client_payment_trackable(client, field_key):
         for entry in entries:
             entry.setdefault("paid", paid)
         paid = all(bool(entry.get("paid", True)) for entry in entries)
@@ -423,7 +436,7 @@ def add_accounting_expense(
     if not entries:
         legacy = _legacy_accounting_entry(db, client, field_key)
         if legacy:
-            if field_key == "prosthetist_work":
+            if _client_payment_trackable(client, field_key):
                 status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
                 legacy["paid"] = str(status_store.get(field_key, "paid")).lower() != "unpaid"
             entries.append(legacy)
@@ -435,11 +448,11 @@ def add_accounting_expense(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "user_id": str(user.user_id),
         "username": user.username,
-        "paid": (payload.paid is not False) if field_key == "prosthetist_work" else True,
+        "paid": (payload.paid is not False) if _client_payment_trackable(client, field_key) else True,
     })
     client.accounting_expenses = store
     status_store = dict(client.accounting_expense_status or {})
-    if field_key == "prosthetist_work":
+    if _client_payment_trackable(client, field_key):
         status_store[field_key] = "paid" if all(bool(item.get("paid", True)) for item in entries) else "unpaid"
     else:
         status_store.setdefault(field_key, "paid")
@@ -483,7 +496,7 @@ def _materialize_requested_legacy_entry(
         return
     legacy = _legacy_accounting_entry(db, client, field_key)
     if legacy:
-        if field_key == "prosthetist_work":
+        if _client_payment_trackable(client, field_key):
             status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
             legacy["paid"] = str(status_store.get(field_key, "paid")).lower() != "unpaid"
         entries.append(legacy)
@@ -509,10 +522,10 @@ def update_accounting_expense(
 
     entry["amount"] = float(payload.amount)
     entry["description"] = payload.description.strip()
-    if field_key == "prosthetist_work" and payload.paid is not None:
+    if _client_payment_trackable(client, field_key) and payload.paid is not None:
         entry["paid"] = bool(payload.paid)
     client.accounting_expenses = store
-    if field_key == "prosthetist_work":
+    if _client_payment_trackable(client, field_key):
         status_store = dict(client.accounting_expense_status or {})
         status_store[field_key] = "paid" if all(bool(item.get("paid", True)) for item in entries) else "unpaid"
         client.accounting_expense_status = status_store
@@ -545,6 +558,10 @@ def delete_accounting_expense(db: Session, client_id: UUID, field_key: str, entr
     else:
         store.pop(field_key, None)
     client.accounting_expenses = store
+    if _client_payment_trackable(client, field_key):
+        status_store = dict(client.accounting_expense_status or {})
+        status_store[field_key] = "paid" if all(bool(item.get("paid", True)) for item in entries) else "unpaid"
+        client.accounting_expense_status = status_store
     _materialize_accounting_expense_total(db, client, field_key, _expense_total(entries))
     db.add(client)
     db.commit()
@@ -557,8 +574,8 @@ def set_accounting_expense_status(db: Session, client_id: UUID, field_key: str, 
     if not client:
         raise ValueError("Client not found")
     field_key = field_key.strip()
-    if field_key != "prosthetist_work":
-        raise ValueError("Payment status is available only for prosthetist work")
+    if not _client_payment_trackable(client, field_key):
+        raise ValueError("Статус оплаты недоступен для этой статьи расходов")
     if not _accounting_field_exists(db, field_key):
         raise ValueError("Unknown accounting expense field")
     store = _normalize_expense_store(client.accounting_expenses)
@@ -644,9 +661,13 @@ def create_client(db: Session, client_in: schemas.ClientCreate) -> Dict[str, Any
         email=client_in.email,
         certificate_price=client_in.certificate_price,
         taxation_system=client_in.taxation_system,
+        tax_percent_override=client_in.tax_percent_override if client_in.performer_company == "ИП ДМК" else None,
+        vat_percent=(0.0 if client_in.performer_company == "ИП ДМК" else 20.0)
+                    if client_in.vat_percent is None else client_in.vat_percent,
         place_of_residence=client_in.place_of_residence,
         prosthetist=client_in.prosthetist,
         ipra_code=client_in.ipra_code,
+        mse_reference=client_in.mse_reference,
         tsr_code = client_in.tsr_code,
         prosthetist_work=client_in.prosthetist_work,
         patient_travel=client_in.patient_travel,
@@ -776,6 +797,17 @@ def update_client(db: Session, client_id: UUID, payload: Dict[str, Any]) -> Opti
     payload.pop("place_of_residence", None)
     if "prosthetist" in payload:
         payload["place_of_residence"] = schemas.PROSTHETIST_ADDRESSES.get(payload.get("prosthetist"))
+
+    # Both rates are optional for ИП ДМК. A blank VAT rate represents 0%,
+    # because CLIENT.vat_percent is not nullable. Never inherit LLC rates.
+    new_company = payload.get("performer_company", client.performer_company)
+    if new_company == "ИП ДМК" and payload.get("vat_percent", object()) is None:
+        payload["vat_percent"] = 0.0
+    # ООО still use the existing tax model and must not retain a custom IP rate.
+    if new_company != "ИП ДМК":
+        payload["tax_percent_override"] = None
+        if payload.get("vat_percent", object()) is None:
+            payload.pop("vat_percent")
 
     # обновляются только существующие поля
     for k, v in payload.items():
@@ -2004,6 +2036,8 @@ def upload_document(db: Session, client_id: UUID, file_obj, filename: str, conte
     
     # 2. Создаем уникальное имя для хранения, чтобы не было коллизий
     # (например, два файла passport.pdf перезапишут друг друга, если не переименовать)
+    from app.services.document_filenames import next_document_filename
+    filename = next_document_filename(db, client_id, os.path.basename(filename))
     unique_name = f"{uuid.uuid4()}_{filename}"
     file_path = os.path.join(UPLOAD_DIR, unique_name)
     

@@ -60,6 +60,9 @@ export type Client = Omit<ClientRead, 'modules' | 'tsr_items'> & {
   precheck_stage?: string | null
   unpunched_custom_values?: Record<string, string | number | null>
   taxation_system?: 'УСН' | 'ОСНО'
+  tax_percent_override?: number | null
+  mse_reference?: string | null
+  vat_percent?: number | null
   prosthetist_work?: number | null
   patient_travel?: number | null
   patient_accommodation?: number | null
@@ -96,6 +99,9 @@ export type ClientCreatePayload = ClientCreate & {
   act_status?: DocumentStatus | null
   prosthetist?: string | null
   taxation_system?: 'УСН' | 'ОСНО'
+  tax_percent_override?: number | null
+  mse_reference?: string | null
+  vat_percent?: number | null
   workflow_bucket?: 'unpunched' | 'work'
   precheck_status?: string | null
   precheck_stage?: string | null
@@ -107,6 +113,9 @@ export type ClientUpdatePayload = ClientUpdate & {
   act_status?: DocumentStatus | null
   prosthetist?: string | null
   taxation_system?: 'УСН' | 'ОСНО'
+  tax_percent_override?: number | null
+  mse_reference?: string | null
+  vat_percent?: number | null
   prosthetist_work?: number | null
   patient_travel?: number | null
   patient_accommodation?: number | null
@@ -123,6 +132,7 @@ export type ClientUpdatePayload = ClientUpdate & {
 }
 export type ClientDocument = DocumentRead & { certificate_id?: string | null; contract_status?: DocumentStatus | null; act_status?: DocumentStatus | null }
 export type ContractGenerationPayload = ContractGeneration & {
+  diagnosis?: string | null
   selected_client_tsr_ids?: string[]
   selected_tsr_ids?: string[]
 }
@@ -204,6 +214,7 @@ export interface AccountingReportClient {
   agent_id?: string | null
   date?: string | null
   taxation_system?: 'УСН' | 'ОСНО'
+  tax_percent_override?: number | null
 }
 
 export interface AccountingReportAmounts {
@@ -283,14 +294,20 @@ export interface ContractAccountingRow {
     created_at?: string | null
     certificate_id?: string | null
     certificate_date?: string | null
+    repeated_certificate?: boolean
   }
   client: {
     client_id: string
     full_name: string
     short_name: string
+    agent_id?: string | null
+    agent_name?: string | null
     status?: string | null
     current_stage?: string | null
     taxation_system?: 'УСН' | 'ОСНО'
+    tax_percent_override?: number | null
+    vat_percent?: number | null
+    performer_company?: string | null
   }
   amounts: ContractAccountingAmounts
   custom_values: Record<string, string | number>

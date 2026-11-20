@@ -20,6 +20,7 @@ import { fetchAgents } from '@/shared/api/agents'
 import { fetchRecentAudit } from '@/shared/api/audit'
 import { fetchClientContractCoverage } from '@/shared/api/accounting'
 import { fetchClients } from '@/shared/api/clients'
+import { accountingCompany, companyBadgeClass } from '@/shared/lib/organizations'
 import { fetchStockComponentCount } from '@/shared/api/components'
 import { getApiErrorMessage } from '@/shared/api/http'
 import EmptyState from '@/shared/ui/EmptyState.vue'
@@ -38,6 +39,15 @@ const clients = ref<Client[]>([])
 const agents = ref<Agent[]>([])
 const stockComponentCount = ref(0)
 const clientsWithoutContracts = ref<number | null>(null)
+const withoutContractClientIds = ref<string[]>([])
+const withoutContractDialogOpen = ref(false)
+const clientsWithoutContractsDetails = computed(() => {
+  const byId = new Map(clients.value.map((client) => [String(client.client_id), client]))
+  return withoutContractClientIds.value
+    .map((id) => byId.get(id))
+    .filter((client): client is Client => Boolean(client))
+    .sort((a, b) => getClientName(a).localeCompare(getClientName(b), 'ru'))
+})
 const isLoading = ref(false)
 const dashboardError = ref('')
 
@@ -118,7 +128,7 @@ async function loadDashboard() {
   dashboardError.value = ''
 
   const requests = [
-    fetchClients({ limit: 1000, archived: false }),
+    fetchClients({ limit: 100000, archived: false }),
     fetchAgents({ limit: 1000 }),
     fetchStockComponentCount(),
     fetchClientContractCoverage(),
@@ -131,7 +141,10 @@ async function loadDashboard() {
   if (agentResult.status === 'fulfilled') agents.value = agentResult.value
   if (stockResult.status === 'fulfilled') stockComponentCount.value = stockResult.value
   if (coverageResult.status === 'fulfilled') {
-    clientsWithoutContracts.value = coverageResult.value.filter((item) => item.requires_contract).length
+    withoutContractClientIds.value = coverageResult.value
+      .filter((item) => item.requires_contract)
+      .map((item) => String(item.client_id))
+    clientsWithoutContracts.value = withoutContractClientIds.value.length
   }
   if (auditResult.status === 'fulfilled') recentAudit.value = auditResult.value
 
@@ -188,16 +201,17 @@ onMounted(loadDashboard)
         <span class="metric-trend">Все текущие рабочие карточки</span>
       </article>
 
-      <article class="metric-card metric-card-contracts">
+      <button class="metric-card metric-card-contracts dashboard-metric-button" type="button"
+        :disabled="clientsWithoutContracts === null" aria-haspopup="dialog" @click="withoutContractDialogOpen = true">
         <div class="metric-card-header">
           <span>Пациентов без договоров</span>
           <span class="metric-icon amber"><FileWarning :size="19" aria-hidden="true" /></span>
         </div>
         <strong>{{ clientsWithoutContracts ?? '—' }}</strong>
         <span class="metric-trend">
-          {{ clientsWithoutContracts === null ? 'Показатель временно недоступен' : 'Пациенты, для которых договор ещё не сформирован' }}
+          {{ clientsWithoutContracts === null ? 'Показатель временно недоступен' : 'Нажмите, чтобы открыть список пациентов' }}
         </span>
-      </article>
+      </button>
 
       <article class="metric-card metric-card-stock">
         <div class="metric-card-header">
@@ -300,5 +314,41 @@ onMounted(loadDashboard)
         </RouterLink>
       </div>
     </section>
+    <Teleport to="body">
+      <div v-if="withoutContractDialogOpen" class="modal-backdrop dashboard-contract-modal-backdrop"
+        @click.self="withoutContractDialogOpen = false" @keydown.esc.window="withoutContractDialogOpen = false">
+        <section v-focus-trap class="modal-panel dashboard-contract-modal" role="dialog" aria-modal="true"
+          aria-labelledby="missing-contracts-heading">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">Обзор</p>
+              <h2 id="missing-contracts-heading">Пациенты без договоров · {{ clientsWithoutContracts ?? 0 }}</h2>
+              <p class="muted">Нажмите на пациента, чтобы открыть его карточку.</p>
+            </div>
+            <button class="ghost-button" type="button" @click="withoutContractDialogOpen = false">Закрыть</button>
+          </div>
+          <div class="dashboard-contract-modal-list">
+            <RouterLink v-for="client in clientsWithoutContractsDetails" :key="String(client.client_id)"
+              class="dashboard-contract-modal-client"
+              :to="{ name: 'clients', query: { client_id: client.client_id } }"
+              @click="withoutContractDialogOpen = false">
+              <div class="dashboard-contract-modal-client-name">
+                <strong>{{ getClientName(client) }}</strong>
+                <span class="org-badge" :class="companyBadgeClass(client.performer_company)">{{ accountingCompany(client.performer_company) }}</span>
+              </div>
+              <div class="muted dashboard-contract-modal-client-info">
+                <span>Статус: {{ getClientStatus(client) }}</span>
+                <span>Этап: {{ getClientStage(client) }}</span>
+                <span v-if="client.phones?.length">Тел.: {{ client.phones?.[0]?.number ?? '—' }}</span>
+              </div>
+              <ArrowRight :size="18" aria-hidden="true" />
+            </RouterLink>
+            <p v-if="clientsWithoutContractsDetails.length === 0" class="muted">
+              {{ clientsWithoutContracts === 0 ? 'Все пациенты, требующие договора, обеспечены договором.' : 'Не удалось загрузить карточки пациентов. Нажмите «Обновить» на странице обзора.' }}
+            </p>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </section>
 </template>

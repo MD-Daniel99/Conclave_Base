@@ -21,7 +21,7 @@ ALLOWED_CONTENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "zet_contract", "dmk_contract", "sdv_contract"})
+CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "zet_contract", "dmk_contract", "dmk_full_package", "sdv_contract"})
 
 
 @router.post("/clients/{client_id}/upload", response_model=schemas.DocumentRead)
@@ -65,10 +65,14 @@ def list_contract_templates(
 
 @router.get("/contracts/next_number")
 def next_contract_number(
+    template_type: str = "llc_contract",
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return {"number": contracts.get_next_contract_number(db)}
+    try:
+        return {"number": contracts.get_next_contract_number(db, template_type)}
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/mtz_templates")

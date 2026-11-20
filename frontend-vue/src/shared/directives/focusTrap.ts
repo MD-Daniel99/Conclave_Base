@@ -40,10 +40,10 @@ export const focusTrap: Directive<HTMLElement> = {
 
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
-        last.focus()
+        last.focus({ preventScroll: true })
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault()
-        first.focus()
+        first.focus({ preventScroll: true })
       }
     }
 
@@ -54,13 +54,13 @@ export const focusTrap: Directive<HTMLElement> = {
       const target = preferred && !preferred.hasAttribute('disabled')
         ? preferred
         : getFocusable()[0]
-      target?.focus()
+      target?.focus({ preventScroll: true })
     })
 
     cleanupByElement.set(element, () => {
       window.cancelAnimationFrame(animationFrame)
       element.removeEventListener('keydown', handleKeydown)
-      previouslyFocused?.focus()
+      previouslyFocused?.focus({ preventScroll: true })
     })
   },
   unmounted(element) {

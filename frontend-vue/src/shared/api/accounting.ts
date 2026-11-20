@@ -20,7 +20,7 @@ export interface AccountingReportParams {
   tax_usn_percent?: number
   tax_osno_percent?: number
   acquiring_percent?: number
-  vat_percent?: number
+  performer_company?: string | null
 }
 
 export async function fetchAccountingCustomFields() {

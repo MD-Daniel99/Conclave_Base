@@ -30,7 +30,7 @@ TaxationSystem = Literal["УСН", "ОСНО"]
 DocumentStatus = Literal["Подписан", "Сделан", "Отправлен"]
 Prosthetists = Literal["Дмитрий", "Никита"]
 PlacesOfResidence = Literal["Ивана Сусанина, д. 3", "Большая Почтовая, д. 18/20"]
-PerformerCompany = Literal["ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»", 'ООО "Смарт Движение"']
+PerformerCompany = Literal["ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»", 'ООО "Смарт Движение"', "ИП ДМК"]
 WorkflowBucket = Literal["unpunched", "work"]
 PrecheckStatus = Literal["Работа с документами", "Выполняется", "Отменен", "Выполнен"]
 PrecheckStage = Literal[
@@ -287,8 +287,11 @@ class ClientBase(BaseModel):
     check_date: Optional[date] = None
     prosthesis_type: Optional[str] = None
     ipra_code: Optional[str] = None
+    mse_reference: Optional[str] = Field(default=None, max_length=2000)
     certificate_price: Optional[str] = None
     taxation_system: TaxationSystem = "УСН"
+    tax_percent_override: Optional[float] = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    vat_percent: Optional[float] = Field(default=20.0, ge=0)
     place_of_residence: PlacesOfResidence | None = None
     prosthetist: Prosthetists | None = None
     tsr_code: Optional[str] = None
@@ -332,6 +335,16 @@ class ClientCreate(ClientBase):
     prosthetist: Optional[Prosthetists] = None
     phones: Optional[List[PhoneCreate]] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _default_blank_dmk_vat(cls, values):
+        # ИП ДМК may be created without specifying VAT; persist 0 instead of
+        # inheriting the 20% default used for other organizations.
+        if isinstance(values, dict) and values.get("performer_company") == "ИП ДМК":
+            if values.get("vat_percent") in (None, ""):
+                return {**values, "vat_percent": 0.0}
+        return values
+
 
 class ClientUpdate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -351,8 +364,11 @@ class ClientUpdate(BaseModel):
     check_date: Optional[date] = None
     prosthesis_type: Optional[str] = None
     ipra_code: Optional[str] = None
+    mse_reference: Optional[str] = Field(default=None, max_length=2000)
     certificate_price: Optional[str] = None
     taxation_system: Optional[TaxationSystem] = None
+    tax_percent_override: Optional[float] = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    vat_percent: Optional[float] = Field(default=None, ge=0)
     place_of_residence: PlacesOfResidence | None = None
     prosthetist: Optional[Prosthetists] = None
     tsr_code: Optional[str] = None
@@ -665,6 +681,8 @@ class DocumentType:
 class ContractGeneration(BaseModel):
     template_type: str = DocumentType.LLC_CONTRACT
     document_number: Optional[str] = None
+    # Manual wording only for the full IP DMK package; not saved on Client.
+    diagnosis: Optional[str] = Field(default=None, max_length=1000)
     document_date: str
     plan_date: Optional[str] = None
     document_number_prefix: Optional[str] = None
@@ -678,14 +696,15 @@ class ContractGeneration(BaseModel):
 
 # DBCRM_UPDATE_20260831: MTZ
 class MtzGeneration(BaseModel):
-    template_type: str = "mtz_8_1_07_14"
-    mtz_number: str = Field(..., min_length=1, max_length=64)
-    document_date: str = Field(..., min_length=1, max_length=32)
-    disability_group_reason: str = Field(..., min_length=1, max_length=512)
-    certificate_reference: str = Field(..., min_length=1, max_length=512)
-    diagnosis: str = Field(..., min_length=1, max_length=1000)
-    amputation_level: str = Field(..., min_length=1, max_length=512)
-    weight_kg: str = Field(..., min_length=1, max_length=32)
+    template_type: Literal["mtz_zet_thigh_mpu"] = "mtz_zet_thigh_mpu"
+    disability_group_reason: Literal[
+        "I Группа, Военная травма", "II Группа, Военная травма", "III Группа, Военная травма"
+    ]
+    diagnoses: List[str] = Field(min_length=1, max_length=18)
+    amputation_level: str = Field(min_length=1, max_length=512)
+    stump_condition: Literal["Функциональная", "Нефункциональная"]
+    activity_level: Literal["2-3", "3-4"]
+    weight_kg: str = Field(min_length=1, max_length=32)
 
 
 class ContractAccountingUpdate(BaseModel):

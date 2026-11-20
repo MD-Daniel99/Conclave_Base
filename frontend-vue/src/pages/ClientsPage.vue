@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute } from 'vue-router'
+import { ALL_COMPANIES, COMPANY_OPTIONS, accountingCompany, readCompanySelection, writeCompanySelection } from '@/shared/lib/organizations'
 import {
   Archive,
   Eye,
@@ -14,7 +15,6 @@ import {
   PackageOpen,
   Plus,
   RotateCcw,
-  Save,
   Search,
   Trash2,
   UserRound,
@@ -22,6 +22,8 @@ import {
 } from '@lucide/vue'
 import { useAuthStore } from '@/app/stores/auth'
 import DateInput from '@/shared/ui/DateInput.vue'
+import MtzDiagnosisPicker from '@/shared/ui/MtzDiagnosisPicker.vue'
+import { MTZ_DISABILITY_REASONS } from '@/shared/lib/mtzDiagnosis'
 import NameIndexAutocomplete from '@/shared/ui/NameIndexAutocomplete.vue'
 import NameIndexManagerModal from '@/shared/ui/NameIndexManagerModal.vue'
 import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
@@ -30,6 +32,7 @@ import StatusPill from '@/shared/ui/StatusPill.vue'
 import { useAppConfirm, useSuccessToast } from '@/shared/composables/useAppFeedback'
 import { matchesTableFilter, nextSortState, sortTableRows, type SortDirection } from '@/shared/lib/table'
 import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
+import { usePersistentColumnOrder } from '@/shared/composables/usePersistentColumnOrder'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
 import { COMPONENT_SUPPLIERS } from '@/shared/lib/componentSuppliers'
 import { calculateTsrRepeatVisitDate, hasAutomaticRepeatVisitTerm } from '@/shared/lib/tsrRepeatTerms'
@@ -189,13 +192,12 @@ type ContractTemplateOption = { value: string; label: string }
 const contractTemplateOptions = ref<ContractTemplateOption[]>([
   { value: 'llc_contract', label: 'ООО Смарт Движение · Договор' },
   { value: 'zet_contract', label: 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ» · Договор' },
-  { value: 'dmk_contract', label: 'ИП ДМК · Договор' },
-  { value: 'dmk_instrument', label: 'ИП ДМК · Акт' },
+  { value: 'dmk_full_package', label: 'ИП ДМК · Полный комплект документов' },
 ])
 
 function normalizePerformerCompany(value: unknown): string {
   const company = String(value ?? '')
-  if (company === 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»' || company === 'ООО "Смарт Движение"') {
+  if (company === 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»' || company === 'ООО "Смарт Движение"' || company === 'ИП ДМК') {
     return company
   }
   return ''
@@ -211,8 +213,9 @@ type ClientForm = {
   act_status: DocumentStatus | ''
   agent_id: string
   performer_company: string
-  prosthesis_type: string
   taxation_system: 'УСН' | 'ОСНО'
+  tax_percent_override: number | string | null
+  vat_percent: number | ''
   notes: string
 }
 
@@ -266,12 +269,6 @@ const PROSTHETIST_ADDRESSES: Record<'Дмитрий' | 'Никита', string> =
   Никита: 'Большая Почтовая, д. 18/20',
 }
 
-const DIAGNOSIS_OPTIONS = [
-  { value: 'Верхних конечностей', label: 'Верхних конечностей' },
-  { value: 'Нижних конечностей', label: 'Нижних конечностей' },
-  { value: 'Верхних и нижних конечностей', label: 'Верхних и нижних конечностей' },
-]
-
 const DOCUMENT_STATUS_OPTIONS: Array<{ value: DocumentStatus; label: string }> = [
   { value: 'Подписан', label: 'Подписан' },
   { value: 'Сделан', label: 'Сделан' },
@@ -279,7 +276,7 @@ const DOCUMENT_STATUS_OPTIONS: Array<{ value: DocumentStatus; label: string }> =
 ]
 
 type ClientDocumentStatusField = 'contract_status' | 'act_status'
-const CONTRACT_DOCUMENT_TYPES = new Set(['llc_contract', 'zet_contract', 'dmk_contract', 'sdv_contract'])
+const CONTRACT_DOCUMENT_TYPES = new Set(['llc_contract', 'zet_contract', 'dmk_contract', 'dmk_full_package', 'sdv_contract'])
 
 const PRECHECK_STATUS_OPTIONS = [
   'Работа с документами', 'Выполняется', 'Отменен', 'Выполнен',
@@ -291,6 +288,12 @@ const PRECHECK_STAGE_OPTIONS = [
 ].map((value) => ({ value, label: value }))
 
 
+const STANDARD_CLIENT_COLUMN_KEYS = [
+  'number', 'patient', 'prosthetist', 'tsr', 'check_date', 'certificate', 'status', 'stage',
+  'contract_status', 'act_status', 'agent', 'repeat_visit',
+]
+const UNPUNCHED_BASE_COLUMN_KEYS = ['number', 'patient', 'agent', 'precheck_status', 'precheck_stage', 'prosthesis']
+
 const emptyForm: ClientForm = {
   last_name: '',
   first_name: '',
@@ -301,13 +304,22 @@ const emptyForm: ClientForm = {
   act_status: '',
   agent_id: '',
   performer_company: '',
-  prosthesis_type: '',
   taxation_system: 'УСН',
+  tax_percent_override: null,
+  vat_percent: 20,
   notes: '',
 }
 
 const authStore = useAuthStore()
 const route = useRoute()
+const clientCompanyStorageKey = computed(() => `dbcrm.clients.companies.v1.${authStore.user?.user_id ?? 'anonymous'}`)
+const selectedClientCompanies = ref<string[]>([...ALL_COMPANIES])
+function toggleClientCompany(company: string) {
+  const selected = new Set(selectedClientCompanies.value)
+  if (selected.has(company)) selected.delete(company)
+  else selected.add(company)
+  selectedClientCompanies.value = ALL_COMPANIES.filter((item) => selected.has(item))
+}
 
 const emptyModuleForm: ClientModuleForm = {
   tsr_id: '',
@@ -344,6 +356,13 @@ const query = ref('')
 const clientColumnFilters = reactive<Record<string, string>>({ patient: '', prosthetist: '', tsr: '', check_date: '', certificate: '', status: '', stage: '', contract_status: '', act_status: '', agent: '', repeat_visit: '' })
 const unpunchedColumnFilters = reactive<Record<string, string>>({ patient: '', agent: '', precheck_status: '', precheck_stage: '', prosthesis: '' })
 const unpunchedCustomFields = ref<UnpunchedCustomField[]>([])
+const standardClientColumns = usePersistentColumnOrder('dbcrm.clients.columns.standard.v1', STANDARD_CLIENT_COLUMN_KEYS)
+const unpunchedClientColumns = usePersistentColumnOrder('dbcrm.clients.columns.unpunched.v1', UNPUNCHED_BASE_COLUMN_KEYS)
+const expandedTsrClientIds = ref<string[]>([])
+const standardClientColumnOrder = standardClientColumns.order
+const standardDraggingColumn = standardClientColumns.draggingKey
+const unpunchedClientColumnOrder = unpunchedClientColumns.order
+const unpunchedDraggingColumn = unpunchedClientColumns.draggingKey
 const newUnpunchedFieldName = ref('')
 const newUnpunchedFieldType = ref<'number' | 'text'>('text')
 const clientSortKey = ref<string | null>(null)
@@ -377,6 +396,11 @@ const snilsForm = reactive({
   ipra_number: '',
   ipra_date: '',
 })
+const mseDraft = ref('')
+const mseLastSaved = ref('')
+const mseAutosaveStatus = ref<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+let mseAutosaveTimeout: number | undefined
+let mseAutosavePromise: Promise<void> | null = null
 const selectedModuleId = ref('')
 const warehouseAssignQuantity = ref('1')
 const moduleOperationQuantities = reactive<Record<string, string>>({})
@@ -385,19 +409,19 @@ const selectedContractModuleIds = ref<string[]>([])
 const editingModuleId = ref<string | null>(null)
 const documentGeneratorTab = ref<'contracts' | 'mtz'>('contracts')
 const contractType = ref('llc_contract')
+const dmkDiagnosis = ref('')
 const contractNumberPrefix = ref('СД')
-const contractNumberSuffix = ref('001')
+const contractNumberSuffix = ref('030')
 const contractDate = ref(new Date().toISOString().slice(0, 10))
 const contractPlanDate = ref(new Date().toISOString().slice(0, 10))
 const contractAppendixDate = ref(new Date().toISOString().slice(0, 10))
 const mtzTemplateOptions = ref<MtzTemplateOption[]>([])
-const mtzType = ref('mtz_8_1_07_14')
-const mtzNumber = ref('')
-const mtzDate = ref(new Date().toISOString().slice(0, 10))
+const mtzType = ref('mtz_zet_thigh_mpu')
 const mtzDisabilityGroupReason = ref('')
-const mtzCertificateReference = ref('')
-const mtzDiagnosis = ref('')
+const mtzDiagnoses = ref<string[]>([])
 const mtzAmputationLevel = ref('')
+const mtzStumpCondition = ref<'Функциональная' | 'Нефункциональная'>('Функциональная')
+const mtzActivityLevel = ref<'2-3' | '3-4'>('3-4')
 const mtzWeightKg = ref('')
 const selectedFile = ref<File | null>(null)
 const isLoading = ref(false)
@@ -410,6 +434,12 @@ const loadedDetailTabs = reactive<Record<DetailTab, boolean>>({
   history: false,
 })
 const isSaving = ref(false)
+const clientAutosaveState = ref<'idle' | 'pending' | 'saving' | 'saved' | 'error' | 'waiting'>('idle')
+const isClientAutosaving = ref(false)
+let clientAutosaveTimeout: number | undefined
+let clientAutosavePromise: Promise<void> | null = null
+const clientTsrAutosaveTimeouts = new Map<string, number>()
+const clientTsrAutosavePromises = new Map<string, Promise<void>>()
 const inlineDocumentStatusSaving = reactive<Record<string, boolean>>({})
 const error = ref('')
 const successMessage = ref('')
@@ -435,24 +465,36 @@ const clientTsrDrafts = reactive<Record<string, ClientTsrDraft>>({})
 const passportFormExpanded = ref(false)
 const snilsFormExpanded = ref(false)
 const componentFormExpanded = ref(false)
+const passportAutosaveStatus = ref<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+const snilsAutosaveStatus = ref<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+const componentAutosaveStatus = ref<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+let passportAutosaveTimeout: number | undefined
+let snilsAutosaveTimeout: number | undefined
+let componentAutosaveTimeout: number | undefined
+let passportAutosavePromise: Promise<void> | null = null
+let snilsAutosavePromise: Promise<void> | null = null
+let componentAutosavePromise: Promise<void> | null = null
+const lastSavedComponentState = ref('')
+function getComponentDraftState() { return JSON.stringify(moduleForm) }
+function rememberComponentDraftState() { lastSavedComponentState.value = getComponentDraftState() }
+function autosaveLabel(status: 'idle' | 'pending' | 'saving' | 'saved' | 'error') {
+  if (status === 'saving') return 'Сохраняем…'
+  if (status === 'pending') return 'Изменения ожидают сохранения…'
+  if (status === 'error') return 'Ошибка сохранения — проверьте сообщение выше'
+  return 'Автосохранение включено'
+}
+
 const componentEntryMode = ref<ComponentEntryMode>('new')
 const componentWarehouseSource = ref<'working' | 'stock'>('working')
 
 const isEditing = computed(() => Boolean(selectedClient.value?.client_id))
 const isClientPersisted = computed(() => Boolean(selectedClient.value && getClientId(selectedClient.value)))
-const modalMessageId = computed(() => (error.value ? 'client-modal-error' : successMessage.value ? 'client-modal-success' : undefined))
+const modalMessageId = computed(() => (error.value ? 'client-modal-error' : undefined))
 const activeClientFilterCount = computed(() => [
+  selectedClientCompanies.value.length !== ALL_COMPANIES.length ? 'org' : '',
   query.value.trim(),
   ...(activeClientListMode.value === 'unpunched' ? Object.values(unpunchedColumnFilters) : Object.values(clientColumnFilters)).map((value) => value.trim()),
 ].filter(Boolean).length)
-const CLIENT_TAB_LABELS: Record<ClientTab, string> = {
-  main: 'Основное',
-  identity: 'Личные документы',
-  phones: 'Контакты',
-  modules: 'Комплектующие',
-  documents: 'Документы',
-  history: 'История',
-}
 
 function getPassportDraftState() {
   return JSON.stringify(passportForm)
@@ -472,7 +514,7 @@ function getPhoneDraftState() {
 
 function getDetailTabDraftState(tab: DetailTab) {
   if (tab === 'identity') {
-    return JSON.stringify({ passport: getPassportDraftState(), snils: getSnilsDraftState() })
+    return JSON.stringify({ passport: getPassportDraftState(), snils: getSnilsDraftState(), mse: mseDraft.value })
   }
 
   if (tab === 'phones') {
@@ -490,6 +532,7 @@ function getDetailTabDraftState(tab: DetailTab) {
   if (tab === 'documents') {
     return JSON.stringify({
       contractType: contractType.value,
+      dmkDiagnosis: dmkDiagnosis.value,
       contractNumberPrefix: contractNumberPrefix.value,
       contractNumberSuffix: contractNumberSuffix.value,
       contractDate: contractDate.value,
@@ -499,12 +542,11 @@ function getDetailTabDraftState(tab: DetailTab) {
       selectedModuleIds: selectedContractModuleIds.value,
       documentGeneratorTab: documentGeneratorTab.value,
       mtzType: mtzType.value,
-      mtzNumber: mtzNumber.value,
-      mtzDate: mtzDate.value,
       mtzDisabilityGroupReason: mtzDisabilityGroupReason.value,
-      mtzCertificateReference: mtzCertificateReference.value,
-      mtzDiagnosis: mtzDiagnosis.value,
+      mtzDiagnoses: mtzDiagnoses.value,
       mtzAmputationLevel: mtzAmputationLevel.value,
+      mtzStumpCondition: mtzStumpCondition.value,
+      mtzActivityLevel: mtzActivityLevel.value,
       mtzWeightKg: mtzWeightKg.value,
       file: selectedFile.value
         ? {
@@ -547,46 +589,6 @@ function rememberDetailTabState(tab: DetailTab) {
   lastSavedDetailStates[tab] = getDetailTabDraftState(tab)
 }
 
-function hasUnsavedClientTsrDrafts() {
-  return Object.entries(clientTsrDrafts).some(([clientTsrId, draft]) => {
-    const group = clientTsrGroups.value.find((item) => item.clientTsrId === clientTsrId)
-    if (!group) {
-      return true
-    }
-
-    const draftPrice = parseMoneyInput(draft.certificatePrice)
-    const savedPrice = parseMoneyInput(group.certificatePrice)
-    return draft.checkDate !== group.checkDate
-      || draftPrice !== savedPrice
-      || draft.prosthetist !== group.prosthetist
-      || draft.repeatVisitDate !== group.repeatVisitDate
-  })
-}
-
-function hasUnsavedChangesForTab(tab: ClientTab) {
-  if (tab === 'main') {
-    return JSON.stringify(form) !== lastSavedClientState.value || hasUnsavedClientTsrDrafts()
-  }
-
-  if (tab === 'identity') {
-    return getPassportDraftState() !== lastSavedIdentityStates.passport
-      || getSnilsDraftState() !== lastSavedIdentityStates.snils
-  }
-
-  if (tab === 'phones') {
-    return getEmailDraftState() !== lastSavedContactStates.email
-      || getPhoneDraftState() !== lastSavedContactStates.phone
-  }
-
-  return getDetailTabDraftState(tab) !== lastSavedDetailStates[tab]
-}
-
-const dirtyClientTabs = computed(() => (
-  (Object.keys(CLIENT_TAB_LABELS) as ClientTab[]).filter(hasUnsavedChangesForTab)
-))
-const hasUnsavedClientChanges = computed(() => (
-  isClientCardOpen.value && dirtyClientTabs.value.length > 0
-))
 const confirmAction = useAppConfirm()
 useSuccessToast(successMessage, 'Пациенты')
 useSuccessToast(referenceSuccess, 'Справочник ТСР')
@@ -605,7 +607,6 @@ const isEditingReference = computed(() => referenceEditingId.value !== null)
 
 const statusOptions = computed(() => statuses.value.map(normalizeReferenceOption))
 const stageOptions = computed(() => stages.value.map(normalizeReferenceOption))
-const prosthesisOptions = computed(() => DIAGNOSIS_OPTIONS)
 const nameIndexOptions = computed(() => nameIndexReferences.value
   .map((item) => {
     const label = String(item.name_index ?? '').trim()
@@ -662,6 +663,7 @@ function sortClients(key: string) {
 const filteredClients = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase('ru-RU')
   const filtered = clients.value.filter((client) => {
+    if (!selectedClientCompanies.value.includes(accountingCompany(client.performer_company))) return false
     const extraSearch = Object.values(client.unpunched_custom_values ?? {}).join(' ').toLocaleLowerCase('ru-RU')
     if (needle && !(`${getClientSearchText(client)} ${extraSearch}`).includes(needle)) return false
     const filters = activeClientListMode.value === 'unpunched' ? unpunchedColumnFilters : clientColumnFilters
@@ -1259,6 +1261,135 @@ function getClientTsrLabel(client: Client) {
   return getCountedLabels(values) || '-'
 }
 
+function getTsrNumericCode(value: unknown) {
+  const text = String(value ?? '').trim()
+  // Some official TSR codes contain a parenthesized category: 8(1)-07-14.
+  const match = text.match(/\b\d+(?:\(\d+\))?(?:-\d+){2,}\b/)
+  return match?.[0] ?? ''
+}
+
+function getClientTsrCodeLabels(client: Client): string[] {
+  const codes = (client.tsr_items ?? [])
+    .map((item) => getTsrNumericCode(item.tsr?.full_tsr_code))
+    .filter(Boolean)
+  const counts = new Map<string, number>()
+  for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1)
+  return [...counts].map(([code, count]) => count > 1 ? `${code} (x${count})` : code)
+}
+
+function isClientTsrExpanded(client: Client) {
+  return expandedTsrClientIds.value.includes(getClientId(client))
+}
+
+function toggleClientTsrDetails(client: Client) {
+  const id = getClientId(client)
+  if (!id) return
+  expandedTsrClientIds.value = expandedTsrClientIds.value.includes(id)
+    ? expandedTsrClientIds.value.filter((item) => item !== id)
+    : [...expandedTsrClientIds.value, id]
+}
+
+function getClientCompanyColorClass(company: string) {
+  if (company === 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»') return 'org-filter-zet'
+  if (company === 'ИП ДМК') return 'org-filter-dmk'
+  return 'org-filter-smart'
+}
+
+function getClientOrganizationClass(client: Client) {
+  const company = normalizePerformerCompany(client.performer_company)
+  if (company === 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»') return 'client-org-zet'
+  if (company === 'ООО "Смарт Движение"') return 'client-org-smart'
+  if (company === 'ИП ДМК') return 'client-org-dmk'
+  return ''
+}
+
+function getUnpunchedCustomFieldByColumnKey(columnKey: string) {
+  const fieldId = columnKey.startsWith('precustom:') ? columnKey.slice('precustom:'.length) : ''
+  return unpunchedCustomFields.value.find((field) => String(field.field_id) === fieldId)
+}
+
+function getUnpunchedCustomFilterKey(columnKey: string) {
+  const field = getUnpunchedCustomFieldByColumnKey(columnKey)
+  return field?.field_type === 'number' ? `precustom:number:${field.field_id}` : columnKey
+}
+
+function getUnpunchedColumnLabel(columnKey: string) {
+  return getUnpunchedCustomFieldByColumnKey(columnKey)?.field_name ?? columnKey
+}
+
+function getUnpunchedColumnFilterKind(columnKey: string) {
+  return getUnpunchedCustomFieldByColumnKey(columnKey)?.field_type === 'number' ? 'number' : 'text'
+}
+
+function getUnpunchedCustomValue(client: Client, columnKey: string) {
+  const field = getUnpunchedCustomFieldByColumnKey(columnKey)
+  return field ? client.unpunched_custom_values?.[field.field_id] ?? '' : ''
+}
+
+function updateUnpunchedCustomColumnValue(client: Client, columnKey: string, value: string) {
+  const field = getUnpunchedCustomFieldByColumnKey(columnKey)
+  if (field) void updateUnpunchedCustomValue(client, field, value)
+}
+
+function getStandardClientColumnLabel(columnKey: string) {
+  const labels: Record<string, string> = {
+    number: '№', patient: 'Пациент', prosthetist: 'Протезист', tsr: 'ТСР', check_date: 'Дата пробития',
+    certificate: 'Сертификат', status: 'Статус', stage: 'Этап', contract_status: 'Статус договоров',
+    act_status: 'Статус актов', agent: 'Агент', repeat_visit: 'Повторное протезирование',
+  }
+  return labels[columnKey] ?? columnKey
+}
+
+function getStandardClientColumnKind(columnKey: string) {
+  if (['certificate'].includes(columnKey)) return 'number' as const
+  if (['check_date', 'repeat_visit'].includes(columnKey)) return 'date' as const
+  if (['status', 'stage', 'contract_status', 'act_status', 'agent'].includes(columnKey)) return 'select' as const
+  return 'text' as const
+}
+
+function getStandardClientColumnOptions(columnKey: string) {
+  if (columnKey === 'status') return clientStatusFilterOptions.value
+  if (columnKey === 'stage') return clientStageFilterOptions.value
+  if (columnKey === 'contract_status' || columnKey === 'act_status') return DOCUMENT_STATUS_OPTIONS
+  if (columnKey === 'agent') return clientAgentFilterOptions.value
+  return []
+}
+
+function getStandardClientColumnPlaceholder(columnKey: string) {
+  if (columnKey === 'prosthetist') return 'Имя протезиста'
+  if (columnKey === 'certificate') return 'Сумма или диапазон'
+  if (columnKey === 'check_date' || columnKey === 'repeat_visit') return 'дд.мм.гггг или от..до'
+  return 'Фильтр…'
+}
+
+function getStandardClientColumnClass(columnKey: string) {
+  if (columnKey === 'prosthetist') return 'client-col-prosthetist'
+  if (columnKey === 'check_date') return 'client-col-check-date'
+  if (columnKey === 'contract_status' || columnKey === 'act_status') return 'client-col-document-status'
+  return ''
+}
+
+function getUnpunchedColumnKind(columnKey: string) {
+  if (columnKey.startsWith('precustom:')) return getUnpunchedColumnFilterKind(columnKey)
+  if (['agent', 'precheck_status', 'precheck_stage'].includes(columnKey)) return 'select' as const
+  return 'text' as const
+}
+
+function getUnpunchedColumnOptions(columnKey: string) {
+  if (columnKey === 'agent') return clientAgentFilterOptions.value
+  if (columnKey === 'precheck_status') return PRECHECK_STATUS_OPTIONS
+  if (columnKey === 'precheck_stage') return PRECHECK_STAGE_OPTIONS
+  return []
+}
+
+function getUnpunchedColumnDisplayLabel(columnKey: string) {
+  const labels: Record<string, string> = {
+    number: '№', patient: 'Пациент', agent: 'Агент', precheck_status: 'Статус',
+    precheck_stage: 'Этап', prosthesis: 'Вид протеза',
+  }
+  return columnKey.startsWith('precustom:') ? getUnpunchedColumnLabel(columnKey) : (labels[columnKey] ?? columnKey)
+}
+
 function getClientProsthetistLabel(client: Client) {
   const values = (client.tsr_items ?? [])
     .map((item) => String(item.prosthetist || ''))
@@ -1527,6 +1658,7 @@ function setClientTsrDraft(
       ? (automaticRepeat ?? '')
       : current.repeatVisitDate,
   }
+  queueClientTsrAutosave(group.clientTsrId)
 }
 
 function setClientTsrDraftFromEvent(
@@ -1681,7 +1813,7 @@ function getContractPrefixForTemplate(templateType: string) {
   return 'СД'
 }
 
-const showExtendedContractDates = computed(() => ['llc_contract', 'zet_contract'].includes(contractType.value))
+const showExtendedContractDates = computed(() => ['llc_contract', 'zet_contract', 'dmk_full_package', 'dmk_contract'].includes(contractType.value))
 const selectedMtzTemplate = computed(() => mtzTemplateOptions.value.find((item) => item.value === mtzType.value))
 const mtzAutofillData = computed(() => {
   const client = selectedClient.value
@@ -1696,9 +1828,15 @@ const mtzAutofillData = computed(() => {
 
 watch(contractType, (templateType, previousTemplateType) => {
   const previousPrefix = getContractPrefixForTemplate(previousTemplateType || '')
-
   if (!contractNumberPrefix.value.trim() || contractNumberPrefix.value.trim() === previousPrefix) {
     contractNumberPrefix.value = getContractPrefixForTemplate(templateType)
+  }
+  if (templateType === 'dmk_full_package') {
+    contractNumberSuffix.value = '' // Manual entry; do not suggest an automatic number.
+  } else {
+    void fetchNextContractNumber(templateType).then((number) => {
+      if (contractType.value === templateType) contractNumberSuffix.value = number
+    }).catch(() => { /* Server assigns the number when the contract is generated. */ })
   }
 })
 
@@ -1767,6 +1905,9 @@ function resetModuleForm(preserveTarget = true) {
   selectedModuleId.value = ''
   warehouseAssignQuantity.value = '1'
   editingModuleId.value = null
+  window.clearTimeout(componentAutosaveTimeout)
+  componentAutosaveStatus.value = 'idle'
+  rememberComponentDraftState()
   rememberDetailTabState('modules')
 }
 
@@ -1779,6 +1920,7 @@ function prepareNewComponentForTsr(group: ClientTsrGroup) {
   warehouseAssignQuantity.value = '1'
   componentEntryMode.value = 'new'
   componentFormExpanded.value = true
+  rememberComponentDraftState()
   resetMessages()
   rememberDetailTabState('modules')
 }
@@ -1822,6 +1964,7 @@ function setComponentEntryMode(mode: ComponentEntryMode) {
   editingModuleId.value = null
   componentEntryMode.value = mode
   componentFormExpanded.value = true
+  rememberComponentDraftState()
   resetMessages()
   rememberDetailTabState('modules')
 }
@@ -1887,6 +2030,7 @@ function fillModuleForm(moduleItem: ModuleItem) {
   moduleForm.order_date_acc_num = moduleItem.order_date_acc_num ?? '-'
   moduleForm.properties = moduleItem.properties ?? '-'
   moduleForm.notes = moduleItem.notes ?? ''
+  rememberComponentDraftState()
   resetMessages()
   rememberDetailTabState('modules')
 }
@@ -1962,12 +2106,12 @@ function resetDetailState() {
   selectedContractClientTsrIds.value = []
   selectedContractModuleIds.value = []
   documentGeneratorTab.value = 'contracts'
-  mtzNumber.value = ''
-  mtzDate.value = new Date().toISOString().slice(0, 10)
+  dmkDiagnosis.value = ''
   mtzDisabilityGroupReason.value = ''
-  mtzCertificateReference.value = ''
-  mtzDiagnosis.value = ''
+  mtzDiagnoses.value = []
   mtzAmputationLevel.value = ''
+  mtzStumpCondition.value = 'Функциональная'
+  mtzActivityLevel.value = '3-4'
   mtzWeightKg.value = ''
   Object.keys(clientTsrDrafts).forEach((key) => delete clientTsrDrafts[key])
 }
@@ -1999,6 +2143,9 @@ function resetForm() {
     ipra_date: '',
   })
   selectedClient.value = null
+  mseDraft.value = ''
+  mseLastSaved.value = ''
+  window.clearTimeout(mseAutosaveTimeout)
   activeTab.value = 'main'
   resetDetailState()
   selectedModuleId.value = ''
@@ -2011,6 +2158,11 @@ function resetForm() {
   snilsFormExpanded.value = false
   componentFormExpanded.value = false
   componentEntryMode.value = 'new'
+  passportAutosaveStatus.value = 'idle'
+  snilsAutosaveStatus.value = 'idle'
+  mseAutosaveStatus.value = 'idle'
+  componentAutosaveStatus.value = 'idle'
+  rememberComponentDraftState()
   isReferenceManagerOpen.value = false
   resetReferenceManagerForm()
   resetMessages()
@@ -2023,80 +2175,63 @@ function setBodyModalLock(locked: boolean) {
 }
 
 async function openNewClient() {
-  if (hasUnsavedClientChanges.value) {
-    const shouldContinue = await confirmAction({
-      header: 'Несохранённые изменения',
-      message: 'Начать новую карточку? Изменения в текущей карточке будут потеряны.',
-      acceptLabel: 'Начать новую',
-    })
-
-    if (!shouldContinue) {
-      return
-    }
-  }
-
+  await flushAllClientAutosaves()
   resetForm()
+  clientAutosaveState.value = 'idle'
   isClientCardOpen.value = true
 }
 
 async function closeClientCard() {
-  if (isSaving.value) {
-    return
+  if (isSaving.value) return
+  await flushAllClientAutosaves()
+  if (isSaving.value) return
+  if (componentAutosaveStatus.value === 'error'
+    || passportAutosaveStatus.value === 'error' || snilsAutosaveStatus.value === 'error') {
+    if (!(await confirmAction({
+      header: 'Ошибка автосохранения',
+      message: 'Не все изменения удалось сохранить. Закрыть карточку, оставив несохранённые изменения?',
+      acceptLabel: 'Закрыть без изменений',
+      danger: true,
+    }))) return
   }
-
-  if (hasUnsavedClientChanges.value) {
-    const shouldClose = await confirmAction({
-      header: 'Есть несохранённые изменения',
-      message: `Закрыть карточку без сохранения изменений в разделах: ${dirtyClientTabs.value.map((tab) => CLIENT_TAB_LABELS[tab]).join(', ')}?`,
-      acceptLabel: 'Закрыть без сохранения',
-    })
-
-    if (!shouldClose) {
-      return
-    }
+  // Incomplete identity drafts cannot be persisted by the API; never silently discard them.
+  const incompletePassport = passportFormExpanded.value
+    && getPassportDraftState() !== lastSavedIdentityStates.passport && !isPassportDraftComplete()
+  const incompleteSnils = snilsFormExpanded.value
+    && getSnilsDraftState() !== lastSavedIdentityStates.snils && !isSnilsDraftComplete()
+  if (incompletePassport || incompleteSnils) {
+    if (!(await confirmAction({
+      header: 'Незаполненные документы',
+      message: 'Паспорт или СНИЛС заполнен не полностью и ещё не сохранён. Закрыть карточку без этого черновика?',
+      acceptLabel: 'Закрыть без черновика',
+      danger: true,
+    }))) return
   }
-
   isClientCardOpen.value = false
 }
 
 async function handleClientModalEscape() {
-  if (isReferenceManagerOpen.value) {
+  if (isReferenceManagerOpen.value) return
+  if (componentFormExpanded.value && activeTab.value === 'modules') {
+    await closeComponentEditor()
     return
   }
-
   await closeClientCard()
 }
 
 async function openClientTab(tab: ClientTab) {
-  if (tab === activeTab.value) {
-    return true
-  }
+  if (tab === activeTab.value) return true
+
+  await flushAllClientAutosaves()
 
   if (tab !== 'main' && !isClientPersisted.value) {
-    error.value = 'Сначала сохрани основную карточку пациента.'
+    error.value = 'Заполни обязательные поля основной карточки — пациент сохранится автоматически.'
     activeTab.value = 'main'
     return false
   }
 
-  const currentTab = activeTab.value
-  if (hasUnsavedChangesForTab(currentTab)) {
-    const shouldSwitch = await confirmAction({
-      header: 'Есть несохранённые изменения',
-      message: `Перейти из раздела «${CLIENT_TAB_LABELS[currentTab]}» без сохранения изменений?`,
-      acceptLabel: 'Перейти без сохранения',
-    })
-
-    if (!shouldSwitch) {
-      return false
-    }
-  }
-
   activeTab.value = tab
-
-  if (tab !== 'main') {
-    await loadClientTabData(tab)
-  }
-
+  if (tab !== 'main') await loadClientTabData(tab)
   return true
 }
 
@@ -2124,12 +2259,14 @@ function fillForm(client: Client) {
   form.current_stage = getReferenceValue(client.current_stage)
   form.agent_id = String(client.agent_id ?? '')
   form.performer_company = normalizePerformerCompany(client.performer_company)
-  const diagnosis = String(client.prosthesis_type ?? '')
-  form.prosthesis_type = DIAGNOSIS_OPTIONS.some((option) => option.value === diagnosis) ? diagnosis : ''
   form.taxation_system = client.taxation_system === 'ОСНО' ? 'ОСНО' : 'УСН'
+  form.tax_percent_override = client.tax_percent_override ?? null
+  form.vat_percent = Number.isFinite(Number(client.vat_percent)) ? Math.max(0, Number(client.vat_percent)) : 20
   form.notes = String(client.notes ?? '')
   emailDraft.value = String(client.email ?? '')
   snilsForm.ipra_number = formatIpraNumber(String(client.ipra_code ?? ''));
+  mseDraft.value = String(client.mse_reference ?? '')
+  mseLastSaved.value = mseDraft.value
   const firstSnils = (client.snils ?? [])[0];
   snilsForm.number = firstSnils ? formatSnils(firstSnils.number) : '';
 
@@ -2143,6 +2280,30 @@ function fillForm(client: Client) {
   rememberClientFormState()
 }
 
+function parseCustomTaxRate(value: number | string | null): number | null {
+  const text = String(value ?? '').trim().replace(',', '.')
+  if (!text) return null
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function getVatPercentForSave(): number {
+  // An empty VAT field for ИП ДМК is intentionally zero, never an inherited 20%.
+  const value = String(form.vat_percent ?? '').trim()
+  return value ? Number(value) : 0
+}
+
+function onPerformerCompanyChange() {
+  if (form.performer_company === 'ИП ДМК') {
+    // Changing the organization must not silently carry over the LLC VAT rate.
+    form.vat_percent = ''
+    form.tax_percent_override = null
+  } else if (form.vat_percent === '') {
+    // Keep the prior LLC defaults and required field behavior unchanged.
+    form.vat_percent = 20
+  }
+}
+
 function buildCreatePayload(): ClientCreatePayload {
   return {
     last_name: form.last_name.trim(),
@@ -2152,8 +2313,9 @@ function buildCreatePayload(): ClientCreatePayload {
     current_stage: form.current_stage.trim(),
     agent_id: form.agent_id,
     performer_company: optionalString(form.performer_company),
-    prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
+    tax_percent_override: form.performer_company === 'ИП ДМК' ? parseCustomTaxRate(form.tax_percent_override) : null,
+    vat_percent: getVatPercentForSave(),
     notes: optionalString(form.notes),
     // A newly created patient has no punched certificate yet, so the single
     // source of truth is the dedicated «Не пробитые пациенты» workspace.
@@ -2173,8 +2335,9 @@ function buildUpdatePayload(): ClientUpdatePayload {
     current_stage: form.current_stage.trim(),
     agent_id: form.agent_id,
     performer_company: optionalString(form.performer_company),
-    prosthesis_type: optionalString(form.prosthesis_type),
     taxation_system: form.taxation_system,
+    tax_percent_override: form.performer_company === 'ИП ДМК' ? parseCustomTaxRate(form.tax_percent_override) : null,
+    vat_percent: getVatPercentForSave(),
     notes: optionalString(form.notes),
   }
 }
@@ -2208,24 +2371,42 @@ async function ensureClientExists() {
   return clientId
 }
 
-function validateClientForm() {
+function validateClientForm(showError = true) {
   if (!form.last_name.trim() || !form.first_name.trim()) {
-    error.value = 'Заполни минимум фамилию и имя пациента.'
+    if (showError) error.value = 'Заполни минимум фамилию и имя пациента.'
     return false
   }
 
   if (!form.status.trim()) {
-    error.value = 'Выбери статус пациента.'
+    if (showError) error.value = 'Выбери статус пациента.'
     return false
   }
 
   if (!form.current_stage.trim()) {
-    error.value = 'Выбери этап пациента.'
+    if (showError) error.value = 'Выбери этап пациента.'
     return false
   }
 
   if (!form.agent_id) {
-    error.value = 'Выбери агента. По backend-схеме agent_id обязателен для пациента.'
+    if (showError) error.value = 'Выбери агента. По backend-схеме agent_id обязателен для пациента.'
+    return false
+  }
+
+  if (form.performer_company === 'ИП ДМК') {
+    const rawRate = String(form.tax_percent_override ?? '').trim()
+    const rate = parseCustomTaxRate(form.tax_percent_override)
+    // Empty is allowed; a nonempty invalid value is not.
+    if (rawRate && (rate === null || rate < 0 || rate > 100)) {
+      if (showError) error.value = 'Ставка налога должна быть числом от 0 до 100%.'
+      return false
+    }
+  }
+
+  const vatValue = String(form.vat_percent ?? '').trim()
+  const vatPercent = Number(vatValue)
+  const vatIsOptional = form.performer_company === 'ИП ДМК'
+  if ((!vatIsOptional && !vatValue) || (vatValue && (!Number.isFinite(vatPercent) || vatPercent < 0))) {
+    if (showError) error.value = 'Укажи корректную ставку НДС (0 или больше).'
     return false
   }
 
@@ -2312,6 +2493,7 @@ function applyClientFilters() {
 }
 
 function resetClientFilters() {
+  selectedClientCompanies.value = [...ALL_COMPANIES]
   query.value = ''
   Object.keys(clientColumnFilters).forEach((key) => { clientColumnFilters[key] = '' })
   Object.keys(unpunchedColumnFilters).forEach((key) => { unpunchedColumnFilters[key] = '' })
@@ -2320,11 +2502,12 @@ function resetClientFilters() {
   currentPage.value = 1
 }
 
-function switchClientListMode(mode: ClientListMode) {
+async function switchClientListMode(mode: ClientListMode) {
   if (activeClientListMode.value === mode) {
     return
   }
 
+  if (isClientCardOpen.value) await flushAllClientAutosaves()
   activeClientListMode.value = mode
   selectedClientIds.value = []
   currentPage.value = 1
@@ -2476,10 +2659,12 @@ async function loadClientTabData(tab: DetailTab, force = false) {
           client_id: clientId,
           archived: Boolean(selectedClient.value?.is_archived),
         }),
-        fetchNextContractNumber(),
+        contractType.value === 'dmk_full_package'
+          ? Promise.resolve('')
+          : fetchNextContractNumber(contractType.value),
       ])
       documents.value = documentResponse
-      contractNumberSuffix.value = nextNumber
+      if (contractType.value !== 'dmk_full_package') contractNumberSuffix.value = nextNumber
       clientModules.value = moduleResponse
       const available = new Set(moduleResponse.map((item) => String(item.module_id)))
       const availableTsr = new Set((selectedClient.value?.tsr_items ?? []).map((item) => String(item.client_tsr_id)))
@@ -2489,7 +2674,9 @@ async function loadClientTabData(tab: DetailTab, force = false) {
       auditItems.value = await fetchEntityAudit('client', clientId)
     }
 
-    rememberDetailTabState(tab)
+    // Identity drafts may be incomplete. Do not mark them as saved merely
+    // because the user revisited this tab; only a successful API save does that.
+    if (tab !== 'identity') rememberDetailTabState(tab)
     loadedDetailTabs[tab] = true
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -2500,14 +2687,11 @@ async function loadClientTabData(tab: DetailTab, force = false) {
   }
 }
 
-async function reloadActiveDetailTab() {
-  if (activeTab.value !== 'main') {
-    await loadClientTabData(activeTab.value, true)
-  }
-}
-
-async function refreshSelectedClient(clientId: string, syncForm = true) {
+async function refreshSelectedClient(clientId: string, syncForm = true, onlyIfStillSelected = false) {
   const freshClient = await fetchClient(clientId)
+  if (onlyIfStillSelected && (!selectedClient.value || getClientId(selectedClient.value) !== clientId)) {
+    return
+  }
   selectedClient.value = freshClient
   emailDraft.value = String(freshClient.email ?? '')
 
@@ -2520,33 +2704,24 @@ async function selectClient(client: Client) {
   const nextClientId = getClientId(client)
   const currentClientId = selectedClient.value ? getClientId(selectedClient.value) : ''
 
-  if (isClientCardOpen.value && currentClientId !== nextClientId && hasUnsavedClientChanges.value) {
-    const shouldSwitch = await confirmAction({
-      header: 'Есть несохранённые изменения',
-      message: 'Открыть другую карточку без сохранения изменений в текущей?',
-      acceptLabel: 'Открыть другую карточку',
-    })
-
-    if (!shouldSwitch) {
-      return
-    }
+  if (isClientCardOpen.value && currentClientId && currentClientId !== nextClientId) {
+    await flushAllClientAutosaves()
   }
 
   resetForm()
   selectedClient.value = client
   isClientCardOpen.value = true
   fillForm(client)
+  clientAutosaveState.value = 'saved'
   rememberDetailTabState('identity')
   rememberDetailTabState('phones')
 
-  const clientId = nextClientId
+  if (!nextClientId) return
 
-  if (!clientId) {
-    return
-  }
-
-  void refreshSelectedClient(clientId).catch(() => {
-    selectedClient.value = client
+  void refreshSelectedClient(nextClientId, true, true).catch(() => {
+    if (selectedClient.value && getClientId(selectedClient.value) === nextClientId) {
+      selectedClient.value = client
+    }
   })
 }
 
@@ -2588,57 +2763,147 @@ async function finishAutomaticArchive(client: Client) {
   await loadClients()
 }
 
-async function saveClient() {
-  resetMessages()
+function queueClientAutosave() {
+  if (!isClientCardOpen.value) return
+  window.clearTimeout(clientAutosaveTimeout)
+  clientAutosaveState.value = validateClientForm(false) ? 'pending' : 'waiting'
+  clientAutosaveTimeout = window.setTimeout(() => {
+    clientAutosaveTimeout = undefined
+    void saveClient({ automatic: true })
+  }, 700)
+}
 
-  if (!validateClientForm()) {
+async function flushClientAutosave() {
+  window.clearTimeout(clientAutosaveTimeout)
+  clientAutosaveTimeout = undefined
+
+  if (clientAutosavePromise) await clientAutosavePromise
+  if (JSON.stringify(form) !== lastSavedClientState.value && validateClientForm(false)) {
+    await saveClient({ automatic: true })
+  }
+  if (clientAutosavePromise) await clientAutosavePromise
+}
+
+function runTrackedClientTsrAutosave(group: ClientTsrGroup) {
+  const existing = clientTsrAutosavePromises.get(group.clientTsrId)
+  if (existing) return existing
+
+  const promise = saveClientTsrDetails(group, true)
+  clientTsrAutosavePromises.set(group.clientTsrId, promise)
+  void promise.finally(() => {
+    if (clientTsrAutosavePromises.get(group.clientTsrId) === promise) {
+      clientTsrAutosavePromises.delete(group.clientTsrId)
+    }
+  })
+  return promise
+}
+
+async function flushClientTsrAutosaves() {
+  for (;;) {
+    const ids = [...clientTsrAutosaveTimeouts.keys()]
+    ids.forEach((id) => {
+      window.clearTimeout(clientTsrAutosaveTimeouts.get(id))
+      clientTsrAutosaveTimeouts.delete(id)
+    })
+    for (const id of ids) {
+      const group = clientTsrGroups.value.find((item) => item.clientTsrId === id)
+      if (group && clientTsrDrafts[id]) await runTrackedClientTsrAutosave(group)
+    }
+
+    const active = [...clientTsrAutosavePromises.values()]
+    if (active.length) await Promise.allSettled(active)
+    if (clientTsrAutosaveTimeouts.size === 0 && clientTsrAutosavePromises.size === 0) break
+  }
+}
+
+async function flushAllClientAutosaves() {
+  await flushClientAutosave()
+  await flushClientTsrAutosaves()
+  window.clearTimeout(passportAutosaveTimeout)
+  window.clearTimeout(snilsAutosaveTimeout)
+  // Save any draft changed while a previous request was in flight.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (passportAutosavePromise) await passportAutosavePromise
+    if (snilsAutosavePromise) await snilsAutosavePromise
+    if (isPassportDraftComplete() && getPassportDraftState() !== lastSavedIdentityStates.passport) await savePassport()
+    if (isSnilsDraftComplete() && getSnilsDraftState() !== lastSavedIdentityStates.snils) await saveSnils()
+    if ((!isPassportDraftComplete() || getPassportDraftState() === lastSavedIdentityStates.passport)
+      && (!isSnilsDraftComplete() || getSnilsDraftState() === lastSavedIdentityStates.snils)) break
+  }
+  await flushComponentAutosave()
+  window.clearTimeout(mseAutosaveTimeout)
+  if (mseAutosavePromise) await mseAutosavePromise
+  if (mseDraft.value !== mseLastSaved.value) await saveMseReference()
+}
+
+async function saveClient(options: { automatic?: boolean } = {}) {
+  const automatic = options.automatic === true
+  if (!validateClientForm(!automatic)) {
+    if (automatic) clientAutosaveState.value = 'waiting'
     return
   }
 
-  isSaving.value = true
+  if (clientAutosavePromise) {
+    const active = clientAutosavePromise
+    await active
+    if (clientAutosavePromise === active) clientAutosavePromise = null
+    if (JSON.stringify(form) !== lastSavedClientState.value && validateClientForm(false)) {
+      return saveClient(options)
+    }
+    return
+  }
 
-  try {
-    if (isEditing.value && selectedClient.value) {
-      const clientId = getClientId(selectedClient.value)
-      const wasArchived = Boolean(selectedClient.value.is_archived)
-      const updatedClient = await updateClient(clientId, buildUpdatePayload())
+  const snapshot = JSON.stringify(form)
+  const editingClient = selectedClient.value && getClientId(selectedClient.value) ? selectedClient.value : null
+  const clientId = editingClient ? getClientId(editingClient) : ''
+  const wasArchived = Boolean(editingClient?.is_archived)
+  const payload = editingClient ? buildUpdatePayload() : buildCreatePayload()
 
-      if (!wasArchived && updatedClient.is_archived) {
-        await finishAutomaticArchive(updatedClient)
+  const task = (async () => {
+    isClientAutosaving.value = true
+    clientAutosaveState.value = 'saving'
+    if (!automatic) resetMessages()
+
+    try {
+      const savedClient = editingClient
+        ? await updateClient(clientId, payload as ClientUpdatePayload)
+        : await createClient(payload as ClientCreatePayload)
+
+      const savedClientId = getClientId(savedClient)
+      selectedClient.value = savedClient
+      lastSavedClientState.value = snapshot
+
+      if ((!wasArchived && savedClient.is_archived) || (!editingClient && savedClient.is_archived)) {
+        await finishAutomaticArchive(savedClient)
+        clientAutosaveState.value = 'saved'
         return
       }
 
-      selectedClient.value = updatedClient
-      fillForm(updatedClient)
-      await refreshSelectedClient(clientId)
-      await reloadActiveDetailTab()
-      successMessage.value = 'Пациент обновлен'
-    } else {
-      const createdClient = await createClient(buildCreatePayload())
-
-      if (createdClient.is_archived) {
-        await finishAutomaticArchive(createdClient)
-        return
-      }
-
-      const clientId = getClientId(createdClient)
-      selectedClient.value = createdClient
-      fillForm(createdClient)
-      if (activeClientListMode.value !== 'unpunched') {
+      if (!editingClient && activeClientListMode.value !== 'unpunched') {
         activeClientListMode.value = 'unpunched'
         selectedClientIds.value = []
         currentPage.value = 1
       }
-      await refreshSelectedClient(clientId)
-      await reloadActiveDetailTab()
-      successMessage.value = 'Пациент создан в «Не пробитые пациенты»'
-    }
 
-    await loadClients()
-  } catch (caughtError) {
-    error.value = getApiErrorMessage(caughtError)
+      if (savedClientId) await loadClients()
+      clientAutosaveState.value = JSON.stringify(form) === snapshot ? 'saved' : 'pending'
+    } catch (caughtError) {
+      error.value = getApiErrorMessage(caughtError)
+      clientAutosaveState.value = 'error'
+    } finally {
+      isClientAutosaving.value = false
+    }
+  })()
+
+  clientAutosavePromise = task
+  try {
+    await task
   } finally {
-    isSaving.value = false
+    if (clientAutosavePromise === task) clientAutosavePromise = null
+  }
+
+  if (isClientCardOpen.value && JSON.stringify(form) !== lastSavedClientState.value && validateClientForm(false)) {
+    queueClientAutosave()
   }
 }
 
@@ -2885,64 +3150,69 @@ function cancelPassportEdit() {
   rememberPassportDraftState()
 }
 
+function isPassportDraftComplete() {
+  return Boolean(
+    selectedClient.value && getClientId(selectedClient.value)
+    && passportForm.series.replace(/\D/g, '').length === 4
+    && passportForm.number.replace(/\D/g, '').length === 6
+    && passportForm.birth_place.trim() && passportForm.issued_by.trim()
+    && passportForm.issue_date && passportForm.registration_address.trim(),
+  )
+}
+
+function queuePassportAutosave() {
+  window.clearTimeout(passportAutosaveTimeout)
+  if (!isClientCardOpen.value || !passportFormExpanded.value || !isPassportDraftComplete()) return
+  passportAutosaveStatus.value = 'pending'
+  passportAutosaveTimeout = window.setTimeout(() => { void savePassport() }, 850)
+}
+
 async function savePassport() {
-  isSaving.value = true
-  resetMessages()
-
-  try {
-    const clientId = await ensureClientExists()
-
-    if (!clientId) {
-      return
-    }
-    if (!editingPassportId.value && passportItems.value.length > 0) {
-      error.value = 'У пациента уже есть паспорт. Измените существующий документ.'
-      return
-    }
-
-    const seriesNumber = [passportForm.series.trim(), passportForm.number.trim()].filter(Boolean).join(' ')
-    const issuedBy = passportForm.issued_by.trim()
-    const issueDate = passportForm.issue_date
-    const departmentCode = passportForm.department_code.trim()
-    const registrationAddress = passportForm.registration_address.trim()
-    const fullName = selectedClient.value ? getClientName(selectedClient.value) : getClientName({
-      last_name: form.last_name,
-      first_name: form.first_name,
-      middle_name: form.middle_name,
-    } as Client)
-
-    if (!seriesNumber || !issuedBy || !issueDate || !passportForm.birth_place.trim() || !registrationAddress) {
-      error.value = 'Для паспорта обязательны: серия/номер, место рождения, кем выдан, дата выдачи и адрес регистрации.'
-      return
-    }
-
-    const payload: ClientPassportCreate = {
-      full_name: fullName,
-      birth_date: passportForm.birth_date || null,
-      birth_place: passportForm.birth_place.trim(),
-      series_number: seriesNumber,
-      issued_by: issuedBy,
-      issue_date: issueDate,
-      department_code: departmentCode || null,
-      registration_address: registrationAddress,
-    }
-
-    if (editingPassportId.value) {
-      await updateClientPassport(editingPassportId.value, payload as ClientPassportUpdate)
-      successMessage.value = 'Паспорт обновлен'
-    } else {
-      await createClientPassport(clientId, payload)
-      successMessage.value = 'Паспорт сохранен'
-    }
-
-    cancelPassportEdit()
-    await refreshSelectedClient(clientId, false)
-    await loadClientTabData('identity', true)
-  } catch (caughtError) {
-    error.value = getApiErrorMessage(caughtError)
-  } finally {
-    isSaving.value = false
+  if (!isPassportDraftComplete()) return
+  if (passportAutosavePromise) {
+    await passportAutosavePromise
+    if (getPassportDraftState() !== lastSavedIdentityStates.passport) queuePassportAutosave()
+    return
   }
+  if (isSaving.value) { queuePassportAutosave(); return }
+  const clientId = getClientId(selectedClient.value!)
+  const snapshot = getPassportDraftState()
+  if (snapshot === lastSavedIdentityStates.passport) return
+  const request = (async () => {
+    isSaving.value = true
+    passportAutosaveStatus.value = 'saving'
+    try {
+      const payload: ClientPassportCreate = {
+        full_name: getClientName(selectedClient.value!),
+        birth_date: passportForm.birth_date || null,
+        birth_place: passportForm.birth_place.trim(),
+        series_number: [passportForm.series.trim(), passportForm.number.trim()].join(' '),
+        issued_by: passportForm.issued_by.trim(),
+        issue_date: passportForm.issue_date,
+        department_code: passportForm.department_code.trim() || null,
+        registration_address: passportForm.registration_address.trim(),
+      }
+      const existingId = editingPassportId.value || passportItems.value[0]?.passport_id
+      const saved = existingId
+        ? await updateClientPassport(existingId, payload as ClientPassportUpdate)
+        : await createClientPassport(clientId, payload)
+      editingPassportId.value = String(saved.passport_id)
+      await refreshSelectedClient(clientId, false, true)
+      if (getPassportDraftState() === snapshot) {
+        rememberPassportDraftState()
+        passportAutosaveStatus.value = 'saved'
+      } else {
+        queuePassportAutosave()
+      }
+    } catch (caughtError) {
+      error.value = getApiErrorMessage(caughtError)
+      passportAutosaveStatus.value = 'error'
+    } finally {
+      isSaving.value = false
+    }
+  })()
+  passportAutosavePromise = request
+  try { await request } finally { if (passportAutosavePromise === request) passportAutosavePromise = null }
 }
 
 async function removePassport(passport: ClientPassport) {
@@ -2974,6 +3244,49 @@ async function removePassport(passport: ClientPassport) {
   }
 }
 
+function queueMseAutosave() {
+  window.clearTimeout(mseAutosaveTimeout)
+  if (!isClientCardOpen.value || !selectedClient.value?.client_id || mseDraft.value === mseLastSaved.value) return
+  mseAutosaveStatus.value = 'pending'
+  mseAutosaveTimeout = window.setTimeout(() => { void saveMseReference() }, 850)
+}
+
+async function saveMseReference() {
+  window.clearTimeout(mseAutosaveTimeout)
+  if (!selectedClient.value?.client_id) return
+  if (mseAutosavePromise) {
+    await mseAutosavePromise
+    if (mseDraft.value !== mseLastSaved.value) return saveMseReference()
+    return
+  }
+  const clientId = getClientId(selectedClient.value)
+  const snapshot = mseDraft.value
+  if (snapshot === mseLastSaved.value) return
+  const request = (async () => {
+    mseAutosaveStatus.value = 'saving'
+    try {
+      await updateClient(clientId, { mse_reference: snapshot.trim() || null })
+      if (selectedClient.value && getClientId(selectedClient.value) === clientId) {
+        selectedClient.value = { ...selectedClient.value!, mse_reference: snapshot.trim() || null }
+        if (mseDraft.value === snapshot) {
+          mseLastSaved.value = snapshot
+          mseAutosaveStatus.value = 'saved'
+        } else {
+          mseLastSaved.value = snapshot
+          queueMseAutosave()
+        }
+      }
+    } catch (caught) {
+      if (selectedClient.value && getClientId(selectedClient.value) === clientId) {
+        error.value = getApiErrorMessage(caught)
+        mseAutosaveStatus.value = 'error'
+      }
+    }
+  })()
+  mseAutosavePromise = request
+  try { await request } finally { if (mseAutosavePromise === request) mseAutosavePromise = null }
+}
+
 function startEditSnils(snils: ClientSnils) {
   if (!snils.snils_id) {
     return
@@ -2998,53 +3311,59 @@ function cancelSnilsEdit() {
   rememberSnilsDraftState()
 }
 
+function isSnilsDraftComplete() {
+  return Boolean(selectedClient.value && getClientId(selectedClient.value)
+    && snilsForm.number.replace(/\D/g, '').length === 11)
+}
+
+function queueSnilsAutosave() {
+  window.clearTimeout(snilsAutosaveTimeout)
+  if (!isClientCardOpen.value || !snilsFormExpanded.value || !isSnilsDraftComplete()) return
+  snilsAutosaveStatus.value = 'pending'
+  snilsAutosaveTimeout = window.setTimeout(() => { void saveSnils() }, 850)
+}
+
 async function saveSnils() {
-  isSaving.value = true
-  resetMessages()
-
-  try {
-    const clientId = await ensureClientExists()
-
-    if (!clientId) {
-      return
-    }
-    if (!editingSnilsId.value && snilsItems.value.length > 0) {
-      error.value = 'У пациента уже есть СНИЛС / ИПРА. Измените существующий документ.'
-      return
-    }
-
-    const snilsNumber = snilsForm.number.trim()
-    const ipraNumber = snilsForm.ipra_number.trim()
-
-    if (!snilsNumber) {
-      error.value = 'Для СНИЛС обязателен номер.'
-      return
-    }
-
-    const payload: ClientSnilsCreate = {
-      number: snilsNumber,
-      issued_date: snilsForm.ipra_date || null,
-    }
-
-    if (editingSnilsId.value) {
-      await updateClientSnils(editingSnilsId.value, payload as ClientSnilsUpdate)
-      successMessage.value = 'СНИЛС обновлен'
-    } else {
-      await createClientSnils(clientId, payload)
-      successMessage.value = 'СНИЛС сохранен'
-    }
-
-    await updateClient(clientId, { ipra_code: ipraNumber || null })
-
-    cancelSnilsEdit()
-    await refreshSelectedClient(clientId, false)
-    await loadClientTabData('identity', true)
-    await loadClients()
-  } catch (caughtError) {
-    error.value = getApiErrorMessage(caughtError)
-  } finally {
-    isSaving.value = false
+  if (!isSnilsDraftComplete()) return
+  if (snilsAutosavePromise) {
+    await snilsAutosavePromise
+    if (getSnilsDraftState() !== lastSavedIdentityStates.snils) queueSnilsAutosave()
+    return
   }
+  if (isSaving.value) { queueSnilsAutosave(); return }
+  const clientId = getClientId(selectedClient.value!)
+  const snapshot = getSnilsDraftState()
+  if (snapshot === lastSavedIdentityStates.snils) return
+  const request = (async () => {
+    isSaving.value = true
+    snilsAutosaveStatus.value = 'saving'
+    try {
+      const payload: ClientSnilsCreate = {
+        number: formatSnils(snilsForm.number),
+        issued_date: snilsForm.ipra_date || null,
+      }
+      const existingId = editingSnilsId.value || snilsItems.value[0]?.snils_id
+      const saved = existingId
+        ? await updateClientSnils(existingId, payload as ClientSnilsUpdate)
+        : await createClientSnils(clientId, payload)
+      editingSnilsId.value = String(saved.snils_id)
+      await updateClient(clientId, { ipra_code: snilsForm.ipra_number.trim() || null })
+      await refreshSelectedClient(clientId, false, true)
+      if (getSnilsDraftState() === snapshot) {
+        rememberSnilsDraftState()
+        snilsAutosaveStatus.value = 'saved'
+      } else {
+        queueSnilsAutosave()
+      }
+    } catch (caughtError) {
+      error.value = getApiErrorMessage(caughtError)
+      snilsAutosaveStatus.value = 'error'
+    } finally {
+      isSaving.value = false
+    }
+  })()
+  snilsAutosavePromise = request
+  try { await request } finally { if (snilsAutosavePromise === request) snilsAutosavePromise = null }
 }
 
 async function removeSnils(snils: ClientSnils) {
@@ -3080,7 +3399,7 @@ async function attachManagedReference(item: ReferenceItem) {
   const clientId = selectedClient.value ? getClientId(selectedClient.value) : ''
   const tsrId = String(getReferenceId(item) || '')
   if (!clientId) {
-    referenceError.value = 'Сначала сохрани карточку пациента.'
+    referenceError.value = 'Сначала заполните обязательные поля основной карточки — пациент сохранится автоматически.'
     return
   }
   if (!tsrId) return
@@ -3102,33 +3421,48 @@ async function attachManagedReference(item: ReferenceItem) {
   }
 }
 
-async function saveClientTsrDetails(group: ClientTsrGroup) {
+function queueClientTsrAutosave(clientTsrId: string) {
+  const existing = clientTsrAutosaveTimeouts.get(clientTsrId)
+  if (existing) window.clearTimeout(existing)
+  clientAutosaveState.value = 'pending'
+  clientTsrAutosaveTimeouts.set(clientTsrId, window.setTimeout(() => {
+    clientTsrAutosaveTimeouts.delete(clientTsrId)
+    const group = clientTsrGroups.value.find((item) => item.clientTsrId === clientTsrId)
+    if (group) void runTrackedClientTsrAutosave(group)
+  }, 700))
+}
+
+async function saveClientTsrDetails(group: ClientTsrGroup, automatic = false) {
   const clientId = selectedClient.value ? getClientId(selectedClient.value) : ''
   if (!clientId || !group.clientTsrId) return
-  const draft = getClientTsrDraft(group)
-  isSaving.value = true
-  resetMessages()
+  const draft = { ...getClientTsrDraft(group) }
+  const draftSnapshot = JSON.stringify(draft)
+  if (!automatic) resetMessages()
+  clientAutosaveState.value = 'saving'
   try {
     await updateClientTsr(clientId, group.clientTsrId, {
       check_date: draft.checkDate || null,
       certificate_price: draft.certificatePrice.trim() || null,
       prosthetist: draft.prosthetist || null,
     })
-    delete clientTsrDrafts[group.clientTsrId]
+    if (JSON.stringify(clientTsrDrafts[group.clientTsrId] ?? draft) === draftSnapshot) {
+      delete clientTsrDrafts[group.clientTsrId]
+    }
     if (draft.checkDate && activeClientListMode.value === 'unpunched') {
       activeClientListMode.value = 'active'
       selectedClientIds.value = []
       currentPage.value = 1
-      successMessage.value = 'Данные ТСР сохранены. Пациент перемещён в «В работе» после пробития сертификата.'
-    } else {
+      if (!automatic) successMessage.value = 'Данные ТСР сохранены. Пациент перемещён в «В работе» после пробития сертификата.'
+    } else if (!automatic) {
       successMessage.value = 'Данные ТСР сохранены.'
     }
     await refreshSelectedClient(clientId, false)
     await loadClients()
+    clientAutosaveState.value = clientTsrDrafts[group.clientTsrId] ? 'pending' : 'saved'
+    if (clientTsrDrafts[group.clientTsrId]) queueClientTsrAutosave(group.clientTsrId)
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
-  } finally {
-    isSaving.value = false
+    clientAutosaveState.value = 'error'
   }
 }
 
@@ -3288,40 +3622,79 @@ function handleModuleProsthetistStateChange(group: ClientTsrGroup, moduleItem: M
   )
 }
 
-async function saveClientModule() {
-  resetMessages()
+function queueComponentAutosave() {
+  window.clearTimeout(componentAutosaveTimeout)
+  if (!componentFormExpanded.value || !isClientCardOpen.value || activeTab.value !== 'modules') return
+  if (componentEntryMode.value === 'warehouse') return // warehouse stock movements need explicit selection
+  if (!moduleForm.tsr_id || !moduleForm.client_tsr_id || !moduleForm.module_name_index.trim() || !moduleForm.supplier.trim()) return
+  componentAutosaveStatus.value = 'pending'
+  componentAutosaveTimeout = window.setTimeout(() => { void saveClientModule() }, 850)
+}
 
-  if (!validateModuleForm()) {
+async function saveClientModule() {
+  if (componentAutosavePromise) {
+    await componentAutosavePromise
+    if (getComponentDraftState() !== lastSavedComponentState.value) queueComponentAutosave()
     return
   }
-
-  isSaving.value = true
-
-  try {
-    const clientId = await ensureClientExists()
-
-    if (!clientId) {
-      return
+  if (isSaving.value) { queueComponentAutosave(); return }
+  if (!validateModuleForm()) return
+  const snapshot = getComponentDraftState()
+  if (snapshot === lastSavedComponentState.value) return
+  const request = (async () => {
+    isSaving.value = true
+    componentAutosaveStatus.value = 'saving'
+    try {
+      const clientId = await ensureClientExists()
+      if (!clientId) return
+      const payload = buildModulePayload(clientId)
+      const saved = editingModuleId.value
+        ? await updateModule(editingModuleId.value, payload as ModuleUpdatePayload)
+        : await createModule(payload)
+      // Переходим в режим редактирования созданной записи: следующий autosave
+      // обновит её, а не создаст дубликат.
+      editingModuleId.value = String(saved.module_id)
+      await refreshSelectedClient(clientId, false, true)
+      await loadClientTabData('modules', true)
+      await loadClients()
+      if (getComponentDraftState() === snapshot) {
+        rememberComponentDraftState()
+        componentAutosaveStatus.value = 'saved'
+      } else {
+        queueComponentAutosave()
+      }
+    } catch (caughtError) {
+      error.value = getApiErrorMessage(caughtError)
+      componentAutosaveStatus.value = 'error'
+    } finally {
+      isSaving.value = false
     }
+  })()
+  componentAutosavePromise = request
+  try { await request } finally { if (componentAutosavePromise === request) componentAutosavePromise = null }
+}
 
-    const payload = buildModulePayload(clientId)
+async function closeComponentEditor() {
+  window.clearTimeout(componentAutosaveTimeout)
+  await flushComponentAutosave()
+  if (isSaving.value || componentAutosaveStatus.value === 'error') return
+  if (componentEntryMode.value !== 'warehouse'
+    && getComponentDraftState() !== lastSavedComponentState.value) {
+    error.value = 'Заполните ТСР, название и поставщика, чтобы изменения сохранились автоматически. Или сбросьте незавершённый черновик.'
+    return
+  }
+  componentFormExpanded.value = false
+}
 
-    if (editingModuleId.value) {
-      await updateModule(editingModuleId.value, payload as ModuleUpdatePayload)
-      successMessage.value = 'Комплектующая обновлена'
-    } else {
-      await createModule(payload)
-      successMessage.value = 'Комплектующая создана и привязана к пациенту'
-    }
-
-    resetModuleForm()
-    await refreshSelectedClient(clientId, false)
-    await loadClientTabData('modules', true)
-    await loadClients()
-  } catch (caughtError) {
-    error.value = getApiErrorMessage(caughtError)
-  } finally {
-    isSaving.value = false
+async function flushComponentAutosave() {
+  window.clearTimeout(componentAutosaveTimeout)
+  if (componentAutosavePromise) await componentAutosavePromise
+  if (componentFormExpanded.value && componentEntryMode.value !== 'warehouse'
+    && getComponentDraftState() !== lastSavedComponentState.value
+    && moduleForm.tsr_id && moduleForm.client_tsr_id
+    && moduleForm.module_name_index.trim() && moduleForm.supplier.trim()) {
+    await saveClientModule()
+    if (componentAutosavePromise) await componentAutosavePromise
   }
 }
 
@@ -3331,9 +3704,7 @@ async function openComponentFromMain(moduleItem: ModuleItem) {
   }
   const current = clientModules.value.find((item) => String(item.module_id) === String(moduleItem.module_id)) ?? moduleItem
   fillModuleForm(current)
-  requestAnimationFrame(() => {
-    document.getElementById('client-component-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  })
+
 }
 
 async function openNewComponentFromTsr(group: ClientTsrGroup) {
@@ -3342,9 +3713,7 @@ async function openNewComponentFromTsr(group: ClientTsrGroup) {
   }
   const refreshedGroup = clientTsrGroups.value.find((item) => item.clientTsrId === group.clientTsrId) ?? group
   prepareNewComponentForTsr(refreshedGroup)
-  requestAnimationFrame(() => {
-    document.getElementById('client-component-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  })
+
 }
 
 async function removeClientModule(moduleItem: ModuleItem) {
@@ -3443,18 +3812,26 @@ async function generateContract() {
   const prefix = contractNumberPrefix.value.trim().toUpperCase()
   const suffix = contractNumberSuffix.value.trim()
 
-  if (!contractType.value.trim() || !prefix || !suffix || !contractDate.value.trim()) {
-    error.value = 'Для формирования договора выбери тип, буквенную часть номера и дату.'
+  const isDmkFullPackage = contractType.value === 'dmk_full_package'
+  if (!contractType.value.trim() || !suffix || !contractDate.value.trim() || (!isDmkFullPackage && !prefix)) {
+    error.value = isDmkFullPackage
+      ? 'Для договора ИП ДМК введите номер и дату документа.'
+      : 'Для формирования договора выбери тип, буквенную часть номера и дату.'
     return
   }
 
-  if (!/^\d+$/.test(suffix)) {
+  if (!isDmkFullPackage && !/^\d+$/.test(suffix)) {
     error.value = 'Числовая часть номера договора должна содержать только цифры.'
     return
   }
 
+  if (contractType.value === 'dmk_full_package' && !dmkDiagnosis.value.trim()) {
+    error.value = 'Для полного комплекта ИП ДМК вручную укажите диагноз.'
+    return
+  }
+
   if (showExtendedContractDates.value && selectedContractClientTsrIds.value.length === 0) {
-    error.value = 'Для договора ООО выберите хотя бы один ТСР пациента.'
+    error.value = 'Для договора выберите хотя бы один ТСР пациента.'
     return
   }
 
@@ -3477,8 +3854,9 @@ async function generateContract() {
 
     const payload: ContractGenerationPayload = {
       template_type: contractType.value.trim(),
-      document_number: `${prefix}/${suffix}`,
-      document_number_prefix: prefix,
+      ...(contractType.value === 'dmk_full_package' ? { diagnosis: dmkDiagnosis.value.trim() } : {}),
+      document_number: isDmkFullPackage ? suffix : `${prefix}/${suffix}`,
+      document_number_prefix: isDmkFullPackage ? '' : prefix,
       document_number_suffix: suffix,
       document_date: formatContractDate(contractDate.value.trim()),
       plan_date: showExtendedContractDates.value && contractPlanDate.value.trim()
@@ -3499,6 +3877,7 @@ async function generateContract() {
 
     await generateClientContract(clientId, payload)
     successMessage.value = 'Договор сформирован'
+    if (contractType.value === 'dmk_full_package') dmkDiagnosis.value = ''
     await loadClientTabData('documents', true)
     await refreshSelectedClient(clientId, false)
     await loadClients()
@@ -3510,39 +3889,30 @@ async function generateContract() {
 }
 
 async function generateMtzFromClientCard() {
-  resetMessages()
-
-  const requiredValues = [
-    mtzType.value,
-    mtzNumber.value,
-    mtzDate.value,
-    mtzDisabilityGroupReason.value,
-    mtzCertificateReference.value,
-    mtzDiagnosis.value,
-    mtzAmputationLevel.value,
-    mtzWeightKg.value,
-  ]
-  if (requiredValues.some((value) => !String(value).trim())) {
-    error.value = 'Для МТЗ заполните номер, дату, группу/причину инвалидности, справку, диагноз, уровень ампутации и вес.'
+  error.value = ''
+  if (!mtzDisabilityGroupReason.value || !mtzDiagnoses.value.length || !mtzAmputationLevel.value.trim() || !mtzWeightKg.value.trim()) {
+    error.value = 'Для МТЗ выберите причину инвалидности, диагноз, уровень ампутации и вес.'
     return
   }
-
+  if (!mseDraft.value.trim()) {
+    error.value = 'Заполните справку МСЭ в разделе Личные документы.'
+    return
+  }
   isSaving.value = true
   try {
     const clientId = await ensureClientExists()
     if (!clientId) return
-
+    await saveMseReference()
+    if (mseAutosaveStatus.value === 'error') throw new Error('Не удалось сохранить справку МСЭ')
     await generateClientMtz(clientId, {
       template_type: mtzType.value,
-      mtz_number: mtzNumber.value.trim(),
-      document_date: mtzDate.value,
-      disability_group_reason: mtzDisabilityGroupReason.value.trim(),
-      certificate_reference: mtzCertificateReference.value.trim(),
-      diagnosis: mtzDiagnosis.value.trim(),
+      disability_group_reason: mtzDisabilityGroupReason.value,
+      diagnoses: mtzDiagnoses.value,
       amputation_level: mtzAmputationLevel.value.trim(),
+      stump_condition: mtzStumpCondition.value,
+      activity_level: mtzActivityLevel.value,
       weight_kg: mtzWeightKg.value.trim(),
     })
-
     await loadClientTabData('documents', true)
     successMessage.value = 'МТЗ сформировано. Скачать его можно в списке документов ниже.'
     rememberDetailTabState('documents')
@@ -3603,6 +3973,39 @@ watch(isClientCardOpen, (isOpen) => {
   setBodyModalLock(isOpen)
 })
 
+watch(form, () => {
+  if (!isClientCardOpen.value) return
+  if (JSON.stringify(form) === lastSavedClientState.value) return
+  queueClientAutosave()
+}, { deep: true })
+
+watch(passportForm, () => {
+  if (getPassportDraftState() !== lastSavedIdentityStates.passport) queuePassportAutosave()
+}, { deep: true })
+watch(snilsForm, () => {
+  if (getSnilsDraftState() !== lastSavedIdentityStates.snils) queueSnilsAutosave()
+}, { deep: true })
+watch(mseDraft, () => { if (mseDraft.value !== mseLastSaved.value) queueMseAutosave() })
+watch(moduleForm, () => {
+  if (getComponentDraftState() !== lastSavedComponentState.value) queueComponentAutosave()
+}, { deep: true })
+
+watch(unpunchedCustomFields, (fields) => {
+  unpunchedClientColumns.syncKeys([
+    ...UNPUNCHED_BASE_COLUMN_KEYS,
+    ...fields.map((field) => `precustom:${field.field_id}`),
+  ])
+}, { deep: true, immediate: true })
+
+watch(clientCompanyStorageKey, (key) => {
+  selectedClientCompanies.value = readCompanySelection(key)
+}, { immediate: true })
+watch(selectedClientCompanies, (companies) => {
+  writeCompanySelection(clientCompanyStorageKey.value, companies)
+  currentPage.value = 1
+  // Bulk actions must not include clients hidden by a new organization filter.
+  selectedClientIds.value = []
+})
 watch([query, pageLimit, clientColumnFilters, unpunchedColumnFilters], () => { currentPage.value = 1 }, { deep: true })
 
 watch(
@@ -3635,35 +4038,24 @@ async function loadMtzTemplateOptions() {
   }
 }
 
-function handleBeforeUnload(event: BeforeUnloadEvent) {
-  if (!hasUnsavedClientChanges.value) {
-    return
-  }
-
-  event.preventDefault()
-  event.returnValue = ''
-}
-
 onBeforeRouteLeave(async () => {
-  if (!hasUnsavedClientChanges.value) {
-    return true
-  }
-
-  return confirmAction({
-    header: 'Есть несохранённые изменения',
-    message: `Покинуть страницу без сохранения изменений в разделах: ${dirtyClientTabs.value.map((tab) => CLIENT_TAB_LABELS[tab]).join(', ')}?`,
-    acceptLabel: 'Покинуть без сохранения',
-  })
+  await flushAllClientAutosaves()
+  return true
 })
 
 onMounted(async () => {
-  window.addEventListener('beforeunload', handleBeforeUnload)
   await Promise.all([loadClients(), loadReferences(), loadContractTemplates(), loadMtzTemplateOptions(), loadUnpunchedFields()])
   await openClientFromRoute(route.query.client_id)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.clearTimeout(passportAutosaveTimeout)
+  window.clearTimeout(snilsAutosaveTimeout)
+  window.clearTimeout(mseAutosaveTimeout)
+  window.clearTimeout(componentAutosaveTimeout)
+  window.clearTimeout(clientAutosaveTimeout)
+  clientTsrAutosaveTimeouts.forEach((timeout) => window.clearTimeout(timeout))
+  clientTsrAutosaveTimeouts.clear()
   setBodyModalLock(false)
 })
 </script>
@@ -3700,6 +4092,21 @@ onBeforeUnmount(() => {
         Выполненные
       </button>
     </div>
+    <div class="client-organization-legend" aria-label="Цветовая маркировка организаций">
+      <span class="client-org-legend-item client-org-smart"><i aria-hidden="true"></i>ООО Смарт Движение</span>
+      <span class="client-org-legend-item client-org-zet"><i aria-hidden="true"></i>ООО ПрОП ДВИЖЕНИЕ ЗЕТ</span>
+      <span class="client-org-legend-item client-org-dmk"><i aria-hidden="true"></i>ИП ДМК</span>
+      <span class="muted">Колонки можно перетаскивать мышью; порядок сохраняется автоматически.</span>
+    </div>
+
+    <section class="compact-company-filter" aria-label="Фильтр пациентов по организациям">
+      <strong>Организации</strong>
+      <label v-for="company in COMPANY_OPTIONS" :key="company.value" class="compact-company-option">
+        <input type="checkbox" :checked="selectedClientCompanies.includes(company.value)" @change="toggleClientCompany(company.value)" />
+        <span :class="getClientCompanyColorClass(company.value)">{{ company.label }}</span>
+      </label>
+      <button class="ghost-button" type="button" @click="selectedClientCompanies = [...ALL_COMPANIES]">Все</button>
+    </section>
 
     <form class="toolbar-form clients-toolbar" @submit.prevent="applyClientFilters">
       <div class="toolbar-search-wrap">
@@ -3747,7 +4154,6 @@ onBeforeUnmount(() => {
     </details>
 
     <p v-if="error && !isClientCardOpen" class="form-error">{{ error }}</p>
-    <p v-if="successMessage && !isClientCardOpen" class="form-success">{{ successMessage }}</p>
 
     <div v-if="selectedClientIds.length" class="bulk-action-bar">
       <strong>Выбрано пациентов: {{ selectedClientIds.length }}</strong>
@@ -3760,45 +4166,72 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div class="table-count-indicator" role="status">Пациентов: <strong>{{ filteredClients.length }}</strong> из {{ clients.length }} · на странице: {{ pagedClients.length }} · выбрано: <strong>{{ selectedClients.length }}</strong></div>
+
     <div v-if="activeClientListMode === 'unpunched'" class="table-wrap desktop-entity-table unpunched-patients-table">
-      <table>
+      <table data-resize-id="clients-main">
         <thead>
           <tr>
             <th class="selection-cell"><input type="checkbox" aria-label="Выбрать всех пациентов на странице" :checked="allPagedClientsSelected" @change="handleToggleAllClients" /></th>
-            <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="clientSortKey" :sort-direction="clientSortDirection" @sort="sortClients" />
-            <SortableFilterHeader label="Пациент" column-key="patient" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.patient" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.patient = $event" />
-            <SortableFilterHeader label="Агент" column-key="agent" filter-kind="select" :options="clientAgentFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.agent" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.agent = $event" />
-            <SortableFilterHeader label="Статус" column-key="precheck_status" filter-kind="select" :options="PRECHECK_STATUS_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.precheck_status" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.precheck_status = $event" />
-            <SortableFilterHeader label="Этап" column-key="precheck_stage" filter-kind="select" :options="PRECHECK_STAGE_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.precheck_stage" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.precheck_stage = $event" />
-            <SortableFilterHeader label="Вид протеза" column-key="prosthesis" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="unpunchedColumnFilters.prosthesis" @sort="sortClients" @update:filter-value="unpunchedColumnFilters.prosthesis = $event" />
             <SortableFilterHeader
-              v-for="field in unpunchedCustomFields"
-              :key="field.field_id"
-              :label="field.field_name"
-              :column-key="`precustom:${field.field_id}`"
-              :filter-kind="field.field_type === 'number' ? 'number' : 'text'"
+              v-for="columnKey in unpunchedClientColumnOrder"
+              :key="columnKey"
+              :label="getUnpunchedColumnDisplayLabel(columnKey)"
+              :column-key="columnKey"
+              :filterable="columnKey !== 'number'"
+              :filter-kind="getUnpunchedColumnKind(columnKey)"
+              :options="getUnpunchedColumnOptions(columnKey)"
               :sort-key="clientSortKey"
               :sort-direction="clientSortDirection"
-              :filter-value="unpunchedColumnFilters[field.field_type === 'number' ? `precustom:number:${field.field_id}` : `precustom:${field.field_id}`] || ''"
+              :filter-value="unpunchedColumnFilters[getUnpunchedCustomFilterKey(columnKey)] || ''"
+              reorderable
+              :dragging="unpunchedDraggingColumn === columnKey"
               @sort="sortClients"
-              @update:filter-value="unpunchedColumnFilters[field.field_type === 'number' ? `precustom:number:${field.field_id}` : `precustom:${field.field_id}`] = $event"
+              @update:filter-value="unpunchedColumnFilters[getUnpunchedCustomFilterKey(columnKey)] = $event"
+              @column-drag-start="unpunchedClientColumns.startDrag(columnKey, $event)"
+              @column-drop="unpunchedClientColumns.dropOn(columnKey, $event)"
+              @column-drag-end="unpunchedClientColumns.endDrag()"
             />
             <th aria-label="Действия"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="isLoading" class="no-row-action"><td :colspan="8 + unpunchedCustomFields.length">Загружаем пациентов...</td></tr>
-          <tr v-for="(client, index) in pagedClients" v-else :key="String(client.client_id ?? client.external_id)" :class="{ selected: isClientSelected(client) || (selectedClient && getClientId(selectedClient) === getClientId(client)) }" tabindex="0" @click="selectClient(client)" @keydown.enter="selectClient(client)">
+          <tr v-if="isLoading" class="no-row-action"><td :colspan="unpunchedClientColumnOrder.length + 2">Загружаем пациентов...</td></tr>
+          <tr
+            v-for="(client, index) in pagedClients"
+            v-else
+            :key="String(client.client_id ?? client.external_id)"
+            :class="[{ selected: isClientSelected(client) || (selectedClient && getClientId(selectedClient) === getClientId(client)) }, getClientOrganizationClass(client)]"
+            tabindex="0"
+            @click="selectClient(client)"
+            @keydown.enter="selectClient(client)"
+          >
             <td class="selection-cell" @click.stop><input type="checkbox" :aria-label="`Выбрать пациента: ${getClientName(client)}`" :checked="isClientSelected(client)" @change="handleToggleClient(client, $event)" /></td>
-            <td>{{ currentSkip + index + 1 }}</td>
-            <td class="entity-cell"><div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div></td>
-            <td>{{ getAgentLabel(client.agent_id) }}</td>
-            <td @click.stop><select class="table-select precheck-table-select" :value="client.precheck_status || 'Работа с документами'" @change="updatePrecheckField(client, 'precheck_status', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
-            <td @click.stop><select class="table-select precheck-table-select" :value="client.precheck_stage || 'Справка об инвалидности'" @change="updatePrecheckField(client, 'precheck_stage', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STAGE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
-            <td class="table-tsr">{{ getClientTsrLabel(client) }}</td>
-            <td v-for="field in unpunchedCustomFields" :key="field.field_id" @click.stop>
-              <input class="table-input precheck-custom-input" :type="field.field_type === 'number' ? 'number' : 'text'" :value="client.unpunched_custom_values?.[field.field_id] ?? ''" @change="updateUnpunchedCustomValue(client, field, ($event.target as HTMLInputElement).value)" />
-            </td>
+            <template v-for="columnKey in unpunchedClientColumnOrder" :key="`${getClientId(client)}-${columnKey}`">
+              <td v-if="columnKey === 'number'">{{ currentSkip + index + 1 }}</td>
+              <td v-else-if="columnKey === 'patient'" class="entity-cell"><div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div></td>
+              <td v-else-if="columnKey === 'agent'">{{ getAgentLabel(client.agent_id) }}</td>
+              <td v-else-if="columnKey === 'precheck_status'" @click.stop><select class="table-select precheck-table-select" :value="client.precheck_status || 'Работа с документами'" @change="updatePrecheckField(client, 'precheck_status', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STATUS_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
+              <td v-else-if="columnKey === 'precheck_stage'" @click.stop><select class="table-select precheck-table-select" :value="client.precheck_stage || 'Справка об инвалидности'" @change="updatePrecheckField(client, 'precheck_stage', ($event.target as HTMLSelectElement).value)"><option v-for="option in PRECHECK_STAGE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></td>
+              <td v-else-if="columnKey === 'prosthesis'" class="table-tsr compact-tsr-cell" @click.stop="toggleClientTsrDetails(client)">
+                <button class="compact-tsr-toggle" type="button" @keydown.stop :aria-expanded="isClientTsrExpanded(client)" :aria-label="`Вид протеза: ${getClientName(client)}. ${isClientTsrExpanded(client) ? 'Свернуть' : 'Раскрыть'} описание`">
+                  <span class="tsr-code-list">
+                    <span v-for="code in getClientTsrCodeLabels(client)" :key="code" class="tsr-code-chip">{{ code }}</span>
+                    <span v-if="!getClientTsrCodeLabels(client).length">—</span>
+                  </span>
+                  <span class="tsr-expand-icon" aria-hidden="true">{{ isClientTsrExpanded(client) ? '−' : '+' }}</span>
+                </button>
+                <div v-if="isClientTsrExpanded(client)" class="tsr-full-details">{{ getClientTsrLabel(client) }}</div>
+              </td>
+              <td v-else @click.stop>
+                <input
+                  class="table-input precheck-custom-input"
+                  :type="getUnpunchedColumnFilterKind(columnKey) === 'number' ? 'number' : 'text'"
+                  :value="getUnpunchedCustomValue(client, columnKey)"
+                  @change="updateUnpunchedCustomColumnValue(client, columnKey, ($event.target as HTMLInputElement).value)"
+                />
+              </td>
+            </template>
             <td class="table-actions-cell"><ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" /></td>
           </tr>
         </tbody>
@@ -3806,131 +4239,99 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="!isLoading && activeClientListMode === 'unpunched'" class="mobile-entity-list">
-      <article v-for="client in pagedClients" :key="String(client.client_id ?? client.external_id)" class="mobile-entity-card" @click="selectClient(client)">
+      <article v-for="client in pagedClients" :key="String(client.client_id ?? client.external_id)" class="mobile-entity-card" :class="getClientOrganizationClass(client)" @click="selectClient(client)">
         <div class="mobile-entity-card-header"><div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div><ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" /></div>
         <div class="mobile-entity-card-details"><span>Агент <strong>{{ getAgentLabel(client.agent_id) }}</strong></span><span>Статус <strong>{{ client.precheck_status || 'Работа с документами' }}</strong></span><span>Этап <strong>{{ client.precheck_stage || 'Справка об инвалидности' }}</strong></span><span>Вид протеза <strong>{{ getClientTsrLabel(client) }}</strong></span><span v-for="field in unpunchedCustomFields" :key="field.field_id">{{ field.field_name }} <strong>{{ client.unpunched_custom_values?.[field.field_id] ?? '—' }}</strong></span></div>
       </article>
     </div>
 
     <div v-if="activeClientListMode !== 'unpunched'" class="table-wrap desktop-entity-table">
-      <table>
+      <table data-resize-id="clients-unpunched">
         <thead>
           <tr>
             <th class="selection-cell">
-              <input
-                type="checkbox"
-                aria-label="Выбрать всех пациентов на странице"
-                :checked="allPagedClientsSelected"
-                @change="handleToggleAllClients"
-              />
+              <input type="checkbox" aria-label="Выбрать всех пациентов на странице" :checked="allPagedClientsSelected" @change="handleToggleAllClients" />
             </th>
-            <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="clientSortKey" :sort-direction="clientSortDirection" @sort="sortClients" />
-            <SortableFilterHeader label="Пациент" column-key="patient" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.patient" @sort="sortClients" @update:filter-value="clientColumnFilters.patient = $event" />
-            <SortableFilterHeader class="client-col-prosthetist" label="Протезист" column-key="prosthetist" placeholder="Имя протезиста" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.prosthetist" @sort="sortClients" @update:filter-value="clientColumnFilters.prosthetist = $event" />
-            <SortableFilterHeader label="ТСР" column-key="tsr" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.tsr" @sort="sortClients" @update:filter-value="clientColumnFilters.tsr = $event" />
-            <SortableFilterHeader class="client-col-check-date" label="Дата пробития" column-key="check_date" filter-kind="date" placeholder="дд.мм.гггг или от..до" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.check_date" @sort="sortClients" @update:filter-value="clientColumnFilters.check_date = $event" />
-            <SortableFilterHeader label="Сертификат" column-key="certificate" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.certificate" @sort="sortClients" @update:filter-value="clientColumnFilters.certificate = $event" />
-            <SortableFilterHeader label="Статус" column-key="status" filter-kind="select" :options="clientStatusFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.status" @sort="sortClients" @update:filter-value="clientColumnFilters.status = $event" />
-            <SortableFilterHeader label="Этап" column-key="stage" filter-kind="select" :options="clientStageFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.stage" @sort="sortClients" @update:filter-value="clientColumnFilters.stage = $event" />
-            <SortableFilterHeader class="client-col-document-status" label="Статус договоров" column-key="contract_status" filter-kind="select" :options="DOCUMENT_STATUS_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.contract_status" @sort="sortClients" @update:filter-value="clientColumnFilters.contract_status = $event" />
-            <SortableFilterHeader class="client-col-document-status" label="Статус актов" column-key="act_status" filter-kind="select" :options="DOCUMENT_STATUS_OPTIONS" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.act_status" @sort="sortClients" @update:filter-value="clientColumnFilters.act_status = $event" />
-            <SortableFilterHeader label="Агент" column-key="agent" filter-kind="select" :options="clientAgentFilterOptions" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.agent" @sort="sortClients" @update:filter-value="clientColumnFilters.agent = $event" />
-            <SortableFilterHeader label="Повторное протезирование" column-key="repeat_visit" filter-kind="date" placeholder="дд.мм.гггг или от..до" :sort-key="clientSortKey" :sort-direction="clientSortDirection" :filter-value="clientColumnFilters.repeat_visit" @sort="sortClients" @update:filter-value="clientColumnFilters.repeat_visit = $event" />
+            <SortableFilterHeader
+              v-for="columnKey in standardClientColumnOrder"
+              :key="columnKey"
+              :class="getStandardClientColumnClass(columnKey)"
+              :label="getStandardClientColumnLabel(columnKey)"
+              :column-key="columnKey"
+              :filterable="columnKey !== 'number'"
+              :filter-kind="getStandardClientColumnKind(columnKey)"
+              :options="getStandardClientColumnOptions(columnKey)"
+              :placeholder="getStandardClientColumnPlaceholder(columnKey)"
+              :sort-key="clientSortKey"
+              :sort-direction="clientSortDirection"
+              :filter-value="clientColumnFilters[columnKey] || ''"
+              reorderable
+              :dragging="standardDraggingColumn === columnKey"
+              @sort="sortClients"
+              @update:filter-value="clientColumnFilters[columnKey] = $event"
+              @column-drag-start="standardClientColumns.startDrag(columnKey, $event)"
+              @column-drop="standardClientColumns.dropOn(columnKey, $event)"
+              @column-drag-end="standardClientColumns.endDrag()"
+            />
             <th aria-label="Действия"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="isLoading" class="no-row-action">
-            <td colspan="14">Загружаем пациентов...</td>
-          </tr>
+          <tr v-if="isLoading" class="no-row-action"><td :colspan="standardClientColumnOrder.length + 2">Загружаем пациентов...</td></tr>
           <tr
             v-for="(client, index) in pagedClients"
             v-else
             :key="String(client.client_id ?? client.external_id)"
-            :class="{ selected: isClientSelected(client) || (selectedClient && getClientId(selectedClient) === getClientId(client)) }"
+            :class="[{ selected: isClientSelected(client) || (selectedClient && getClientId(selectedClient) === getClientId(client)) }, getClientOrganizationClass(client)]"
             tabindex="0"
             @click="selectClient(client)"
             @keydown.enter="selectClient(client)"
           >
             <td class="selection-cell" @click.stop>
-              <input
-                type="checkbox"
-                :aria-label="`Выбрать пациента: ${getClientName(client)}`"
-                :checked="isClientSelected(client)"
-                @change="handleToggleClient(client, $event)"
-              />
+              <input type="checkbox" :aria-label="`Выбрать пациента: ${getClientName(client)}`" :checked="isClientSelected(client)" @change="handleToggleClient(client, $event)" />
             </td>
-            <td>{{ currentSkip + index + 1 }}</td>
-            <td class="entity-cell">
-              <div class="entity-primary">
-                <span class="entity-avatar">{{ getClientInitials(client) }}</span>
-                <span class="entity-copy">
-                  <strong>{{ getClientName(client) }}</strong>
-                  <span>{{ getClientPrimaryPhone(client) }}</span>
-                </span>
-              </div>
-            </td>
-            <td class="client-col-prosthetist">{{ getClientProsthetistLabel(client) }}</td>
-            <td class="table-tsr">{{ getClientTsrLabel(client) }}</td>
-            <td class="client-col-check-date">{{ getClientDate(client) }}</td>
-            <td class="table-money">{{ formatMoney(getClientCertificateTotal(client)) }}</td>
-            <td><StatusPill :label="getClientStatusLabel(client)" kind="status" /></td>
-            <td><StatusPill :label="getClientStageLabel(client)" kind="stage" /></td>
-            <td class="client-col-document-status" @click.stop>
-              <div v-if="getClientContracts(client).length" class="client-document-status-stack">
-                <label v-for="document in getClientContracts(client)" :key="`contract-status-${document.document_id}`" class="client-document-status-item">
-                  <span>{{ getContractDisplayName(document) }}</span>
-                  <select class="client-document-status-select" :value="document.contract_status ?? ''" :disabled="isSaving || isInlineDocumentStatusSaving(document, 'contract_status')" @click.stop @keydown.stop @change="updateClientDocumentStatus(client, document, 'contract_status', $event)">
-                    <option value="" disabled>Не выбран</option>
-                    <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`contract-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option>
-                  </select>
-                </label>
-              </div>
-              <select
-                v-else
-                class="client-document-status-select"
-                :class="{ 'client-document-status-select--missing': !client.contract_status }"
-                :value="client.contract_status ?? ''"
-                :disabled="isSaving || isInlineClientStatusSaving(client, 'contract_status')"
-                :aria-label="`Статус договоров: ${getClientName(client)}`"
-                @click.stop
-                @keydown.stop
-                @change="updateClientFallbackDocumentStatus(client, 'contract_status', $event)"
-              >
-                <option value="" disabled>Договоров нет</option>
-                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`fallback-contract-${option.value}`" :value="option.value">{{ option.label }}</option>
-              </select>
-            </td>
-            <td class="client-col-document-status" @click.stop>
-              <div v-if="getClientContracts(client).length" class="client-document-status-stack">
-                <label v-for="document in getClientContracts(client)" :key="`act-status-${document.document_id}`" class="client-document-status-item">
-                  <span>{{ getContractDisplayName(document) }}</span>
-                  <select class="client-document-status-select" :value="document.act_status ?? ''" :disabled="isSaving || isInlineDocumentStatusSaving(document, 'act_status')" @click.stop @keydown.stop @change="updateClientDocumentStatus(client, document, 'act_status', $event)">
-                    <option value="" disabled>Не выбран</option>
-                    <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`act-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option>
-                  </select>
-                </label>
-              </div>
-              <select
-                v-else
-                class="client-document-status-select"
-                :class="{ 'client-document-status-select--missing': !client.act_status }"
-                :value="client.act_status ?? ''"
-                :disabled="isSaving || isInlineClientStatusSaving(client, 'act_status')"
-                :aria-label="`Статус актов: ${getClientName(client)}`"
-                @click.stop
-                @keydown.stop
-                @change="updateClientFallbackDocumentStatus(client, 'act_status', $event)"
-              >
-                <option value="" disabled>Договоров нет</option>
-                <option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`fallback-act-${option.value}`" :value="option.value">{{ option.label }}</option>
-              </select>
-            </td>
-            <td>{{ getAgentLabel(client.agent_id) }}</td>
-            <td>{{ getClientDeadline(client) }}</td>
-            <td class="table-actions-cell">
-              <ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" />
-            </td>
+            <template v-for="columnKey in standardClientColumnOrder" :key="`${getClientId(client)}-${columnKey}`">
+              <td v-if="columnKey === 'number'">{{ currentSkip + index + 1 }}</td>
+              <td v-else-if="columnKey === 'patient'" class="entity-cell">
+                <div class="entity-primary"><span class="entity-avatar">{{ getClientInitials(client) }}</span><span class="entity-copy"><strong>{{ getClientName(client) }}</strong><span>{{ getClientPrimaryPhone(client) }}</span></span></div>
+              </td>
+              <td v-else-if="columnKey === 'prosthetist'" class="client-col-prosthetist">{{ getClientProsthetistLabel(client) }}</td>
+              <td v-else-if="columnKey === 'tsr'" class="table-tsr compact-tsr-cell" @click.stop="toggleClientTsrDetails(client)">
+                <button class="compact-tsr-toggle" type="button" @keydown.stop :aria-expanded="isClientTsrExpanded(client)">
+                  <span class="tsr-code-list">
+                    <span v-for="code in getClientTsrCodeLabels(client)" :key="code" class="tsr-code-chip">{{ code }}</span>
+                    <span v-if="!getClientTsrCodeLabels(client).length">—</span>
+                  </span>
+                  <span class="tsr-expand-icon" aria-hidden="true">{{ isClientTsrExpanded(client) ? '−' : '+' }}</span>
+                </button>
+                <div v-if="isClientTsrExpanded(client)" class="tsr-full-details">{{ getClientTsrLabel(client) }}</div>
+              </td>
+              <td v-else-if="columnKey === 'check_date'" class="client-col-check-date">{{ getClientDate(client) }}</td>
+              <td v-else-if="columnKey === 'certificate'" class="table-money">{{ formatMoney(getClientCertificateTotal(client)) }}</td>
+              <td v-else-if="columnKey === 'status'"><StatusPill :label="getClientStatusLabel(client)" kind="status" /></td>
+              <td v-else-if="columnKey === 'stage'"><StatusPill :label="getClientStageLabel(client)" kind="stage" /></td>
+              <td v-else-if="columnKey === 'contract_status'" class="client-col-document-status" @click.stop>
+                <div v-if="getClientContracts(client).length" class="client-document-status-stack">
+                  <label v-for="document in getClientContracts(client)" :key="`contract-status-${document.document_id}`" class="client-document-status-item">
+                    <span>{{ getContractDisplayName(document) }}</span>
+                    <select class="client-document-status-select" :value="document.contract_status ?? ''" :disabled="isSaving || isInlineDocumentStatusSaving(document, 'contract_status')" @click.stop @keydown.stop @change="updateClientDocumentStatus(client, document, 'contract_status', $event)"><option value="" disabled>Не выбран</option><option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`contract-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option></select>
+                  </label>
+                </div>
+                <select v-else class="client-document-status-select" :class="{ 'client-document-status-select--missing': !client.contract_status }" :value="client.contract_status ?? ''" :disabled="isSaving || isInlineClientStatusSaving(client, 'contract_status')" :aria-label="`Статус договоров: ${getClientName(client)}`" @click.stop @keydown.stop @change="updateClientFallbackDocumentStatus(client, 'contract_status', $event)"><option value="" disabled>Договоров нет</option><option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`fallback-contract-${option.value}`" :value="option.value">{{ option.label }}</option></select>
+              </td>
+              <td v-else-if="columnKey === 'act_status'" class="client-col-document-status" @click.stop>
+                <div v-if="getClientContracts(client).length" class="client-document-status-stack">
+                  <label v-for="document in getClientContracts(client)" :key="`act-status-${document.document_id}`" class="client-document-status-item">
+                    <span>{{ getContractDisplayName(document) }}</span>
+                    <select class="client-document-status-select" :value="document.act_status ?? ''" :disabled="isSaving || isInlineDocumentStatusSaving(document, 'act_status')" @click.stop @keydown.stop @change="updateClientDocumentStatus(client, document, 'act_status', $event)"><option value="" disabled>Не выбран</option><option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`act-${document.document_id}-${option.value}`" :value="option.value">{{ option.label }}</option></select>
+                  </label>
+                </div>
+                <select v-else class="client-document-status-select" :class="{ 'client-document-status-select--missing': !client.act_status }" :value="client.act_status ?? ''" :disabled="isSaving || isInlineClientStatusSaving(client, 'act_status')" :aria-label="`Статус актов: ${getClientName(client)}`" @click.stop @keydown.stop @change="updateClientFallbackDocumentStatus(client, 'act_status', $event)"><option value="" disabled>Договоров нет</option><option v-for="option in DOCUMENT_STATUS_OPTIONS" :key="`fallback-act-${option.value}`" :value="option.value">{{ option.label }}</option></select>
+              </td>
+              <td v-else-if="columnKey === 'agent'">{{ getAgentLabel(client.agent_id) }}</td>
+              <td v-else-if="columnKey === 'repeat_visit'">{{ getClientDeadline(client) }}</td>
+            </template>
+            <td class="table-actions-cell"><ActionMenu :items="getClientActions(client)" :label="`Действия: ${getClientName(client)}`" /></td>
           </tr>
         </tbody>
       </table>
@@ -3941,6 +4342,7 @@ onBeforeUnmount(() => {
         v-for="client in pagedClients"
         :key="String(client.client_id ?? client.external_id)"
         class="mobile-entity-card"
+        :class="getClientOrganizationClass(client)"
         @click="selectClient(client)"
       >
         <div class="mobile-entity-card-header">
@@ -4071,14 +4473,12 @@ onBeforeUnmount(() => {
 
             <div class="client-modal-content">
               <p v-if="error" id="client-modal-error" class="form-error">{{ error }}</p>
-              <p v-if="successMessage" id="client-modal-success" class="form-success">{{ successMessage }}</p>
 
               <p v-if="!isEditing" class="form-hint">
-                Сначала сохраните основные данные. После создания станут доступны телефоны,
-                документы, комплектующие и история.
+                Заполните фамилию, имя, статус, этап и агента. Карточка создастся автоматически, после чего станут доступны телефоны, документы, комплектующие и история.
               </p>
 
-              <form id="client-main-form" v-if="activeTab === 'main'" class="side-form flat-form" @submit.prevent="saveClient">
+              <form id="client-main-form" v-if="activeTab === 'main'" class="side-form flat-form" @submit.prevent>
           <div class="form-grid">
             <label>
               Фамилия
@@ -4113,15 +4513,6 @@ onBeforeUnmount(() => {
                 </option>
               </select>
             </label>
-            <label>
-              Диагноз
-              <select v-model="form.prosthesis_type">
-                <option value="">Выбери диагноз</option>
-                <option v-for="option in prosthesisOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
           </div>
 
           <div class="form-grid client-main-assignment-grid">
@@ -4136,13 +4527,22 @@ onBeforeUnmount(() => {
             </label>
             <label>
               Организация
-              <select v-model="form.performer_company">
+              <select v-model="form.performer_company" @change="onPerformerCompanyChange">
                 <option value="">Не выбрана</option>
                 <option value="ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»">ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»</option>
                 <option value='ООО "Смарт Движение"'>ООО "Смарт Движение"</option>
+                <option value="ИП ДМК">ИП ДМК</option>
               </select>
             </label>
             <label>
+              НДС, %
+              <input v-model.number="form.vat_percent" type="number" min="0" step="0.1" inputmode="decimal" :required="form.performer_company !== 'ИП ДМК'" />
+            </label>
+            <label v-if="form.performer_company === 'ИП ДМК'">
+              Налогообложение
+              <input v-model="form.tax_percent_override" type="text" inputmode="decimal" placeholder="Ставка, %" />
+            </label>
+            <label v-else>
               Налогообложение
               <select v-model="form.taxation_system">
                 <option value="УСН">6%</option>
@@ -4185,7 +4585,6 @@ onBeforeUnmount(() => {
                     <button class="ghost-button" type="button" :disabled="isSaving" @click="openNewComponentFromTsr(group)">
                       Добавить комплектующую
                     </button>
-                    <button class="secondary-button" type="button" :disabled="isSaving" @click="saveClientTsrDetails(group)">Сохранить</button>
                     <button class="danger-button" type="button" :disabled="isSaving" @click="removeClientTsrLink(group)">Открепить</button>
                   </div>
                 </header>
@@ -4268,7 +4667,7 @@ onBeforeUnmount(() => {
                 <p v-else class="muted">Комплектующие к этому ТСР пока не добавлены.</p>
               </article>
             </div>
-            <p v-else class="muted">Сохрани пациента и прикрепи нужные коды через «Справочник ТСР».</p>
+            <p v-else class="muted">После заполнения обязательных полей пациент сохранится автоматически; затем прикрепите нужные коды через «Справочник ТСР».</p>
           </div>
 
           <label>
@@ -4278,7 +4677,7 @@ onBeforeUnmount(() => {
         </form>
 
         <div v-else-if="activeTab === 'identity'" class="detail-panel identity-section">
-          <form class="side-form flat-form collapsible-form" @submit.prevent="savePassport">
+          <form class="side-form flat-form collapsible-form" @submit.prevent>
             <div class="form-heading collapsible-form-heading">
               <div>
                 <h2>Паспорт</h2>
@@ -4329,8 +4728,7 @@ onBeforeUnmount(() => {
                 <label>Адрес регистрации<input v-model="passportForm.registration_address" /></label>
               </div>
               <div class="row-actions">
-                <button class="secondary-button" :disabled="isSaving" type="submit">{{ editingPassportId ? 'Обновить паспорт' : 'Сохранить паспорт' }}</button>
-                <button v-if="editingPassportId" class="ghost-button" type="button" @click="cancelPassportEdit">Отмена</button>
+                <span class="muted" role="status">{{ autosaveLabel(passportAutosaveStatus) }}</span>
               </div>
             </div>
           </form>
@@ -4359,10 +4757,10 @@ onBeforeUnmount(() => {
             <p v-if="passportItems.length === 0" class="muted">Паспорта пока не сохранены.</p>
           </div>
 
-          <form class="side-form flat-form collapsible-form" @submit.prevent="saveSnils">
+          <form class="side-form flat-form collapsible-form" @submit.prevent>
             <div class="form-heading collapsible-form-heading">
               <div>
-                <h2>СНИЛС / ИПРА</h2>
+                <h2>СНИЛС / ИПРА / МСЭ</h2>
               </div>
               <button
                 class="ghost-button"
@@ -4397,10 +4795,13 @@ onBeforeUnmount(() => {
                 <label>Дата ИПРА<DateInput v-model="snilsForm.ipra_date" aria-label="Дата ИПРА" /></label>
               </div>
               <div class="row-actions">
-                <button class="secondary-button" :disabled="isSaving" type="submit">{{ editingSnilsId ? 'Обновить СНИЛС / ИПРА' : 'Сохранить СНИЛС / ИПРА' }}</button>
-                <button v-if="editingSnilsId" class="ghost-button" type="button" @click="cancelSnilsEdit">Отмена</button>
+                <span class="muted" role="status">{{ autosaveLabel(snilsAutosaveStatus) }}</span>
               </div>
             </div>
+            <label class="mse-reference-field">Справка МСЭ (свободная форма)
+              <textarea v-model="mseDraft" rows="2" maxlength="2000" placeholder="Данные справки МСЭ" @blur="saveMseReference" />
+              <small class="muted" role="status">{{ autosaveLabel(mseAutosaveStatus) }}</small>
+            </label>
           </form>
 
           <div class="identity-card-list">
@@ -4474,7 +4875,7 @@ onBeforeUnmount(() => {
               type="button"
               :aria-expanded="componentFormExpanded"
               aria-controls="client-component-form"
-              @click="componentFormExpanded = !componentFormExpanded"
+              @click="componentFormExpanded ? closeComponentEditor() : (componentFormExpanded = true)"
             >
               <span class="component-drawer-icon" aria-hidden="true">
                 <PackageOpen :size="20" />
@@ -4484,14 +4885,21 @@ onBeforeUnmount(() => {
                 <span>Создать новую позицию или выбрать готовую со склада и назначить код ТСР</span>
               </span>
               <span class="component-drawer-action">
-                {{ componentFormExpanded ? 'Свернуть' : 'Открыть форму' }}
+                {{ componentFormExpanded ? 'Закрыть окно' : 'Открыть окно' }}
                 <span class="component-drawer-chevron" :class="{ expanded: componentFormExpanded }" aria-hidden="true">⌄</span>
               </span>
             </button>
 
+            <div v-if="componentFormExpanded" class="client-component-modal-overlay" @click.self="closeComponentEditor">
+              <section class="client-component-modal-panel" role="dialog" aria-modal="true" aria-label="Создание или редактирование комплектующей">
+                <header class="client-component-modal-header">
+                  <div><h2>{{ editingModuleId ? 'Редактирование комплектующей' : 'Новая комплектующая' }}</h2>
+                    <span class="muted">{{ componentEntryMode === 'warehouse' ? 'Назначение со склада' : autosaveLabel(componentAutosaveStatus) }}</span>
+                  </div>
+                  <button class="ghost-button" type="button" @click="closeComponentEditor">Закрыть</button>
+                </header>
             <form
               id="client-component-form"
-              v-show="componentFormExpanded"
               class="component-workbench-body"
               @submit.prevent="submitComponentForm"
             >
@@ -4723,12 +5131,9 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="component-form-actions">
-                    <button class="primary-button" :disabled="isSaving || !moduleForm.client_tsr_id" type="submit">
-                      {{ isSaving ? 'Сохраняем...' : editingModuleId ? 'Сохранить изменения' : 'Создать комплектующую' }}
-                    </button>
-                    <button v-if="editingModuleId" class="ghost-button" type="button" @click="resetModuleForm()">
-                      Отмена
-                    </button>
+                    <span class="muted">{{ autosaveLabel(componentAutosaveStatus) }}. Заполните название, поставщика и ТСР.</span>
+                    <button class="ghost-button" type="button" @click="closeComponentEditor">Закрыть</button>
+                    <button class="ghost-button" type="button" @click="resetModuleForm()">Сбросить черновик</button>
                   </div>
                 </template>
               </template>
@@ -4738,6 +5143,8 @@ onBeforeUnmount(() => {
                 <span>После добавления кода в разделе «Основное» здесь сразу станет доступно создание комплектующей.</span>
               </div>
             </form>
+              </section>
+            </div>
           </section>
 
           <p v-else class="form-hint">
@@ -4900,13 +5307,13 @@ onBeforeUnmount(() => {
                 </option>
               </select>
             </label>
-            <label class="contract-prefix-field">
+            <label v-if="contractType !== 'dmk_full_package'" class="contract-prefix-field">
               Буквы номера
               <input v-model="contractNumberPrefix" class="contract-prefix-input" placeholder="СД" maxlength="8" />
             </label>
             <label class="contract-number-field">
-              Номер
-              <input v-model="contractNumberSuffix" class="contract-number-input" inputmode="numeric" readonly aria-readonly="true" />
+              {{ contractType === 'dmk_full_package' ? 'Номер договора (вручную)' : 'Номер' }}
+              <input v-model="contractNumberSuffix" class="contract-number-input" :inputmode="contractType === 'dmk_full_package' ? 'text' : 'numeric'" :readonly="contractType !== 'dmk_full_package'" :aria-readonly="contractType !== 'dmk_full_package'" :placeholder="contractType === 'dmk_full_package' ? 'Например: 13072026/1' : 'Автоматически'" />
             </label>
             <label class="contract-date-field">
               Дата документа
@@ -4919,6 +5326,18 @@ onBeforeUnmount(() => {
             <label v-if="showExtendedContractDates" class="contract-date-field">
               Дата приложений / акта
               <DateInput v-model="contractAppendixDate" :max-year="new Date().getFullYear() + 30" aria-label="Дата приложений или акта" />
+            </label>
+            <label v-if="contractType === 'dmk_full_package'" class="contract-diagnosis-field">
+              Диагноз (формулировка для договора ИП ДМК)
+              <textarea
+                v-model="dmkDiagnosis"
+                rows="2"
+                maxlength="1000"
+                required
+                placeholder="Например: нижних конечностей"
+                aria-label="Диагноз для полного комплекта ИП ДМК"
+              ></textarea>
+              <span class="muted">Введите формулировку вручную для этого договора; она будет подставлена после слов «протез» и «протеза».</span>
             </label>
             <button class="secondary-button contract-submit-button" :disabled="isSaving" type="submit">
               Сформировать
@@ -4978,44 +5397,35 @@ onBeforeUnmount(() => {
                   <div>
                     <p class="eyebrow">Автозаполнение МТЗ</p>
                     <h2>Медико-техническое заключение</h2>
-                    <p class="muted">ФИО, дата рождения и телефон подтягиваются из карточки пациента. Остальные поля ниже заполняются только для этого документа и в карточку пациента не сохраняются.</p>
+                    <p class="muted">ФИО, дата рождения, паспортные данные и справка МСЭ берутся из карточки пациента. Номер и дата МТЗ заполняются вручную после печати. Диагноз выбирается для этого документа.</p>
                   </div>
                 </div>
                 <div class="client-mtz-form-grid">
-                  <label class="wide-field">
-                    Шаблон / ТСР
+                  <label class="wide-field">Шаблон / ТСР
                     <select v-model="mtzType">
                       <option v-for="option in mtzTemplateOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
                     </select>
                   </label>
-                  <label>
-                    Номер МТЗ
-                    <input v-model="mtzNumber" placeholder="Например: 124/26" />
+                  <label class="wide-field">Причина инвалидности
+                    <select v-model="mtzDisabilityGroupReason">
+                      <option value="">Выберите причину</option>
+                      <option v-for="reason in MTZ_DISABILITY_REASONS" :key="reason" :value="reason">{{ reason }}</option>
+                    </select>
                   </label>
-                  <label class="mtz-date-field">
-                    Дата МТЗ
-                    <DateInput v-model="mtzDate" aria-label="Дата МТЗ" />
+                  <label class="wide-field">Справка МСЭ (из личных документов)
+                    <input :value="mseDraft" readonly placeholder="Заполните в СНИЛС / ИПРА / МСЭ" />
                   </label>
-                  <label class="wide-field">
-                    Группа и причина инвалидности
-                    <input v-model="mtzDisabilityGroupReason" placeholder="Заполняется вручную" />
+                  <div class="wide-field">
+                    <MtzDiagnosisPicker v-model="mtzDiagnoses" :tsr-labels="(selectedClient?.tsr_items ?? []).map((item) => String(item.tsr?.full_tsr_code ?? ''))" />
+                  </div>
+                  <label>1.1 Уровень ампутации<input v-model="mtzAmputationLevel" placeholder="Введите уровень" /></label>
+                  <label>1.2 Состояние культи
+                    <select v-model="mtzStumpCondition"><option>Функциональная</option><option>Нефункциональная</option></select>
                   </label>
-                  <label class="wide-field">
-                    Справка
-                    <input v-model="mtzCertificateReference" placeholder="Заполняется вручную" />
+                  <label>1.3 Уровень активности
+                    <select v-model="mtzActivityLevel"><option>2-3</option><option>3-4</option></select>
                   </label>
-                  <label class="wide-field">
-                    Диагноз
-                    <textarea v-model="mtzDiagnosis" rows="3" placeholder="Заполняется вручную" />
-                  </label>
-                  <label>
-                    Уровень ампутации
-                    <input v-model="mtzAmputationLevel" placeholder="Заполняется вручную" />
-                  </label>
-                  <label>
-                    Вес пациента (кг)
-                    <input v-model="mtzWeightKg" inputmode="decimal" placeholder="Например: 82" />
-                  </label>
+                  <label>1.4 Вес пациента (кг)<input v-model="mtzWeightKg" inputmode="decimal" placeholder="Например: 82" /></label>
                 </div>
                 <button class="primary-button" :disabled="isSaving || mtzTemplateOptions.length === 0" type="submit">
                   {{ isSaving ? 'Формируем…' : 'Сформировать МТЗ' }}
@@ -5093,19 +5503,10 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div v-if="activeTab === 'main'" class="client-save-bar">
-            <span>
-              {{ hasUnsavedClientChanges ? 'Есть несохранённые изменения' : 'Все изменения сохранены' }}
+          <div v-if="activeTab === 'main'" class="client-save-bar client-autosave-bar">
+            <span :class="{ 'form-error': clientAutosaveState === 'error' }">
+              {{ clientAutosaveState === 'saving' ? 'Сохраняем изменения…' : clientAutosaveState === 'pending' ? 'Изменения будут сохранены автоматически…' : clientAutosaveState === 'waiting' ? 'Автосохранение начнётся после заполнения обязательных полей' : clientAutosaveState === 'error' ? 'Не удалось автоматически сохранить изменения' : 'Все изменения сохранены автоматически' }}
             </span>
-            <button
-              class="primary-button"
-              type="submit"
-              form="client-main-form"
-              :disabled="isSaving || !hasUnsavedClientChanges"
-            >
-              <Save :size="16" aria-hidden="true" />
-              {{ isSaving ? 'Сохраняем...' : isEditing ? 'Сохранить изменения' : 'Создать пациента' }}
-            </button>
           </div>
         </section>
       </div>
@@ -5136,7 +5537,6 @@ onBeforeUnmount(() => {
           </div>
 
           <p v-if="referenceError" class="form-error">{{ referenceError }}</p>
-          <p v-if="referenceSuccess" class="form-success">{{ referenceSuccess }}</p>
 
           <form v-if="canManageReferences" class="reference-editor" @submit.prevent="saveManagedReference">
             <label>

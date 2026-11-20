@@ -13,13 +13,14 @@ from app import models
 GENERATED_DOCUMENT_TYPES = frozenset({
     "llc_contract",
     "dmk_contract",
+    "dmk_full_package",
     "dmk_instrument",
     "contract_original",
     "contract_template",
     "sdv_contract",
     "zet_contract",
 })
-CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "zet_contract", "dmk_contract", "sdv_contract"})
+CONTRACT_DOCUMENT_TYPES = frozenset({"llc_contract", "zet_contract", "dmk_contract", "dmk_full_package", "sdv_contract"})
 FIXED_EXPENSE_KEYS = (
     "prosthetist_work",
     "patient_travel",
@@ -45,7 +46,10 @@ def accounting_expense_total(client: models.Client, field_key: str) -> float:
 
 
 def accounting_expense_payment_state(client: models.Client, field_key: str) -> str:
-    if field_key != "prosthetist_work":
+    if field_key not in {"prosthetist_work", "patient_payment"} and not (
+        field_key == "agency_expenses" and (str(client.performer_company or "").strip() or 'ООО "Смарт Движение"') in {
+            'ООО "Смарт Движение"', "ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»"}
+    ):
         return "paid"
     entries = accounting_expense_entries(client, field_key)
     status_store = client.accounting_expense_status if isinstance(client.accounting_expense_status, dict) else {}
@@ -101,6 +105,16 @@ def _contract_expense_total(entries: list[dict[str, Any]]) -> float:
     return sum(parse_number(item.get("amount")) for item in entries)
 
 
+def _contract_payment_trackable(accounting: models.ContractAccounting, field_key: str) -> bool:
+    client = getattr(getattr(accounting, "document", None), "client", None)
+    return field_key in {"prosthetist_work", "patient_payment"} or (
+        field_key == "agency_expenses" and client is not None and
+        (str(client.performer_company or "").strip() or 'ООО "Смарт Движение"') in {
+            'ООО "Смарт Движение"', "ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»"
+        }
+    )
+
+
 def get_contract_expense_history(db: Session, document_id: UUID, field_key: str) -> dict[str, Any]:
     accounting = db.query(models.ContractAccounting).filter(models.ContractAccounting.document_id == document_id).first()
     if not accounting:
@@ -116,7 +130,7 @@ def get_contract_expense_history(db: Session, document_id: UUID, field_key: str)
         if legacy:
             entries = [legacy]
     legacy_paid = str(state.get("paid", "paid")).lower() != "unpaid"
-    if field_key == "prosthetist_work":
+    if _contract_payment_trackable(accounting, field_key):
         for entry in entries:
             entry.setdefault("paid", legacy_paid)
         paid = all(bool(entry.get("paid", True)) for entry in entries)
@@ -154,11 +168,11 @@ def add_contract_expense(db: Session, document_id: UUID, payload: Any, user: mod
     if not entries:
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
-            if field_key == "prosthetist_work":
+            if _contract_payment_trackable(accounting, field_key):
                 legacy["paid"] = str(state.get("paid", "paid")).lower() != "unpaid"
             entries.append(legacy)
-    entries.append({"id": str(uuid4()), "amount": float(payload.amount), "description": payload.description.strip(), "created_at": datetime.now(timezone.utc).isoformat(), "user_id": str(user.user_id), "username": user.username, "paid": (payload.paid is not False) if field_key == "prosthetist_work" else True})
-    paid = True if field_key != "prosthetist_work" else all(bool(item.get("paid", True)) for item in entries)
+    entries.append({"id": str(uuid4()), "amount": float(payload.amount), "description": payload.description.strip(), "created_at": datetime.now(timezone.utc).isoformat(), "user_id": str(user.user_id), "username": user.username, "paid": (payload.paid is not False) if _contract_payment_trackable(accounting, field_key) else True})
+    paid = True if not _contract_payment_trackable(accounting, field_key) else all(bool(item.get("paid", True)) for item in entries)
     store[field_key] = {"entries": entries, "paid": paid}
     _write_contract_history(accounting, store)
     _materialize_contract_expense(accounting, field_key, _contract_expense_total(entries))
@@ -167,11 +181,11 @@ def add_contract_expense(db: Session, document_id: UUID, payload: Any, user: mod
 
 
 def set_contract_expense_status(db: Session, document_id: UUID, field_key: str, paid: bool) -> dict[str, Any]:
-    if field_key != "prosthetist_work":
-        raise ValueError("Payment status is available only for prosthetist work")
     accounting = db.query(models.ContractAccounting).filter(models.ContractAccounting.document_id == document_id).first()
     if not accounting:
         raise ValueError("Contract accounting row not found")
+    if not _contract_payment_trackable(accounting, field_key):
+        raise ValueError("Статус оплаты недоступен для этой статьи расходов")
     store = _contract_history_store(accounting)
     state = dict(store.get(field_key) or {})
     entries = [dict(item) for item in state.get("entries", []) if isinstance(item, dict)]
@@ -199,7 +213,7 @@ def update_contract_expense(db: Session, document_id: UUID, field_key: str, entr
     if not entries:
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
-            if field_key == "prosthetist_work":
+            if _contract_payment_trackable(accounting, field_key):
                 legacy["paid"] = str(state.get("paid", "paid")).lower() != "unpaid"
             entries.append(legacy)
     target = next((item for item in entries if str(item.get("id")) == entry_id), None)
@@ -207,9 +221,9 @@ def update_contract_expense(db: Session, document_id: UUID, field_key: str, entr
         raise ValueError("Expense entry not found")
     target["amount"] = float(payload.amount)
     target["description"] = payload.description.strip()
-    if field_key == "prosthetist_work" and payload.paid is not None:
+    if _contract_payment_trackable(accounting, field_key) and payload.paid is not None:
         target["paid"] = bool(payload.paid)
-    paid = True if field_key != "prosthetist_work" else all(bool(item.get("paid", True)) for item in entries)
+    paid = True if not _contract_payment_trackable(accounting, field_key) else all(bool(item.get("paid", True)) for item in entries)
     store[field_key] = {"entries": entries, "paid": paid}
     _write_contract_history(accounting, store)
     _materialize_contract_expense(accounting, field_key, _contract_expense_total(entries))
@@ -229,13 +243,16 @@ def delete_contract_expense(db: Session, document_id: UUID, field_key: str, entr
     if not entries:
         legacy = _contract_legacy_entry(field_key, _contract_legacy_value(accounting, field_key))
         if legacy:
-            if field_key == "prosthetist_work":
+            if _contract_payment_trackable(accounting, field_key):
                 legacy["paid"] = str(state.get("paid", "paid")).lower() != "unpaid"
             entries.append(legacy)
     new_entries = [item for item in entries if str(item.get("id")) != entry_id]
     if len(new_entries) == len(entries):
         raise ValueError("Expense entry not found")
-    store[field_key] = {"entries": new_entries, "paid": str(state.get("paid", "paid")).lower() != "unpaid"}
+    paid = (all(bool(item.get("paid", True)) for item in new_entries)
+            if _contract_payment_trackable(accounting, field_key)
+            else str(state.get("paid", "paid")).lower() != "unpaid")
+    store[field_key] = {"entries": new_entries, "paid": paid}
     _write_contract_history(accounting, store)
     _materialize_contract_expense(accounting, field_key, _contract_expense_total(new_entries))
     db.commit()
@@ -313,6 +330,7 @@ def build_accounting_report(
     tax_osno_percent: float = 15.0,
     acquiring_percent: float = 1.0,
     vat_percent: float = 20.0,
+    performer_company: str | None = None,
 ) -> dict[str, Any]:
     """Build accounting totals per client from normalized certificate records.
 
@@ -353,6 +371,8 @@ def build_accounting_report(
         if str(getattr(client, "workflow_bucket", "work") or "work") == "unpunched":
             continue
         if hide_failed and is_failed_client(client):
+            continue
+        if not performer_company_matches(client, performer_company):
             continue
 
         certificate_items = client_certificate_items(client)
@@ -432,7 +452,7 @@ def build_accounting_report(
             custom_expenses=custom_expenses,
             tax_percent=applied_tax_percent,
             acquiring_percent=acquiring_percent,
-            vat_percent=vat_percent,
+            vat_percent=vat_percent_for_client(client, vat_percent),
         )
         latest_date = max(
             (item["date"] for item in visible_certificates if item["date"]),
@@ -493,6 +513,7 @@ def build_contract_accounting_report(
     tax_osno_percent: float = 15.0,
     acquiring_percent: float = 1.0,
     vat_percent: float = 20.0,
+    performer_company: str | None = None,
 ) -> dict[str, Any]:
     """Build an independent accounting row for every current contract.
 
@@ -505,6 +526,9 @@ def build_contract_accounting_report(
     records = (
         db.query(models.ContractAccounting)
         .options(
+            selectinload(models.ContractAccounting.document)
+            .selectinload(models.Document.client)
+            .selectinload(models.Client.agent),
             selectinload(models.ContractAccounting.document)
             .selectinload(models.Document.client)
             .selectinload(models.Client.modules),
@@ -535,10 +559,11 @@ def build_contract_accounting_report(
         client = document.client
         if hide_failed and is_failed_client(client):
             continue
+        if not performer_company_matches(client, performer_company):
+            continue
 
         certificate = resolve_contract_certificate(document, client)
-        if certificate["key"] in seen_certificate_keys:
-            continue
+        repeated_certificate = certificate["key"] in seen_certificate_keys
         seen_certificate_keys.add(certificate["key"])
         certificate_date = certificate["date"]
         if not date_in_range(certificate_date, start_date, end_date):
@@ -547,6 +572,12 @@ def build_contract_accounting_report(
         metadata = document.contract_metadata if isinstance(document.contract_metadata, dict) else {}
         modules_cost = contract_components_cost(document, client.modules or [])
         stock_reused_cost = contract_stock_reused_cost(document, client.modules or [])
+        # A regenerated document is not evidence of a second payment. Its own
+        # expense entries remain editable and counted, but neither its revenue
+        # nor its auto-calculated component cost may be counted twice.
+        if repeated_certificate:
+            modules_cost = 0.0
+            stock_reused_cost = 0.0
         fixed_expenses_by_key = {
             key: parse_number(getattr(accounting, key, 0.0))
             for key in FIXED_EXPENSE_KEYS
@@ -554,6 +585,22 @@ def build_contract_accounting_report(
         contract_history = _contract_history_store(accounting)
         prosthetist_state = contract_history.get("prosthetist_work") if isinstance(contract_history.get("prosthetist_work"), dict) else {}
         prosthetist_entries = [dict(item) for item in prosthetist_state.get("entries", []) if isinstance(item, dict)]
+        agency_state = contract_history.get("agency_expenses") if isinstance(contract_history.get("agency_expenses"), dict) else {}
+        agency_entries = [dict(item) for item in agency_state.get("entries", []) if isinstance(item, dict)]
+        patient_payment_state = contract_history.get("patient_payment") if isinstance(contract_history.get("patient_payment"), dict) else {}
+        patient_payment_entries = [dict(item) for item in patient_payment_state.get("entries", []) if isinstance(item, dict)]
+        agency_tracked = (str(client.performer_company or "").strip() or 'ООО "Смарт Движение"') in {
+            'ООО "Смарт Движение"', "ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»"
+        }
+        def payment_state(state: dict, entries: list[dict]) -> str:
+            legacy_paid = str(state.get("paid", "paid")).lower() != "unpaid"
+            if not entries:
+                return "paid" if legacy_paid else "unpaid"
+            paid_states = [bool(entry.get("paid", legacy_paid)) for entry in entries]
+            if all(paid_states): return "paid"
+            if not any(paid_states): return "unpaid"
+            return "partial"
+
         # Status paid/unpaid remains visible, but never removes the expense.
         fixed_expenses = sum(fixed_expenses_by_key.values())
         custom_values = accounting.custom_values or {}
@@ -569,13 +616,13 @@ def build_contract_accounting_report(
             tax_osno_percent=tax_osno_percent,
         )
         financials = calculate_financials(
-            certificate["amount"],
+            0.0 if repeated_certificate else certificate["amount"],
             component_cost=modules_cost,
             fixed_expenses=fixed_expenses,
             custom_expenses=custom_expenses,
             tax_percent=applied_tax_percent,
             acquiring_percent=acquiring_percent,
-            vat_percent=vat_percent,
+            vat_percent=vat_percent_for_client(client, vat_percent),
         )
         document_date = normalize_date(metadata.get("document_date")) or normalize_date(document.created_at)
         rows.append({
@@ -588,17 +635,26 @@ def build_contract_accounting_report(
                 "date": document_date.isoformat() if document_date else None,
                 "certificate_id": certificate["certificate_id"],
                 "certificate_date": certificate_date.isoformat() if certificate_date else None,
+                "repeated_certificate": repeated_certificate,
             },
             "client": {
                 "client_id": str(client.client_id),
                 "full_name": " ".join(part for part in (client.last_name, client.first_name, client.middle_name) if part),
                 "short_name": short_client_name(client),
+                "agent_id": str(client.agent_id) if client.agent_id else None,
+                "agent_name": " ".join(
+                    part for part in (client.agent.last_name, client.agent.first_name, client.agent.middle_name)
+                    if part
+                ).strip() if client.agent else None,
                 "status": client.status_code,
                 "current_stage": client.current_stage,
                 "taxation_system": normalize_taxation_system(client.taxation_system),
+                "tax_percent_override": getattr(client, "tax_percent_override", None),
+                "vat_percent": vat_percent_for_client(client, vat_percent),
+                "performer_company": getattr(client, "performer_company", None),
             },
             "amounts": {
-                "certificate": certificate["amount"],
+                "certificate": 0.0 if repeated_certificate else certificate["amount"],
                 "modules_cost": modules_cost,
                 "stock_reused_cost": stock_reused_cost,
                 **fixed_expenses_by_key,
@@ -608,11 +664,9 @@ def build_contract_accounting_report(
             },
             "custom_values": report_custom_values,
             "expense_status": {
-                "prosthetist_work": (
-                    "partial" if prosthetist_entries and any(bool(item.get("paid", str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")) for item in prosthetist_entries) and not all(bool(item.get("paid", str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")) for item in prosthetist_entries)
-                    else "paid" if (all(bool(item.get("paid", str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")) for item in prosthetist_entries) if prosthetist_entries else str(prosthetist_state.get("paid", "paid")).lower() != "unpaid")
-                    else "unpaid"
-                ),
+                "prosthetist_work": payment_state(prosthetist_state, prosthetist_entries),
+                "patient_payment": payment_state(patient_payment_state, patient_payment_entries),
+                "agency_expenses": payment_state(agency_state, agency_entries) if agency_tracked else "paid",
             },
         })
 
@@ -856,15 +910,15 @@ def single_tsr_snapshot(metadata: dict[str, Any]) -> dict[str, Any]:
 def client_certificate_items(client: models.Client) -> list[dict[str, Any]]:
     normalized = []
     for item in client.tsr_items or []:
-        amount = parse_number(item.certificate_price)
-        if amount <= 0:
-            continue
         normalized.append({
             "certificate_id": str(item.client_tsr_id),
-            "amount": amount,
+            "amount": parse_number(item.certificate_price),
             "date": normalize_date(item.check_date),
             "tsr": item.tsr.full_tsr_code if item.tsr else None,
         })
+    # The existence of normalized client↔TSR records, not a positive amount,
+    # decides the source of truth. Otherwise a zero-priced/new TSR could
+    # incorrectly revive a stale legacy certificate sum.
     if normalized:
         return normalized
     return [{
@@ -1153,6 +1207,9 @@ def serialize_client(client: models.Client, client_date: date | None) -> dict[st
         "agent_name": agent_name,
         "date": client_date.isoformat() if client_date else None,
         "taxation_system": normalize_taxation_system(client.taxation_system),
+        "tax_percent_override": getattr(client, "tax_percent_override", None),
+        "vat_percent": vat_percent_for_client(client, 20.0),
+        "performer_company": getattr(client, "performer_company", None),
     }
 
 
@@ -1169,12 +1226,40 @@ def resolve_usn_percent(legacy_tax_percent: float | None, tax_usn_percent: float
     return 6.0
 
 
+SMART_COMPANY = 'ООО "Смарт Движение"'
+ZET_COMPANY = 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»'
+
+
+def performer_company_matches(client: models.Client, requested: str | None) -> bool:
+    """Support one organization, any subset separated by |, or all (None).
+
+    Historical patients with no organization stay assigned to Smart only.
+    """
+    if not requested:
+        return True
+    selected = {company.strip() for company in requested.split("|") if company.strip()}
+    actual = str(getattr(client, "performer_company", "") or "").strip() or SMART_COMPANY
+    return actual in selected
+
+
+def vat_percent_for_client(client: models.Client, fallback: float = 20.0) -> float:
+    value = getattr(client, "vat_percent", None)
+    if value is None:
+        return 0.0 if getattr(client, "performer_company", None) == "ИП ДМК" else max(0.0, float(fallback))
+    return max(0.0, parse_number(value))
+
+
 def tax_percent_for_client(
     client: models.Client,
     *,
     tax_usn_percent: float,
     tax_osno_percent: float,
 ) -> float:
+    # Персональная ставка ИП ДМК заменяет только выбор 6%/15%, но не
+    # меняет общую формулу определения налоговой базы.
+    if getattr(client, "performer_company", None) == "ИП ДМК":
+        custom = getattr(client, "tax_percent_override", None)
+        return float(custom) if custom is not None else 0.0
     # Historical DB value "ОСНО" is used by the UI as the second configured tax rate.
     if normalize_taxation_system(client.taxation_system) == "ОСНО":
         return float(tax_osno_percent)

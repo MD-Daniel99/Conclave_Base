@@ -14,12 +14,11 @@ export type MtzTemplateOption = {
 
 export type MtzGenerationPayload = {
   template_type: string
-  mtz_number: string
-  document_date: string
   disability_group_reason: string
-  certificate_reference: string
-  diagnosis: string
+  diagnoses: string[]
   amputation_level: string
+  stump_condition: 'Функциональная' | 'Нефункциональная'
+  activity_level: '2-3' | '3-4'
   weight_kg: string
 }
 
@@ -28,8 +27,8 @@ export async function fetchContractTemplates() {
   return data
 }
 
-export async function fetchNextContractNumber() {
-  const { data } = await api.get<{ number: string }>('/documents/contracts/next_number')
+export async function fetchNextContractNumber(templateType: string = 'llc_contract') {
+  const { data } = await api.get<{ number: string }>('/documents/contracts/next_number', { params: { template_type: templateType } })
   return data.number
 }
 

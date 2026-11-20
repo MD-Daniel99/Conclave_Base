@@ -365,9 +365,11 @@ onBeforeUnmount(() => {
       </button>
     </form>
 
+    <div class="table-count-indicator" role="status">Пользователей: <strong>{{ visibleUsers.length }}</strong> из {{ users.length }}</div>
+
     <div class="split-view">
       <div class="table-wrap">
-        <table>
+        <table data-resize-id="admin-users">
           <thead>
             <tr>
               <SortableFilterHeader

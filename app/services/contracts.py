@@ -11,6 +11,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app import crud, models
+from app.services.document_filenames import next_document_filename
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", "/app/storage")
 
@@ -26,9 +27,14 @@ TEMPLATES_CONFIG: dict[str, dict[str, str]] = {
         "file_prefix": "Договор ПрОП ДВИЖЕНИЕ ЗЕТ",
     },
     "dmk_contract": {
-        "filename": "dmk_contract.docx",
+        "filename": "dmk_full_package.docx",
         "label": "ИП ДМК · Договор",
         "file_prefix": "ДМК Договор",
+    },
+    "dmk_full_package": {
+        "filename": "dmk_full_package.docx",
+        "label": "ИП ДМК · Полный комплект документов",
+        "file_prefix": "ДМК Полный комплект",
     },
     "dmk_instrument": {
         "filename": "dmk_instrument.docx",
@@ -49,28 +55,96 @@ TEMPLATE_ALIASES = {
 
 
 def list_contract_templates() -> list[dict[str, str]]:
+    # Keep legacy keys available internally for already-created documents,
+    # but do not offer redundant/obsolete IP DMK entries in the UI.
+    visible_templates = {"llc_contract", "zet_contract", "dmk_full_package"}
     return [
         {"value": key, "label": config["label"]}
         for key, config in TEMPLATES_CONFIG.items()
+        if key in visible_templates
     ]
 
 
-def get_next_contract_number(db: Session) -> str:
-    """Return the next number in the new PREFIX/NNN contract series.
+# New contract series are independent for the two legal entities. The
+# counter is stored in PostgreSQL, not inferred from the number of files:
+# deleting a contract must never allow an issued number to be reused.
+LLC_CONTRACT_TYPES = ("llc_contract", "zet_contract")
 
-    Legacy test documents used date-like numbers without a slash. They are not
-    part of the new global 001, 002, ... sequence requested for contracts.
-    """
-    existing_numbers = db.execute(
-        select(models.Document.document_number)
-        .where(models.Document.document_type.in_(("llc_contract", "zet_contract", "dmk_contract")))
+
+def _issued_llc_suffixes(db: Session, template_key: str) -> set[int]:
+    """Legacy contracts also reserve their number within their own LLC."""
+    historical_types = {
+        "llc_contract": ("llc_contract", "sdv_contract", "contract_original", "contract_template", "SDV_contract"),
+        "zet_contract": ("zet_contract", "ZET_contract"),
+    }[template_key]
+    numbers = db.execute(
+        select(models.Document.document_number).where(
+            models.Document.document_type.in_(historical_types),
+            models.Document.document_number.isnot(None),
+        )
     ).scalars().all()
-    contract_count = sum(
-        1
-        for raw_number in existing_numbers
-        if re.fullmatch(r"\s*[^/]+/\d+\s*", str(raw_number or ""))
+    result: set[int] = set()
+    for number in numbers:
+        match = re.search(r"/(\d+)\s*$", str(number or ""))
+        if match:
+            result.add(int(match.group(1)))
+    return result
+
+
+def _next_available_llc_number(db: Session, template_key: str, *, lock: bool = False) -> int:
+    if template_key not in LLC_CONTRACT_TYPES:
+        raise ValueError("Автоматическая нумерация доступна только для договоров двух ООО")
+
+    # Both rows are created in the Alembic migration. FOR UPDATE locks only
+    # the selected company's row, so concurrent employees cannot get the same
+    # number, while Smart and ZET do not block one another.
+    query = text(
+        'SELECT next_number FROM "CONTRACT_NUMBER_COUNTER" '
+        'WHERE template_key = :template_key' + (' FOR UPDATE' if lock and db.get_bind().dialect.name == 'postgresql' else '')
     )
-    return f"{contract_count + 1:03d}"
+    next_number = db.execute(query, {"template_key": template_key}).scalar_one_or_none()
+    if next_number is None:
+        raise RuntimeError("Не применена миграция отдельных номеров договоров (alembic upgrade head)")
+    number = max(30, int(next_number))
+    used_numbers = _issued_llc_suffixes(db, template_key)
+    while number in used_numbers:
+        number += 1
+    return number
+
+
+def get_next_contract_number(db: Session, template_type: str = "llc_contract") -> str:
+    """Preview the next independent LLC number; does not reserve it."""
+    template_key = normalize_template_key(template_type)
+    if template_key not in LLC_CONTRACT_TYPES:
+        raise ValueError("Для данного шаблона автоматический номер не предусмотрен")
+    return f"{_next_available_llc_number(db, template_key):03d}"
+
+
+def _reserve_llc_contract_number(db: Session, template_key: str) -> str:
+    number = _next_available_llc_number(db, template_key, lock=True)
+    db.execute(
+        text('UPDATE "CONTRACT_NUMBER_COUNTER" SET next_number = :next_number '
+             'WHERE template_key = :template_key'),
+        {"next_number": number + 1, "template_key": template_key},
+    )
+    # The transaction commits only after both the DOCX and Document row are
+    # created. On failure this increment rolls back together with the document.
+    return f"{number:03d}"
+
+
+def _legacy_contract_number(db: Session) -> str:
+    """Keep the obsolete hidden DMK contract type on its original path."""
+    existing = db.execute(
+        select(models.Document.document_number, models.Document.document_type, models.Document.contract_metadata)
+        .where(models.Document.document_type.in_(("llc_contract", "zet_contract", "dmk_contract", "dmk_full_package")))
+    ).all()
+    count = sum(
+        1 for number, document_type, metadata in existing
+        if re.fullmatch(r"\s*[^/]+/\d+\s*", str(number or ""))
+        and not (document_type == "dmk_full_package" and isinstance(metadata, dict)
+                 and metadata.get("manual_contract_number"))
+    )
+    return f"{count + 1:03d}"
 
 
 def normalize_template_key(raw_key: str | None) -> str:
@@ -139,6 +213,17 @@ def format_money(amount: float) -> str:
     return f"{amount:,.2f}".replace(",", " ")
 
 
+def format_money_without_kopecks(amount: float) -> str:
+    """For the IP DMK contract only: format rubles with no decimal suffix.
+
+    Keep the Russian wording and the existing literal '00 копеек' unchanged.
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+
+    rubles = int(Decimal(str(amount)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return f"{rubles:,}".replace(",", " ")
+
+
 def rub_to_words(amount: float) -> str:
     try:
         rubles = int(amount)
@@ -161,7 +246,12 @@ def get_initials(last_name: str | None, first_name: str | None, middle_name: str
     return f"{last} {first_initial}{middle_initial}".strip()
 
 
-TSR_CODE_PATTERN = r"(?<!\d)\d+(?:\(\d+\))?-\d{2}-\d{2}(?:-\d{2})?(?!\d)"
+# Preserve the qualifier in TSR codes, including 8(01)-07-04 and 8.1-07-04.
+# Accept common Unicode dash variants without silently discarding parentheses/dots.
+TSR_CODE_PATTERN = (
+    r"(?<![\w])\d+(?:\(\d+\)|\.\d+)?"
+    r"(?:[-‐‑–—−]\d{2}){2,3}(?![\d-])"
+)
 
 
 def extract_tsr_numeric(tsr_code: str | None) -> str:
@@ -467,7 +557,7 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     passport = latest_by_created(client.get("passports") or [])
     snils = latest_by_created(client.get("snils") or [])
     phones = client.get("phones") or []
-    certificate_contract = template_key in {"llc_contract", "zet_contract"}
+    certificate_contract = template_key in {"llc_contract", "zet_contract", "dmk_full_package", "dmk_contract"}
     modules = select_llc_modules(client, payload) if certificate_contract else (client.get("modules") or [])
     selected_client_tsr_items = (
         select_llc_tsr_items(client, payload, modules)
@@ -493,6 +583,14 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     full_document_number = document_number or f"{prefix}{suffix}".strip()
 
     document_date = format_date_ru(getattr(payload, "document_date", None))
+    # ZET's cover displays a Russian day + month + year, not a numeric date.
+    # Other templates still receive the previous dd.mm.yyyy value.
+    z_date = None
+    if template_key == "zet_contract":
+        try:
+            z_date = datetime.strptime(document_date, "%d.%m.%Y")
+        except ValueError:
+            z_date = None
     plan_date = format_date_ru(getattr(payload, "plan_date", None) or getattr(payload, "document_date", None))
     appendix_date = format_date_ru(
         getattr(payload, "appendix_date", None)
@@ -501,8 +599,19 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     )
     appendix_number = str(getattr(payload, "appendix_number", None) or full_document_number or "1")
 
-    prosthesis_type = str(client.get("prosthesis_type") or "").strip()
+    if template_key == "dmk_full_package":
+        # The wording varies for each set of TSRs. It must be entered for this
+        # particular document, never copied from a patient's legacy profile.
+        prosthesis_type = str(getattr(payload, "diagnosis", None) or "").strip()
+        if not prosthesis_type:
+            raise ValueError("Для полного комплекта ИП ДМК вручную укажите диагноз (формулировку вида протеза).")
+    else:
+        # Backward compatibility for existing templates/old DMK contract keys.
+        prosthesis_type = str(client.get("prosthesis_type") or "").strip()
     clean_prosthesis_type = re.sub(r"(?i)^протез\s+", "", prosthesis_type)
+    if template_key in {"dmk_full_package", "dmk_contract"}:
+        # This value is inserted mid-sentence throughout the attached IP package.
+        clean_prosthesis_type = clean_prosthesis_type[:1].lower() + clean_prosthesis_type[1:]
     contract_items = (
         build_llc_contract_items(modules, selected_client_tsr_items)
         if certificate_contract
@@ -518,7 +627,10 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     )
 
     full_name = f"{client.get('last_name', '')} {client.get('first_name', '')} {client.get('middle_name') or ''}".strip()
-    phone = phones[0].get("number", "") if phones else ""
+    phone = next(
+        (str(entry.get("number") or "").strip() for entry in phones if str(entry.get("number") or "").strip()),
+        "",
+    )
     snils_number = snils.get("number", "") if snils else ""
     passport_issue_date = format_date_ru(passport.get("issue_date"))
     passport_full = build_passport_full(passport, passport_series, passport_number)
@@ -528,6 +640,13 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
         "НомерДоговораБуквы": prefix,
         "НомерДоговораЧисло": suffix,
         "ДатаДоговора": document_date,
+        "ДатаДоговораДень": z_date.strftime("%d") if z_date else "__",
+        "ДатаДоговораМесяц": (
+            ("января", "февраля", "марта", "апреля", "мая", "июня",
+             "июля", "августа", "сентября", "октября", "ноября", "декабря")[z_date.month - 1]
+            if z_date else "________"
+        ),
+        "ДатаДоговораГод": str(z_date.year) if z_date else "____",
         "ДатаПлана": plan_date,
         "ДатаПриложения": appendix_date,
         "НомерАкта": appendix_number,
@@ -544,7 +663,7 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
         "КодПодразделения": passport.get("department_code", "______"),
         "АдресРегистрацииЗаказчика": passport.get("registration_address", "__________________"),
         "МестоРожденияЗаказчика": passport.get("birth_place", ""),
-        #"Телефон_заказчика": phone,
+        "Телефон_заказчика": phone,
         "СНИЛСЗаказчика": snils_number,
         "НомерИПРА": client.get("ipra_code") or "",
         "ДатаВыдачиИПРА": format_date_ru(snils.get("issued_date") if snils else None),
@@ -580,6 +699,41 @@ def build_context(client: dict[str, Any], payload: Any, template_key: str = "llc
     context["Наименованиетовара"] = extract_tsr_literals(final_act_description) or final_act_description
     context["КолТовара"] = str(total_quantity)
     context["ОписаниеТовара"] = final_act_description
+    # Точные имена переменных приложенного полного комплекта ИП.
+    if template_key == "dmk_full_package":
+        # All acts in the IP DMK package are completed by hand for day/month.
+        # Keep only the year current at the moment the document is generated.
+        # An actual empty writing area: no underscores, dots or other visible
+        # date separators. Keep only the year, independently of the contract
+        # number (which can look like ddmmyyyy/sequence).
+        handwritten_act_date = ("\u00a0" * 20) + str(datetime.now().year)
+        context["Датаакта"] = handwritten_act_date
+        context["НазваниеАкта"] = handwritten_act_date
+    else:
+        context["Датаакта"] = appendix_date
+    context["ВерхнейИлиНижнейКонечности"] = clean_prosthesis_type
+    context["ОбщееКолТовара"] = str(total_quantity)
+
+    if template_key in {"dmk_full_package", "dmk_contract"}:
+        # Strictly separate the classifier code and the name. The former must
+        # never silently fall back to a textual TSR description.
+        product_descriptions = []
+        for item in contract_items:
+            code = extract_tsr_numeric(str(item.get("number") or ""))
+            if not code:
+                raise ValueError(
+                    f"Для ТСР «{item.get('description') or item.get('number')}» "
+                    "не найден цифровой код классификации (например, 8(01)-07-04 или 8.1-07-04). "
+                    "Проверьте код ТСР в справочнике."
+                )
+            product_descriptions.append(
+                " ".join(part for part in (code, str(item.get("description") or "").strip()) if part)
+            )
+        context["ОписаниеТовараСКодом"] = "; ".join(product_descriptions)
+        context["Сумма"] = format_money_without_kopecks(total_sum)
+        context["СуммаСЧехлом"] = format_money_without_kopecks(total_sum)
+        context["ИтогоСтоимость"] = format_money_without_kopecks(total_sum)
+        # 'СуммаПрописью' and the template's '00 копеек' remain untouched.
 
     return context
 
@@ -675,7 +829,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
 
     selected_document_components = (
         select_llc_modules(client, payload)
-        if template_key in {"llc_contract", "zet_contract"}
+        if template_key in {"llc_contract", "zet_contract", "dmk_full_package", "dmk_contract"}
         else (client.get("modules") or [])
     )
     component_accounting_flags = {
@@ -690,7 +844,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
 
     selected_document_tsr_items = (
         select_llc_tsr_items(client, payload, selected_document_components)
-        if template_key in {"llc_contract", "zet_contract"}
+        if template_key in {"llc_contract", "zet_contract", "dmk_full_package", "dmk_contract"}
         else []
     )
     selected_certificate = selected_document_tsr_items[0] if selected_document_tsr_items else None
@@ -706,13 +860,35 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         else None
     )
 
-    if template_key in {"llc_contract", "zet_contract", "dmk_contract"}:
-        # Serialize number allocation inside the current DB transaction. The UI
-        # only previews the next number; the server remains the source of truth.
+    if template_key == "dmk_full_package":
+        # IP DMK numbers are entered in full, e.g. 13072026/1 or 13072026-1.
+        # They are NOT part of either LLC's automatically numbered series.
+        # Prefer the complete number; accept legacy clients passing two parts.
+        manual_number = str(getattr(payload, "document_number", "") or "").strip()
+        if not manual_number:
+            manual_suffix = str(getattr(payload, "document_number_suffix", "") or "").strip()
+            manual_prefix = str(getattr(payload, "document_number_prefix", "") or "").strip()
+            manual_number = f"{manual_prefix}/{manual_suffix}" if manual_prefix and manual_suffix else manual_suffix
+        if not manual_number or any(char in manual_number for char in "\r\n\t"):
+            raise ValueError("Для ИП ДМК введите номер договора вручную (например, 13072026/1)")
+        payload.document_number = manual_number
+        # The full value is kept unchanged in {{НомерДоговора}} and DOCUMENT.
+        # The other two template types retain their existing prefix/sequence logic.
+        payload.document_number_prefix = ""
+        payload.document_number_suffix = manual_number
+    elif template_key in LLC_CONTRACT_TYPES:
+        number_suffix = _reserve_llc_contract_number(db, template_key)
+        number_prefix = str(getattr(payload, "document_number_prefix", None) or "СД").strip().upper()
+        payload.document_number_prefix = number_prefix
+        payload.document_number_suffix = number_suffix
+        payload.document_number = f"{number_prefix}/{number_suffix}"
+    elif template_key == "dmk_contract":
+        # Legacy, hidden DMK type: retain its old behaviour. The published
+        # DMK full package above remains strictly manual.
         if db.get_bind().dialect.name == "postgresql":
             db.execute(text("SELECT pg_advisory_xact_lock(73921001)"))
-        number_suffix = get_next_contract_number(db)
-        number_prefix = str(getattr(payload, "document_number_prefix", None) or "СД").strip().upper()
+        number_suffix = _legacy_contract_number(db)
+        number_prefix = str(getattr(payload, "document_number_prefix", None) or "ДМК").strip().upper()
         payload.document_number_prefix = number_prefix
         payload.document_number_suffix = number_suffix
         payload.document_number = f"{number_prefix}/{number_suffix}"
@@ -724,7 +900,9 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
 
     safe_date = make_safe_filename(str(getattr(payload, "document_date", "")).replace(".", "-").replace("/", "-"))
     client_last_name = make_safe_filename(str(client.get("last_name") or "Клиент"))
-    filename = make_safe_filename(f"{template_config['file_prefix']}_{safe_date}_{client_last_name}.docx")
+    filename = next_document_filename(
+        db, client_id, make_safe_filename(f"{template_config['file_prefix']}_{safe_date}_{client_last_name}.docx")
+    )
     unique_name = f"{uuid.uuid4()}_{filename}"
 
     os.makedirs(STORAGE_DIR, exist_ok=True)
@@ -782,7 +960,7 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
             ],
         }
         for item in selected_document_tsr_items
-    ] if template_key in {"llc_contract", "zet_contract"} else []
+    ] if template_key in {"llc_contract", "zet_contract", "dmk_full_package", "dmk_contract"} else []
 
     # DBCRM_UPDATE_20260831: stock reuse snapshot
     components_cost = sum(
@@ -801,37 +979,9 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
         else parse_money(context.get("Сумма"))
     )
 
-    old_documents: list[models.Document] = []
-    old_paths: list[str] = []
-    preserved_accounting: dict[str, Any] | None = None
-    if selected_document_tsr_items:
-        candidates = (
-            db.query(models.Document)
-            .filter(
-                models.Document.client_id == client_id,
-                models.Document.document_type.in_(("llc_contract", "zet_contract", "dmk_contract", "sdv_contract")),
-            )
-            .order_by(models.Document.created_at.desc(), models.Document.document_id.desc())
-            .all()
-        )
-        # One certificate may have only one current contract. When several TSRs
-        # are combined into one new contract, replace any older contract that
-        # covered at least one of those concrete client↔TSR records.
-        old_documents = [
-            candidate for candidate in candidates
-            if any(
-                _document_matches_certificate(candidate, certificate)
-                for certificate in selected_document_tsr_items
-            )
-        ]
-        for old_document in old_documents:
-            if preserved_accounting is None:
-                preserved_accounting = _accounting_snapshot(old_document)
-            if old_document.storage_path:
-                old_paths.append(old_document.storage_path)
-            db.delete(old_document)
-        if old_documents:
-            db.flush()
+    # Every generated document is immutable history.  In particular, a new
+    # contract for the same TSR MUST NOT delete or mutate any older document,
+    # its saved DOCX or its own accounting entries.
 
     db_doc = models.Document(
         client_id=client_id,
@@ -868,15 +1018,16 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
                 for component in selected_document_components
             ],
             "document_date": str(getattr(payload, "document_date", "") or ""),
+            "manual_contract_number": template_key == "dmk_full_package",
         },
     )
     db.add(db_doc)
     try:
         db.flush()
-        if template_key in {"llc_contract", "zet_contract", "dmk_contract"}:
+        if template_key in {"llc_contract", "zet_contract", "dmk_contract", "dmk_full_package"}:
             db.add(models.ContractAccounting(
                 document_id=db_doc.document_id,
-                **(preserved_accounting or {}),
+                
             ))
         db.commit()
         db.refresh(db_doc)
@@ -888,14 +1039,6 @@ def generate_contract(db: Session, client_id: uuid.UUID, payload: Any):
             pass
         raise
 
-    # Remove replaced files only after the database transaction succeeded.
-    for old_path in old_paths:
-        if old_path == save_path:
-            continue
-        try:
-            os.remove(old_path)
-        except OSError:
-            pass
     return db_doc
 
 

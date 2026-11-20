@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DateInput from '@/shared/ui/DateInput.vue'
+import MtzDiagnosisPicker from '@/shared/ui/MtzDiagnosisPicker.vue'
+import { MTZ_DISABILITY_REASONS } from '@/shared/lib/mtzDiagnosis'
 import { fetchClient, fetchClients } from '@/shared/api/clients'
 import {
   downloadDocumentBlob,
@@ -31,8 +33,9 @@ const success = ref('')
 
 const contractTemplates = ref<ContractTemplateOption[]>([])
 const contractType = ref('llc_contract')
+const dmkDiagnosis = ref('')
 const contractPrefix = ref('СД')
-const contractNumber = ref('001')
+const contractNumber = ref('030')
 const contractDate = ref(new Date().toISOString().slice(0, 10))
 const planDate = ref(new Date().toISOString().slice(0, 10))
 const appendixDate = ref(new Date().toISOString().slice(0, 10))
@@ -40,13 +43,12 @@ const selectedClientTsrIds = ref<string[]>([])
 const selectedModuleIds = ref<string[]>([])
 
 const mtzTemplates = ref<MtzTemplateOption[]>([])
-const mtzType = ref('mtz_8_1_07_14')
-const mtzNumber = ref('')
-const mtzDate = ref(new Date().toISOString().slice(0, 10))
+const mtzType = ref('mtz_zet_thigh_mpu')
 const disabilityGroupReason = ref('')
-const certificateReference = ref('')
-const diagnosis = ref('')
+const diagnoses = ref<string[]>([])
 const amputationLevel = ref('')
+const stumpCondition = ref<'Функциональная' | 'Нефункциональная'>('Функциональная')
+const activityLevel = ref<'2-3' | '3-4'>('3-4')
 const weightKg = ref('')
 
 function clientId(client: Client) {
@@ -58,8 +60,21 @@ function clientName(client: Client) {
 }
 
 const sortedClients = computed(() => [...clients.value].sort((a, b) => clientName(a).localeCompare(clientName(b), 'ru')))
-const isLlcContract = computed(() => ['llc_contract', 'zet_contract'].includes(contractType.value))
+watch(contractType, (templateType, previous) => {
+  if (templateType === 'dmk_full_package') {
+    contractNumber.value = ''
+    contractPrefix.value = 'ДМК'
+  } else {
+    if (previous === 'dmk_full_package') contractPrefix.value = 'СД'
+    void fetchNextContractNumber(templateType).then((number) => {
+      if (contractType.value === templateType) contractNumber.value = number
+    }).catch(() => {})
+  }
+})
+
+const usesCertificateSelection = computed(() => ['llc_contract', 'zet_contract', 'dmk_full_package'].includes(contractType.value))
 const clientTsrItems = computed(() => selectedClient.value?.tsr_items ?? [])
+const mtzTsrLabels = computed(() => clientTsrItems.value.map((item) => String(item.tsr?.full_tsr_code ?? '')))
 const clientModules = computed(() => (selectedClient.value?.modules ?? []).filter((item) => !item.is_archived))
 const selectedTsrSet = computed(() => new Set(selectedClientTsrIds.value))
 
@@ -109,6 +124,11 @@ async function loadClient() {
   documents.value = []
   selectedClientTsrIds.value = []
   selectedModuleIds.value = []
+  dmkDiagnosis.value = ''
+  disabilityGroupReason.value = ''
+  diagnoses.value = []
+  amputationLevel.value = ''
+  weightKg.value = ''
   if (!selectedClientId.value) return
 
   isLoading.value = true
@@ -167,12 +187,19 @@ async function download(document: ClientDocument) {
 async function generateContract() {
   resetMessages()
   if (!selectedClientId.value) { error.value = 'Выберите пациента.'; return }
-  if (!contractPrefix.value.trim() || !/^\d+$/.test(contractNumber.value.trim())) {
-    error.value = 'Укажите буквенную часть и числовой номер договора.'
+  const isDmkFullPackage = contractType.value === 'dmk_full_package'
+  if (!contractNumber.value.trim() || (!isDmkFullPackage && (!contractPrefix.value.trim() || !/^\d+$/.test(contractNumber.value.trim())))) {
+    error.value = isDmkFullPackage
+      ? 'Введите номер договора ИП ДМК вручную (например, 13072026/1).'
+      : 'Укажите буквенную часть и числовой номер договора.'
     return
   }
-  if (isLlcContract.value && selectedClientTsrIds.value.length === 0) {
-    error.value = 'Для договора ООО выберите хотя бы один ТСР пациента.'
+  if (contractType.value === 'dmk_full_package' && !dmkDiagnosis.value.trim()) {
+    error.value = 'Для полного комплекта ИП ДМК вручную укажите диагноз.'
+    return
+  }
+  if (usesCertificateSelection.value && selectedClientTsrIds.value.length === 0) {
+    error.value = 'Для договора выберите хотя бы один ТСР пациента.'
     return
   }
 
@@ -181,23 +208,27 @@ async function generateContract() {
     const selectedTsr = clientTsrItems.value.filter((item) => selectedTsrSet.value.has(String(item.client_tsr_id ?? '')))
     const payload: ContractGenerationPayload = {
       template_type: contractType.value,
-      document_number: `${contractPrefix.value.trim().toUpperCase()}/${contractNumber.value.trim()}`,
-      document_number_prefix: contractPrefix.value.trim().toUpperCase(),
+      ...(contractType.value === 'dmk_full_package' ? { diagnosis: dmkDiagnosis.value.trim() } : {}),
+      document_number: isDmkFullPackage
+        ? contractNumber.value.trim()
+        : `${contractPrefix.value.trim().toUpperCase()}/${contractNumber.value.trim()}`,
+      document_number_prefix: isDmkFullPackage ? '' : contractPrefix.value.trim().toUpperCase(),
       document_number_suffix: contractNumber.value.trim(),
       document_date: contractDate.value,
-      plan_date: isLlcContract.value ? planDate.value : contractDate.value,
+      plan_date: usesCertificateSelection.value ? planDate.value : contractDate.value,
       appendix_number: '1',
-      appendix_date: isLlcContract.value ? appendixDate.value : contractDate.value,
-      selected_client_tsr_ids: isLlcContract.value ? selectedClientTsrIds.value : [],
-      selected_tsr_ids: isLlcContract.value
+      appendix_date: usesCertificateSelection.value ? appendixDate.value : contractDate.value,
+      selected_client_tsr_ids: usesCertificateSelection.value ? selectedClientTsrIds.value : [],
+      selected_tsr_ids: usesCertificateSelection.value
         ? [...new Set(selectedTsr.map((item) => String(item.tsr_id ?? '')).filter(Boolean))]
         : [],
-      selected_module_ids: isLlcContract.value ? selectedModuleIds.value : [],
+      selected_module_ids: usesCertificateSelection.value ? selectedModuleIds.value : [],
     }
     await generateClientContract(selectedClientId.value, payload)
     success.value = 'Договор сформирован. Скачать его можно в списке документов ниже.'
+    if (contractType.value === 'dmk_full_package') dmkDiagnosis.value = ''
     documents.value = await fetchClientDocuments(selectedClientId.value)
-    contractNumber.value = await fetchNextContractNumber()
+    if (contractType.value !== 'dmk_full_package') contractNumber.value = await fetchNextContractNumber(contractType.value)
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
   } finally {
@@ -208,9 +239,12 @@ async function generateContract() {
 async function generateMtz() {
   resetMessages()
   if (!selectedClientId.value) { error.value = 'Выберите пациента.'; return }
-  const required = [mtzNumber.value, mtzDate.value, disabilityGroupReason.value, certificateReference.value, diagnosis.value, amputationLevel.value, weightKg.value]
-  if (required.some((value) => !String(value).trim())) {
-    error.value = 'Заполните номер/дату МТЗ и все ручные поля.'
+  if (!disabilityGroupReason.value || !diagnoses.value.length || !amputationLevel.value.trim() || !weightKg.value.trim()) {
+    error.value = 'Заполните причину инвалидности, диагноз, уровень ампутации и вес.'
+    return
+  }
+  if (!selectedClient.value?.mse_reference?.trim()) {
+    error.value = 'Сначала заполните справку МСЭ в личных документах пациента.'
     return
   }
 
@@ -218,12 +252,11 @@ async function generateMtz() {
   try {
     await generateClientMtz(selectedClientId.value, {
       template_type: mtzType.value,
-      mtz_number: mtzNumber.value.trim(),
-      document_date: mtzDate.value,
-      disability_group_reason: disabilityGroupReason.value.trim(),
-      certificate_reference: certificateReference.value.trim(),
-      diagnosis: diagnosis.value.trim(),
+      disability_group_reason: disabilityGroupReason.value,
+      diagnoses: diagnoses.value,
       amputation_level: amputationLevel.value.trim(),
+      stump_condition: stumpCondition.value,
+      activity_level: activityLevel.value,
       weight_kg: weightKg.value.trim(),
     })
     success.value = 'МТЗ сформировано. Скачать его можно в списке документов ниже.'
@@ -258,14 +291,14 @@ onMounted(async () => {
       fetchClients({ limit: 100000, archived: true }),
       fetchContractTemplates(),
       fetchMtzTemplates(),
-      fetchNextContractNumber(),
+      fetchNextContractNumber(contractType.value),
     ])
     const unique = new Map<string, Client>()
     ;[...active, ...archived].forEach((client) => unique.set(clientId(client), client))
     clients.value = [...unique.values()]
     contractTemplates.value = templates
     mtzTemplates.value = mtzOptions
-    contractNumber.value = nextNumber
+    if (contractType.value !== 'dmk_full_package') contractNumber.value = nextNumber
     if (templates[0] && !templates.some((item) => item.value === contractType.value)) contractType.value = templates[0].value
     if (mtzOptions[0]) mtzType.value = mtzOptions[0].value
     activeTab.value = tabFromRoute()
@@ -320,14 +353,19 @@ onMounted(async () => {
         </div>
         <div class="form-grid documents-form-grid">
           <label>Шаблон<select v-model="contractType"><option v-for="item in contractTemplates" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-          <label>Буквы номера<input v-model="contractPrefix" maxlength="8" /></label>
-          <label>Номер<input v-model="contractNumber" inputmode="numeric" /></label>
-          <label>Дата документа<DateInput v-model="contractDate" /></label>
-          <label v-if="isLlcContract">Дата плана / ТЗ<DateInput v-model="planDate" /></label>
-          <label v-if="isLlcContract">Дата приложений / акта<DateInput v-model="appendixDate" /></label>
+          <label v-if="contractType !== 'dmk_full_package'">Буквы номера<input v-model="contractPrefix" maxlength="8" /></label>
+          <label>{{ contractType === 'dmk_full_package' ? 'Номер договора (вручную)' : 'Номер' }}<input v-model="contractNumber" :inputmode="contractType === 'dmk_full_package' ? 'text' : 'numeric'" :placeholder="contractType === 'dmk_full_package' ? 'Например: 13072026/1' : 'Номер договора'" /></label>
+          <label class="documents-contract-date-field">Дата документа<DateInput v-model="contractDate" /></label>
+          <label v-if="usesCertificateSelection" class="documents-contract-date-field">Дата плана / ТЗ<DateInput v-model="planDate" /></label>
+          <label v-if="usesCertificateSelection" class="documents-contract-date-field">Дата приложений / акта<DateInput v-model="appendixDate" /></label>
+          <label v-if="contractType === 'dmk_full_package'" class="documents-wide-field documents-contract-diagnosis-field">
+            Диагноз (формулировка для договора ИП ДМК)
+            <textarea v-model="dmkDiagnosis" rows="2" maxlength="1000" required placeholder="Например: нижних конечностей"></textarea>
+            <span class="muted">Введите вручную для этого договора; формулировка подставляется после слов «протез» и «протеза».</span>
+          </label>
         </div>
 
-        <div v-if="isLlcContract" class="documents-tsr-selector">
+        <div v-if="usesCertificateSelection" class="documents-tsr-selector">
           <div class="form-heading compact-heading">
             <div><p class="eyebrow">Состав договора</p><h3>ТСР и комплектующие</h3></div>
           </div>
@@ -362,13 +400,24 @@ onMounted(async () => {
           </div>
           <div class="form-grid documents-form-grid">
             <label class="documents-wide-field">Шаблон / ТСР<select v-model="mtzType"><option v-for="item in mtzTemplates" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-            <label>Номер МТЗ<input v-model="mtzNumber" placeholder="Например: 124/26" /></label>
-            <label class="mtz-date-field">Дата МТЗ<DateInput v-model="mtzDate" aria-label="Дата МТЗ" /></label>
-            <label class="documents-wide-field documents-mtz-disability-field">Группа и причина инвалидности<input v-model="disabilityGroupReason" /></label>
-            <label class="documents-wide-field">Справка<input v-model="certificateReference" /></label>
-            <label class="documents-wide-field">Диагноз<textarea v-model="diagnosis" rows="3" /></label>
-            <label>Уровень ампутации<input v-model="amputationLevel" /></label>
-            <label>Вес пациента (кг)<input v-model="weightKg" inputmode="decimal" /></label>
+            <label class="documents-wide-field documents-mtz-disability-field">Причина инвалидности
+              <select v-model="disabilityGroupReason">
+                <option value="">Выберите причину</option>
+                <option v-for="item in MTZ_DISABILITY_REASONS" :key="item" :value="item">{{ item }}</option>
+              </select>
+            </label>
+            <label class="documents-wide-field">Справка МСЭ (из карточки пациента)
+              <input :value="selectedClient?.mse_reference ?? ''" readonly placeholder="Заполните в личных документах" />
+            </label>
+            <div class="documents-wide-field"><MtzDiagnosisPicker v-model="diagnoses" :tsr-labels="mtzTsrLabels" /></div>
+            <label>1.1 Уровень ампутации<input v-model="amputationLevel" /></label>
+            <label>1.2 Состояние культи
+              <select v-model="stumpCondition"><option>Функциональная</option><option>Нефункциональная</option></select>
+            </label>
+            <label>1.3 Уровень активности
+              <select v-model="activityLevel"><option>2-3</option><option>3-4</option></select>
+            </label>
+            <label>1.4 Вес пациента (кг)<input v-model="weightKg" inputmode="decimal" /></label>
           </div>
           <button class="primary-button" type="submit" :disabled="isSaving">{{ isSaving ? 'Формируем…' : 'Сформировать МТЗ' }}</button>
         </form>
@@ -381,7 +430,7 @@ onMounted(async () => {
             <div><dt>Телефон</dt><dd>{{ mtzAutoData.phone }}</dd></div>
             <div><dt>ТСР</dt><dd>{{ selectedMtzTemplate?.tsr_code ?? '—' }}</dd></div>
           </dl>
-          <p class="form-hint">Группа/причина инвалидности, справка, диагноз, уровень ампутации и вес вводятся только здесь и не сохраняются в карточку пациента.</p>
+          <p class="form-hint">Номер и дата МТЗ остаются пустыми для заполнения после печати. Справка МСЭ хранится в личных документах пациента.</p>
         </aside>
       </div>
     </template>

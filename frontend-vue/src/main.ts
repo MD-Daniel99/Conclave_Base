@@ -9,14 +9,17 @@ import App from './App.vue'
 import { router } from './app/router'
 import { midnightIndigoPreset } from './app/theme'
 import { focusTrap } from './shared/directives/focusTrap'
+import { useAuthStore } from './app/stores/auth'
+import { initResizableTables } from './shared/lib/resizableTables'
 import './assets/styles.css'
 import './assets/design-system.css'
 import './assets/aurora-theme.css'
 import './assets/light-refresh.css'
 
 const app = createApp(App)
+const pinia = createPinia()
 
-app.use(createPinia())
+app.use(pinia)
 app.use(router)
 app.use(PrimeVue, {
   ripple: true,
@@ -35,3 +38,5 @@ app.directive('tooltip', Tooltip)
 app.directive('focus-trap', focusTrap)
 
 app.mount('#app')
+
+initResizableTables(() => useAuthStore(pinia).user?.user_id)

@@ -34,6 +34,7 @@ def get_accounting_report(
     tax_osno_percent: float = Query(default=15.0, ge=0),
     acquiring_percent: float = Query(default=1.0, ge=0),
     vat_percent: float = Query(default=20.0, ge=0),
+    performer_company: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
 ):
@@ -47,6 +48,7 @@ def get_accounting_report(
         tax_osno_percent=tax_osno_percent,
         acquiring_percent=acquiring_percent,
         vat_percent=vat_percent,
+        performer_company=performer_company,
     )
 
 
@@ -60,13 +62,14 @@ def export_accounting_report_xlsx(
     tax_osno_percent: float = Query(default=15.0, ge=0),
     acquiring_percent: float = Query(default=1.0, ge=0),
     vat_percent: float = Query(default=20.0, ge=0),
+    performer_company: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
 ):
     report = build_accounting_report(
         db, start_date=start_date, end_date=end_date, hide_failed=hide_failed,
         tax_percent=tax_percent, tax_usn_percent=tax_usn_percent, tax_osno_percent=tax_osno_percent,
-        acquiring_percent=acquiring_percent, vat_percent=vat_percent,
+        acquiring_percent=acquiring_percent, vat_percent=vat_percent, performer_company=performer_company,
     )
     payload = build_clients_accounting_xlsx(db, report)
     headers = {"Content-Disposition": 'attachment; filename="accounting_clients.xlsx"'}
@@ -83,6 +86,7 @@ def get_contract_accounting_report(
     tax_osno_percent: float = Query(default=15.0, ge=0),
     acquiring_percent: float = Query(default=1.0, ge=0),
     vat_percent: float = Query(default=20.0, ge=0),
+    performer_company: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
 ):
@@ -96,6 +100,7 @@ def get_contract_accounting_report(
         tax_osno_percent=tax_osno_percent,
         acquiring_percent=acquiring_percent,
         vat_percent=vat_percent,
+        performer_company=performer_company,
     )
 
 
@@ -109,13 +114,14 @@ def export_contract_accounting_report_xlsx(
     tax_osno_percent: float = Query(default=15.0, ge=0),
     acquiring_percent: float = Query(default=1.0, ge=0),
     vat_percent: float = Query(default=20.0, ge=0),
+    performer_company: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _current_user=Depends(require_admin),
 ):
     report = build_contract_accounting_report(
         db, start_date=start_date, end_date=end_date, hide_failed=hide_failed,
         tax_percent=tax_percent, tax_usn_percent=tax_usn_percent, tax_osno_percent=tax_osno_percent,
-        acquiring_percent=acquiring_percent, vat_percent=vat_percent,
+        acquiring_percent=acquiring_percent, vat_percent=vat_percent, performer_company=performer_company,
     )
     payload = build_contracts_accounting_xlsx(db, report)
     headers = {"Content-Disposition": 'attachment; filename="accounting_contracts.xlsx"'}

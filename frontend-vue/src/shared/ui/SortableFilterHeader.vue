@@ -17,6 +17,8 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   filterAriaLabel?: string
   filterable?: boolean
+  reorderable?: boolean
+  dragging?: boolean
 }>(), {
   sortKey: null,
   sortDirection: null,
@@ -26,11 +28,16 @@ const props = withDefaults(defineProps<{
   placeholder: 'Фильтр…',
   filterAriaLabel: '',
   filterable: true,
+  reorderable: false,
+  dragging: false,
 })
 
 const emit = defineEmits<{
   sort: [key: string]
   'update:filterValue': [value: string]
+  columnDragStart: [event: DragEvent]
+  columnDrop: [event: DragEvent]
+  columnDragEnd: []
 }>()
 
 function updateFilter(event: Event) {
@@ -39,7 +46,17 @@ function updateFilter(event: Event) {
 </script>
 
 <template>
-  <th class="filterable-table-header" :data-column-key="props.columnKey">
+  <th
+    class="filterable-table-header"
+    :class="{ 'is-column-draggable': props.reorderable, 'is-column-dragging': props.dragging }"
+    :data-column-key="props.columnKey"
+    :draggable="props.reorderable"
+    @dragstart="props.reorderable && emit('columnDragStart', $event)"
+    @dragover="props.reorderable && $event.preventDefault()"
+    @drop="props.reorderable && (emit('columnDrop', $event), $event.preventDefault())"
+    @dragend="props.reorderable && emit('columnDragEnd')"
+  >
+    <span v-if="props.reorderable" class="column-drag-handle" title="Перетащите колонку" aria-hidden="true">⋮⋮</span>
     <button
       type="button"
       class="table-sort-button"

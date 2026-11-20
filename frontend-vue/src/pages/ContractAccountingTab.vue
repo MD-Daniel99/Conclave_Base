@@ -2,7 +2,9 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AccountingPeriodFilter from '@/shared/ui/AccountingPeriodFilter.vue'
+import AccountingTableView from '@/shared/ui/AccountingTableView.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
+import { accountingCompany, companyBadgeClass } from '@/shared/lib/organizations'
 import {
   createAccountingCustomField,
   deleteAccountingCustomField,
@@ -25,7 +27,7 @@ const props = defineProps<{
   taxUsnPercent: number
   taxOsnoPercent: number
   acquiringPercent: number
-  vatPercent: number
+  performerCompany: string
 }>()
 const router = useRouter()
 
@@ -53,7 +55,8 @@ const expenseColumns: Array<{ key: ExpenseKey; label: string }> = [
 ]
 
 const leadingColumns = [
-  { key: 'client', label: 'Договор / клиент' },
+  { key: 'client', label: 'Договор / пациент' },
+  { key: 'agent', label: 'Агент' },
   { key: 'certificate', label: 'Сертификат' },
   { key: 'modules_cost', label: 'Стоимость комплектующих' },
 ]
@@ -112,6 +115,14 @@ const availableColumns = computed(() => [
   })),
   ...trailingColumns,
 ])
+
+function supportsPaymentStatus(row: ContractAccountingRow, key: string) {
+  return key === 'prosthetist_work' || key === 'patient_payment' || (key === 'agency_expenses' &&
+    ['ООО "Смарт Движение"', 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»'].includes(accountingCompany(row.client.performer_company)))
+}
+function isSelectedPaymentExpense() {
+  return Boolean(selectedExpenseRow.value && supportsPaymentStatus(selectedExpenseRow.value, selectedExpenseFieldKey.value))
+}
 
 function getDocumentId(row: ContractAccountingRow) {
   return row.document.document_id
@@ -195,11 +206,25 @@ function syncSelectedColumns() {
 }
 
 function getTaxationSystem(row: ContractAccountingRow) {
+  if (row.client.performer_company === 'ИП ДМК') {
+    return row.client.tax_percent_override == null
+      ? 'ИП ДМК · ставка не задана (расчёт 0%)' 
+      : `ИП ДМК · ${getTaxPercent(row)}%`
+  }
   return `УСН ${getTaxPercent(row)}%`
 }
 
 function getTaxPercent(row: ContractAccountingRow) {
+  if (row.client.performer_company === 'ИП ДМК') {
+    return row.client.tax_percent_override == null ? 0 : Number(row.client.tax_percent_override)
+  }
   return row.client.taxation_system === 'ОСНО' ? props.taxOsnoPercent : props.taxUsnPercent
+}
+
+function getVatPercent(row: ContractAccountingRow) {
+  const fallback = row.client.performer_company === 'ИП ДМК' ? 0 : 20
+  const value = Number(row.client.vat_percent ?? fallback)
+  return Number.isFinite(value) ? Math.max(0, value) : fallback
 }
 
 function isFailedRow(row: ContractAccountingRow) {
@@ -227,7 +252,8 @@ const calculatedRows = computed(() => reportRows.value.map((row) => {
   const modulesCost = parseMoney(row.amounts.modules_cost)
   const stockReusedCost = parseMoney(row.amounts.stock_reused_cost ?? 0)
   const taxPercent = getTaxPercent(row)
-  const vat = certificate * (props.vatPercent / (100 + props.vatPercent))
+  const vatPercent = getVatPercent(row)
+  const vat = certificate * (vatPercent / (100 + vatPercent))
   const revenueWithoutVat = certificate - vat
   const acquiring = certificate * (props.acquiringPercent / 100)
   const taxBase = Math.max(
@@ -262,6 +288,7 @@ function contractColumnValue(item: CalculatedContractRow, key: string): unknown 
     item.row.client.short_name,
     getDocumentDate(item.row),
   ].filter(Boolean).join(' ')
+  if (key === 'agent') return item.row.client.agent_name ?? ''
   if (key === 'certificate') return item.certificate
   if (key === 'modules_cost') return item.modulesCost
   if (key === 'vat') return item.vat
@@ -280,7 +307,7 @@ function contractColumnValue(item: CalculatedContractRow, key: string): unknown 
 }
 
 function contractFilterKind(key: string): TableFilterKind {
-  if (key === 'client') return 'text'
+  if (key === 'client' || key === 'agent') return 'text'
   if (key.startsWith('custom:')) {
     const field = customFields.value.find((entry) => getCustomColumnKey(entry) === key)
     return field && !isNumericField(field) ? 'text' : 'number'
@@ -304,7 +331,7 @@ const rows = computed(() => {
     if ((startDate.value || endDate.value) && !certificateDate) return false
     if (startDate.value && certificateDate < startDate.value) return false
     if (endDate.value && certificateDate > endDate.value) return false
-    const searchable = String(contractColumnValue(item, 'client')).toLocaleLowerCase('ru-RU')
+    const searchable = [contractColumnValue(item, 'client'), contractColumnValue(item, 'agent')].join(' ').toLocaleLowerCase('ru-RU')
     if (normalized && !searchable.includes(normalized)) return false
     return availableColumns.value.every((column) => matchesTableFilter(
       contractColumnValue(item, column.key),
@@ -372,7 +399,7 @@ async function exportContractsXlsx() {
       tax_usn_percent: props.taxUsnPercent,
       tax_osno_percent: props.taxOsnoPercent,
       acquiring_percent: props.acquiringPercent,
-      vat_percent: props.vatPercent,
+      performer_company: props.performerCompany,
     })
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
@@ -391,7 +418,7 @@ async function loadData() {
       tax_usn_percent: props.taxUsnPercent,
       tax_osno_percent: props.taxOsnoPercent,
       acquiring_percent: props.acquiringPercent,
-      vat_percent: props.vatPercent,
+      performer_company: props.performerCompany,
     })
     reportRows.value = report.rows
     customFields.value = report.custom_fields
@@ -464,13 +491,13 @@ function startEditExpense(entry: { id: string; amount: number; description: stri
 }
 
 async function toggleExpenseEntryPaid(entry: { id: string; amount: number; description: string; paid?: boolean | null }) {
-  if (selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  if (!isSelectedPaymentExpense()) return
   const nextPaid = !(entry.paid ?? true)
   expenseDialogLoading.value = true
   try {
     const row = selectedExpenseRow.value
     if (!row) return
-    selectedExpenseHistory.value = await updateContractExpense(getDocumentId(row), 'prosthetist_work', entry.id, { amount: entry.amount, description: entry.description, paid: nextPaid })
+    selectedExpenseHistory.value = await updateContractExpense(getDocumentId(row), selectedExpenseFieldKey.value, entry.id, { amount: entry.amount, description: entry.description, paid: nextPaid })
     await loadData()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -540,7 +567,7 @@ async function saveExpenseEntry() {
   expenseDialogLoading.value = true
   try {
     selectedExpenseHistory.value = await addContractExpense(getDocumentId(row), {
-      field_key: key, amount, description, paid: key === 'prosthetist_work' ? expensePaid.value : true,
+      field_key: key, amount, description, paid: supportsPaymentStatus(row, key) ? expensePaid.value : true,
     })
     expenseAmount.value = ''
     expenseDescription.value = ''
@@ -555,12 +582,12 @@ async function saveExpenseEntry() {
 
 async function changeProsthetistPaymentStatus(paid: boolean) {
   const row = selectedExpenseRow.value
-  if (!row || selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  if (!row || !isSelectedPaymentExpense()) return
   expenseDialogLoading.value = true
   try {
-    selectedExpenseHistory.value = await updateContractExpenseStatus(getDocumentId(row), 'prosthetist_work', paid)
+    selectedExpenseHistory.value = await updateContractExpenseStatus(getDocumentId(row), selectedExpenseFieldKey.value, paid)
     expensePaid.value = paid
-    success.value = paid ? 'Работа протезиста отмечена как оплаченная' : 'Работа протезиста отмечена как неоплаченная'
+    success.value = `${selectedExpenseFieldLabel.value}: ${paid ? 'оплачено' : 'не оплачено'}`
     await loadData()
   } catch (caught) {
     error.value = getApiErrorMessage(caught)
@@ -650,6 +677,8 @@ onMounted(loadData)
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="success" class="form-success">{{ success }}</p>
 
+    <div class="table-count-indicator" role="status">Договоров в таблице: <strong>{{ rows.length }}</strong> · на странице: {{ pagedRows.length }}</div>
+
     <div class="metric-grid">
       <div class="metric-card">
         <span>Сумма сертификатов</span>
@@ -667,7 +696,7 @@ onMounted(loadData)
 
     <div class="accounting-filter-row">
       <form class="accounting-period-controls" @submit.prevent="loadData">
-        <AccountingPeriodFilter v-model:start-date="startDate" v-model:end-date="endDate" label="Период договорной бухгалтерии" storage-key="dbcrm.accounting.contracts.period" />
+        <AccountingPeriodFilter v-model:start-date="startDate" v-model:end-date="endDate" label="Период договорной бухгалтерии" :storage-key="`dbcrm.accounting.contracts.period.${props.performerCompany}`" />
         <div class="accounting-period-actions">
           <button class="secondary-button" type="submit">Обновить</button>
           <button v-if="activeContractFilterCount" class="ghost-button" type="button" @click="resetContractFilters">
@@ -676,7 +705,7 @@ onMounted(loadData)
         </div>
       </form>
       <div class="inline-search wide-search accounting-query-search accounting-query-search-inline">
-        <input v-model="query" placeholder="Договор или клиент" />
+        <input v-model="query" placeholder="Договор или пациент" />
       </div>
       <button class="secondary-button accounting-xlsx-button" type="button" :disabled="isLoading || isExportingXlsx" @click="exportContractsXlsx">
         {{ isExportingXlsx ? 'Готовим .xlsx…' : 'Скачать .xlsx' }}
@@ -710,7 +739,7 @@ onMounted(loadData)
     </div>
 
     <p class="form-hint">
-      Скрытие колонок не влияет на расчёты. Каждый договор считается отдельно: НДС извлекается из суммы сертификата, эквайринг считается от полной суммы, а УСН — от выручки без НДС за вычетом себестоимости комплектующих и эквайринга.
+      Скрытие колонок не влияет на расчёты. Каждый договор считается отдельно: ставка НДС берётся из карточки пациента, эквайринг считается от полной суммы, а УСН — от выручки без НДС за вычетом себестоимости комплектующих и эквайринга.
     </p>
 
     <div class="field-chip-row" aria-label="Настройка колонок бухгалтерии по договорам">
@@ -741,13 +770,15 @@ onMounted(loadData)
 
     </details>
 
+    <AccountingTableView title="Бухгалтерия по договорам" :count="rows.length" :page-count="pagedRows.length">
     <p v-if="isLoading" class="muted">Загружаем договорную бухгалтерию...</p>
 
     <div v-else class="table-wrap accounting-table">
-      <table>
+      <table data-resize-id="accounting-contracts">
         <thead>
           <tr>
-            <SortableFilterHeader v-if="isColumnVisible('client')" label="Договор / клиент" column-key="client" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.client" @sort="sortContracts" @update:filter-value="contractColumnFilters.client = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('client')" label="Договор / пациент" column-key="client" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.client" @sort="sortContracts" @update:filter-value="contractColumnFilters.client = $event" />
+            <SortableFilterHeader v-if="isColumnVisible('agent')" label="Агент" column-key="agent" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.agent" @sort="sortContracts" @update:filter-value="contractColumnFilters.agent = $event" />
             <SortableFilterHeader v-if="isColumnVisible('certificate')" label="Сертификат" column-key="certificate" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.certificate" @sort="sortContracts" @update:filter-value="contractColumnFilters.certificate = $event" />
             <SortableFilterHeader v-if="isColumnVisible('modules_cost')" label="Стоимость комплектующих" column-key="modules_cost" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="contractSortKey" :sort-direction="contractSortDirection" :filter-value="contractColumnFilters.modules_cost" @sort="sortContracts" @update:filter-value="contractColumnFilters.modules_cost = $event" />
             <SortableFilterHeader
@@ -789,10 +820,12 @@ onMounted(loadData)
             <td v-if="isColumnVisible('client')" class="accounting-identity-cell">
               <button class="link-button accounting-client-link" type="button" @click="openClientCard(item.row)">
                 <strong>{{ item.row.document.filename }}</strong>
-                <span class="muted">{{ item.row.client.short_name }} · {{ getTaxationSystem(item.row) }}</span>
+                <span class="accounting-identity-details"><span class="muted">{{ item.row.client.short_name }}</span><span class="org-badge" :class="companyBadgeClass(item.row.client.performer_company)">{{ accountingCompany(item.row.client.performer_company) }}</span><span class="muted">{{ getTaxationSystem(item.row) }}</span></span>
                 <span class="muted">Дата пробития: {{ getDocumentDate(item.row) || '—' }}</span>
+                <span v-if="item.row.document.repeated_certificate" class="muted" title="Этот сертификат уже учтён в другом договоре. Повторно начислять выручку нельзя.">Повторный документ · сумма сертификата учтена в другом договоре</span>
               </button>
             </td>
+            <td v-if="isColumnVisible('agent')" class="accounting-agent-cell">{{ item.row.client.agent_name || '—' }}</td>
             <td
               v-if="isColumnVisible('certificate')"
               class="table-money"
@@ -807,12 +840,12 @@ onMounted(loadData)
             <td v-for="column in expenseColumns.filter((entry) => isColumnVisible(entry.key))" :key="column.key">
               <button
                 class="accounting-expense-cell"
-                :class="{ 'accounting-expense-unpaid': column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid', 'accounting-expense-partial': column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'partial' }"
+                :class="{ 'accounting-expense-unpaid': supportsPaymentStatus(item.row, column.key) && item.row.expense_status?.[column.key] === 'unpaid', 'accounting-expense-partial': supportsPaymentStatus(item.row, column.key) && item.row.expense_status?.[column.key] === 'partial' }"
                 type="button"
                 @click="openExpenseCell(item.row, column.key)"
               >
                 {{ formatMoney(getExpenseCellTotal(item.row, column.key)) }}
-                <span v-if="column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'unpaid'" class="accounting-unpaid-badge">Не оплачено</span><span v-else-if="column.key === 'prosthetist_work' && item.row.expense_status?.prosthetist_work === 'partial'" class="accounting-unpaid-badge">Частично оплачено</span>
+                <span v-if="supportsPaymentStatus(item.row, column.key) && item.row.expense_status?.[column.key] === 'unpaid'" class="accounting-unpaid-badge">Не оплачено</span><span v-else-if="supportsPaymentStatus(item.row, column.key) && item.row.expense_status?.[column.key] === 'partial'" class="accounting-unpaid-badge">Частично оплачено</span>
               </button>
             </td>
             <td
@@ -838,7 +871,7 @@ onMounted(loadData)
             <td
               v-if="isColumnVisible('vat')"
               class="table-money"
-              :title="`НДС по этому договору · ${props.vatPercent}%`"
+              :title="`НДС по этому договору · ${getVatPercent(item.row)}%`"
             >
               {{ formatMoney(item.vat) }}
             </td>
@@ -885,6 +918,7 @@ onMounted(loadData)
         </button>
       </div>
     </div>
+    </AccountingTableView>
 
 
     <div v-if="selectedExpenseRow" class="accounting-expense-modal" role="dialog" aria-modal="true">
@@ -919,7 +953,7 @@ onMounted(loadData)
                   <div class="accounting-expense-entry-meta">
                     <small>{{ entry.username || 'Система' }} · {{ entry.created_at ? new Date(entry.created_at).toLocaleString('ru-RU') : 'ранее' }}</small>
                     <div class="accounting-expense-entry-actions">
-                      <button v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="status-choice compact" :class="{ active: entry.paid !== false, unpaid: entry.paid === false }" type="button" :disabled="expenseDialogLoading" @click="toggleExpenseEntryPaid(entry)">{{ entry.paid === false ? 'Не оплачено' : 'Оплачено' }}</button>
+                      <button v-if="isSelectedPaymentExpense()" class="status-choice compact" :class="{ active: entry.paid !== false, unpaid: entry.paid === false }" type="button" :disabled="expenseDialogLoading" @click="toggleExpenseEntryPaid(entry)">{{ entry.paid === false ? 'Не оплачено' : 'Оплачено' }}</button>
                       <button class="ghost-button" type="button" :disabled="expenseDialogLoading" @click="startEditExpense(entry)">Изменить</button>
                       <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="requestDeleteExpense(entry.id)">Удалить</button>
                     </div>
@@ -937,7 +971,7 @@ onMounted(loadData)
             <p v-else class="muted">Расходов пока нет.</p>
           </div>
 
-          <div v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="accounting-payment-status">
+          <div v-if="isSelectedPaymentExpense()" class="accounting-payment-status">
             <span class="muted">Статус нового расхода:</span>
             <button class="status-choice" :class="{ active: expensePaid }" type="button" @click="changeProsthetistPaymentStatus(true)">Оплачено</button>
             <button class="status-choice unpaid" :class="{ active: !expensePaid }" type="button" @click="changeProsthetistPaymentStatus(false)">Не оплачено</button>

@@ -2,6 +2,7 @@
 import NameIndexAutocomplete from '@/shared/ui/NameIndexAutocomplete.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Archive, Eye, PackageOpen, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { fetchClients } from '@/shared/api/clients'
 import {
   archiveComponent,
@@ -23,6 +24,7 @@ import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
 import EmptyState from '@/shared/ui/EmptyState.vue'
 import StatusPill from '@/shared/ui/StatusPill.vue'
 import SortableFilterHeader from '@/shared/ui/SortableFilterHeader.vue'
+import { usePersistentColumnOrder } from '@/shared/composables/usePersistentColumnOrder'
 import type {
   Client,
   ComponentCreatePayload,
@@ -85,6 +87,10 @@ const selectedComponent = ref<ComponentItem | null>(null)
 const isComponentCardOpen = ref(false)
 const query = ref('')
 const warehouseColumnFilters = reactive<Record<string, string>>({ name: '', supplier: '', quantity: '', cost: '', price: '', order: '', owner: '' })
+const WAREHOUSE_COLUMN_KEYS = ['number', 'name', 'supplier', 'quantity', 'cost', 'price', 'order', 'owner']
+const warehouseColumns = usePersistentColumnOrder('dbcrm.warehouse.columns.v1', WAREHOUSE_COLUMN_KEYS)
+const warehouseColumnOrder = warehouseColumns.order
+const warehouseDraggingColumn = warehouseColumns.draggingKey
 const warehouseSortKey = ref<string | null>(null)
 const warehouseSortDirection = ref<SortDirection>(null)
 const pageLimit = ref(100)
@@ -100,6 +106,10 @@ const quantityActionDialog = reactive<{ open: boolean; action: WarehouseBulkActi
 const componentForm = reactive<ComponentForm>({ ...emptyComponentForm })
 const isLoading = ref(false)
 const isSaving = ref(false)
+const componentAutosaveState = ref<'idle' | 'pending' | 'saving' | 'saved' | 'error' | 'waiting'>('idle')
+const lastSavedComponentState = ref('')
+let componentAutosaveTimeout: number | undefined
+let componentAutosavePromise: Promise<void> | null = null
 const error = ref('')
 const successMessage = ref('')
 
@@ -110,6 +120,24 @@ const hasPreviousPage = computed(() => currentPage.value > 1)
 function warehouseRowNumber(item: ComponentItem) {
   const index = components.value.findIndex((candidate) => getComponentId(candidate) === getComponentId(item))
   return index >= 0 ? index + 1 : 0
+}
+
+function getWarehouseColumnLabel(key: string) {
+  const labels: Record<string, string> = {
+    number: '№', name: 'Комплектующая', supplier: 'Поставщик', quantity: 'Кол-во',
+    cost: 'Себестоимость', price: 'Цена', order: 'Заказ', owner: 'Владелец',
+  }
+  return labels[key] ?? key
+}
+
+function getWarehouseColumnKind(key: string) {
+  return ['quantity', 'cost', 'price'].includes(key) ? 'number' as const : 'text' as const
+}
+
+function getWarehouseColumnPlaceholder(key: string) {
+  if (key === 'quantity') return '>= 1 или 1..10'
+  if (key === 'cost' || key === 'price') return 'Сумма или диапазон'
+  return 'Фильтр…'
 }
 
 function warehouseColumnValue(item: ComponentItem, key: string) {
@@ -472,18 +500,24 @@ function resetComponentForm() {
   selectedComponent.value = null
   componentCardOperationQuantity.value = '1'
   resetMessages()
+  lastSavedComponentState.value = JSON.stringify(componentForm)
 }
 
-function openNewComponent() {
+async function openNewComponent() {
+  await flushComponentAutosave()
   resetComponentForm()
   isComponentCardOpen.value = true
 }
 
-function closeComponentCard() {
+async function closeComponentCard() {
+  await flushComponentAutosave()
   isComponentCardOpen.value = false
 }
 
-function selectComponent(item: ComponentItem) {
+async function selectComponent(item: ComponentItem, skipAutosaveFlush = false) {
+  if (!skipAutosaveFlush && isComponentCardOpen.value && String(selectedComponent.value?.module_id ?? '') !== getComponentId(item)) {
+    await flushComponentAutosave()
+  }
   selectedComponent.value = item
   componentCardOperationQuantity.value = '1'
   const quantity = Number(item.quantity ?? 1) || 1
@@ -510,6 +544,8 @@ function selectComponent(item: ComponentItem) {
 
   isComponentCardOpen.value = true
   resetMessages()
+  lastSavedComponentState.value = JSON.stringify(componentForm)
+  componentAutosaveState.value = 'saved'
 }
 
 function buildComponentPayload(): ComponentCreatePayload {
@@ -570,11 +606,12 @@ function resetFilters() {
   currentPage.value = 1
 }
 
-function switchWarehouseListMode(mode: WarehouseListMode) {
+async function switchWarehouseListMode(mode: WarehouseListMode) {
   if (activeWarehouseListMode.value === mode) {
     return
   }
 
+  await flushComponentAutosave()
   activeWarehouseListMode.value = mode
   selectedComponentIds.value = []
   currentPage.value = 1
@@ -583,56 +620,113 @@ function switchWarehouseListMode(mode: WarehouseListMode) {
   void loadData()
 }
 
-async function saveComponent() {
-  resetMessages()
-
+function validateComponentForm(showError = true) {
   if (!componentForm.module_name_index.trim() || !componentForm.supplier.trim()) {
-    error.value = 'Заполни индекс/название и поставщика.'
+    if (showError) error.value = 'Заполни индекс/название и поставщика.'
+    return false
+  }
+  if (componentForm.client_id && selectedOwnerClientTsrItems.value.length > 0 && !componentForm.client_tsr_id) {
+    if (showError) error.value = 'Выберите ТСР пациента для привязки комплектующей.'
+    return false
+  }
+  return true
+}
+
+function queueComponentAutosave() {
+  if (!isComponentCardOpen.value) return
+  window.clearTimeout(componentAutosaveTimeout)
+  componentAutosaveState.value = validateComponentForm(false) ? 'pending' : 'waiting'
+  componentAutosaveTimeout = window.setTimeout(() => {
+    componentAutosaveTimeout = undefined
+    void saveComponent(true)
+  }, 700)
+}
+
+async function flushComponentAutosave() {
+  window.clearTimeout(componentAutosaveTimeout)
+  componentAutosaveTimeout = undefined
+
+  if (componentAutosavePromise) await componentAutosavePromise
+  if (JSON.stringify(componentForm) !== lastSavedComponentState.value && validateComponentForm(false) && !isSaving.value) {
+    await saveComponent(true)
+  }
+  if (componentAutosavePromise) await componentAutosavePromise
+}
+
+async function saveComponent(automatic = false) {
+  if (!validateComponentForm(!automatic)) {
+    if (automatic) componentAutosaveState.value = 'waiting'
     return
   }
 
-  if (
-    componentForm.client_id
-    && selectedOwnerClientTsrItems.value.length > 0
-    && !componentForm.client_tsr_id
-  ) {
-    error.value = 'Выберите ТСР пациента для привязки комплектующей.'
+  if (componentAutosavePromise) {
+    const active = componentAutosavePromise
+    await active
+    if (componentAutosavePromise === active) componentAutosavePromise = null
+    if (JSON.stringify(componentForm) !== lastSavedComponentState.value && validateComponentForm(false)) {
+      return saveComponent(automatic)
+    }
     return
   }
 
-  isSaving.value = true
+  if (isSaving.value) {
+    if (automatic) queueComponentAutosave()
+    return
+  }
 
+  const snapshot = JSON.stringify(componentForm)
+  const editingItem = selectedComponent.value?.module_id ? selectedComponent.value : null
+  const payload = buildComponentPayload()
+
+  const task = (async () => {
+    resetMessages()
+    isSaving.value = true
+    componentAutosaveState.value = 'saving'
+
+    try {
+      let saved: ComponentItem
+      if (editingItem) {
+        const updatePayload: ComponentUpdatePayload = { ...payload }
+        if (String(editingItem.client_id ?? '') === componentForm.client_id) delete updatePayload.client_id
+        let operationQuantity: number | undefined
+        if (componentAssignmentChanged.value) operationQuantity = parseOperationQuantity(componentCardOperationQuantity.value, editingItem)
+        saved = await updateComponent(getComponentId(editingItem), updatePayload, operationQuantity)
+      } else {
+        saved = await createComponent(payload)
+      }
+
+      lastSavedComponentState.value = snapshot
+      const savedMode: WarehouseListMode = saved.is_archived ? 'archive' : saved.is_in_stock ? 'stock' : 'active'
+      if (savedMode === activeWarehouseListMode.value) {
+        if (JSON.stringify(componentForm) === snapshot) {
+          await selectComponent(saved, true)
+        } else {
+          selectedComponent.value = saved
+        }
+      } else {
+        isComponentCardOpen.value = false
+        resetComponentForm()
+      }
+      if (!automatic) successMessage.value = editingItem ? 'Комплектующая обновлена' : 'Комплектующая создана'
+      await loadData()
+      componentAutosaveState.value = JSON.stringify(componentForm) === lastSavedComponentState.value ? 'saved' : 'pending'
+    } catch (caught) {
+      error.value = getApiErrorMessage(caught)
+      componentAutosaveState.value = 'error'
+    } finally {
+      isSaving.value = false
+    }
+  })()
+
+  componentAutosavePromise = task
   try {
-    const payload = buildComponentPayload()
-    const wasEditing = isEditingComponent.value
-    let saved: ComponentItem
-    if (wasEditing && selectedComponent.value) {
-      const updatePayload: ComponentUpdatePayload = { ...payload }
-      if (String(selectedComponent.value.client_id ?? '') === componentForm.client_id) {
-        delete updatePayload.client_id
-      }
-      let operationQuantity: number | undefined
-      if (componentAssignmentChanged.value) {
-        operationQuantity = parseOperationQuantity(componentCardOperationQuantity.value, selectedComponent.value)
-      }
-      saved = await updateComponent(getComponentId(selectedComponent.value), updatePayload, operationQuantity)
-    } else {
-      saved = await createComponent(payload)
-    }
-
-    const savedMode: WarehouseListMode = saved.is_archived ? 'archive' : saved.is_in_stock ? 'stock' : 'active'
-    if (savedMode === activeWarehouseListMode.value) {
-      selectComponent(saved)
-    } else {
-      closeComponentCard()
-      resetComponentForm()
-    }
-    successMessage.value = wasEditing ? 'Комплектующая обновлена' : 'Комплектующая создана'
-    await loadData()
-  } catch (caught) {
-    error.value = getApiErrorMessage(caught)
+    await task
   } finally {
-    isSaving.value = false
+    if (componentAutosavePromise === task) componentAutosavePromise = null
+  }
+
+  if (isComponentCardOpen.value && JSON.stringify(componentForm) !== lastSavedComponentState.value && validateComponentForm(false)) {
+    queueComponentAutosave()
   }
 }
 
@@ -800,7 +894,17 @@ watch([isComponentCardOpen, () => quantityActionDialog.open], ([isCardOpen, isQu
   window.document.body.classList.toggle('modal-open', isCardOpen || isQuantityOpen)
 })
 
+watch(componentForm, () => {
+  if (!isComponentCardOpen.value || JSON.stringify(componentForm) === lastSavedComponentState.value) return
+  queueComponentAutosave()
+}, { deep: true })
+
 watch([query, pageLimit, warehouseColumnFilters], () => { currentPage.value = 1 }, { deep: true })
+
+onBeforeRouteLeave(async () => {
+  await flushComponentAutosave()
+  return true
+})
 
 onMounted(async () => {
   const [activeClientResult, archivedClientResult, nameResult, tsrResult] = await Promise.allSettled([
@@ -819,6 +923,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.clearTimeout(componentAutosaveTimeout)
   window.document.body.classList.remove('modal-open')
 })
 </script>
@@ -908,33 +1013,38 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <p class="form-hint table-reorder-hint">Колонки можно перетаскивать мышью; выбранный порядок сохраняется автоматически.</p>
+    <div class="table-count-indicator" role="status">Комплектующих: <strong>{{ filteredComponents.length }}</strong> из {{ components.length }} · на странице: {{ pagedComponents.length }} · выбрано: <strong>{{ selectedComponents.length }}</strong></div>
+
     <div class="table-wrap desktop-entity-table">
-      <table>
+      <table data-resize-id="warehouse">
         <thead>
           <tr>
-            <th class="selection-cell">
-              <input
-                type="checkbox"
-                aria-label="Выбрать все позиции на странице"
-                :checked="allPagedComponentsSelected"
-                @change="handleToggleAllComponents"
-              />
-            </th>
-            <SortableFilterHeader label="№" column-key="number" :filterable="false" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" @sort="sortWarehouse" />
-            <SortableFilterHeader label="Комплектующая" column-key="name" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.name" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.name = $event" />
-            <SortableFilterHeader label="Поставщик" column-key="supplier" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.supplier" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.supplier = $event" />
-            <SortableFilterHeader label="Кол-во" column-key="quantity" filter-kind="number" placeholder=">= 1 или 1..10" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.quantity" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.quantity = $event" />
-            <SortableFilterHeader label="Себестоимость" column-key="cost" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.cost" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.cost = $event" />
-            <SortableFilterHeader label="Цена" column-key="price" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.price" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.price = $event" />
-            <SortableFilterHeader label="Заказ" column-key="order" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.order" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.order = $event" />
-            <SortableFilterHeader label="Владелец" column-key="owner" :sort-key="warehouseSortKey" :sort-direction="warehouseSortDirection" :filter-value="warehouseColumnFilters.owner" @sort="sortWarehouse" @update:filter-value="warehouseColumnFilters.owner = $event" />
+            <th class="selection-cell"><input type="checkbox" aria-label="Выбрать все позиции на странице" :checked="allPagedComponentsSelected" @change="handleToggleAllComponents" /></th>
+            <SortableFilterHeader
+              v-for="columnKey in warehouseColumnOrder"
+              :key="columnKey"
+              :label="getWarehouseColumnLabel(columnKey)"
+              :column-key="columnKey"
+              :filterable="columnKey !== 'number'"
+              :filter-kind="getWarehouseColumnKind(columnKey)"
+              :placeholder="getWarehouseColumnPlaceholder(columnKey)"
+              :sort-key="warehouseSortKey"
+              :sort-direction="warehouseSortDirection"
+              :filter-value="warehouseColumnFilters[columnKey] || ''"
+              reorderable
+              :dragging="warehouseDraggingColumn === columnKey"
+              @sort="sortWarehouse"
+              @update:filter-value="warehouseColumnFilters[columnKey] = $event"
+              @column-drag-start="warehouseColumns.startDrag(columnKey, $event)"
+              @column-drop="warehouseColumns.dropOn(columnKey, $event)"
+              @column-drag-end="warehouseColumns.endDrag()"
+            />
             <th aria-label="Действия"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="isLoading" class="no-row-action">
-            <td colspan="10">Загружаем комплектующие...</td>
-          </tr>
+          <tr v-if="isLoading" class="no-row-action"><td :colspan="warehouseColumnOrder.length + 2">Загружаем комплектующие...</td></tr>
           <tr
             v-for="item in pagedComponents"
             v-else
@@ -944,59 +1054,24 @@ onBeforeUnmount(() => {
             @click="activeWarehouseListMode !== 'archive' && selectComponent(item)"
             @keydown.enter="activeWarehouseListMode !== 'archive' && selectComponent(item)"
           >
-            <td class="selection-cell" @click.stop>
-              <input
-                type="checkbox"
-                :aria-label="`Выбрать: ${getComponentName(item)}`"
-                :checked="isComponentSelected(item)"
-                @change="handleToggleComponent(item, $event)"
-              />
-            </td>
-            <td>{{ warehouseRowNumber(item) }}</td>
-            <td class="entity-cell">
-              <div class="entity-primary">
-                <span class="entity-avatar">ТС</span>
-                <span class="entity-copy">
-                  <strong>{{ getComponentName(item) }}</strong>
-                  <span v-if="activeWarehouseListMode !== 'stock'">{{ item.tsr?.full_tsr_code || 'ТСР не указан' }}</span>
-                  <span class="component-attributes">{{ getComponentAttributes(item) }}</span>
-                </span>
-              </div>
-            </td>
-            <td>{{ item.supplier }}</td>
-            <td>{{ item.quantity }}</td>
-            <td class="table-money">
-              <span>{{ formatMoney(item.cost) }}</span>
-              <small v-if="getAvailableComponentQuantity(item) > 1" class="table-money-unit">
-                ({{ getComponentUnitMoney(item.cost, item) }} / шт.)
-              </small>
-            </td>
-            <td class="table-money">
-              <span>{{ formatMoney(item.price) }}</span>
-              <small v-if="getAvailableComponentQuantity(item) > 1" class="table-money-unit">
-                ({{ getComponentUnitMoney(item.price, item) }} / шт.)
-              </small>
-            </td>
-            <td class="order-status-cell">
-              <span :class="{ 'component-count-status--ordered': Number(item.ordered || 0) > 0 }">
-                Заказано <strong>{{ item.ordered || 0 }}</strong>
-              </span>
-              <span :class="{ 'component-count-status--shortfall': hasComponentDeliveryShortfall(item) }">
-                Получено <strong>{{ item.recd || 0 }}</strong>
-              </span>
-              <span :class="{ 'component-count-status--prosthetist': Number(item.prosthetist_keep || 0) > 0 }">
-                У протезиста <strong>{{ item.prosthetist_keep || 0 }}</strong>
-              </span>
-            </td>
-            <td>
-              <StatusPill
-                :label="item.client_id ? getClientLabel(item.client_id) : 'На складе'"
-                :kind="item.client_id ? 'neutral' : 'status'"
-              />
-            </td>
-            <td class="table-actions-cell">
-              <ActionMenu :items="getComponentActions(item)" :label="`Действия: ${getComponentName(item)}`" />
-            </td>
+            <td class="selection-cell" @click.stop><input type="checkbox" :aria-label="`Выбрать: ${getComponentName(item)}`" :checked="isComponentSelected(item)" @change="handleToggleComponent(item, $event)" /></td>
+            <template v-for="columnKey in warehouseColumnOrder" :key="`${getComponentId(item)}-${columnKey}`">
+              <td v-if="columnKey === 'number'">{{ warehouseRowNumber(item) }}</td>
+              <td v-else-if="columnKey === 'name'" class="entity-cell">
+                <div class="entity-primary"><span class="entity-avatar">ТС</span><span class="entity-copy"><strong>{{ getComponentName(item) }}</strong><span v-if="activeWarehouseListMode !== 'stock'">{{ item.tsr?.full_tsr_code || 'ТСР не указан' }}</span><span class="component-attributes">{{ getComponentAttributes(item) }}</span></span></div>
+              </td>
+              <td v-else-if="columnKey === 'supplier'">{{ item.supplier }}</td>
+              <td v-else-if="columnKey === 'quantity'">{{ item.quantity }}</td>
+              <td v-else-if="columnKey === 'cost'" class="table-money"><span>{{ formatMoney(item.cost) }}</span><small v-if="getAvailableComponentQuantity(item) > 1" class="table-money-unit">({{ getComponentUnitMoney(item.cost, item) }} / шт.)</small></td>
+              <td v-else-if="columnKey === 'price'" class="table-money"><span>{{ formatMoney(item.price) }}</span><small v-if="getAvailableComponentQuantity(item) > 1" class="table-money-unit">({{ getComponentUnitMoney(item.price, item) }} / шт.)</small></td>
+              <td v-else-if="columnKey === 'order'" class="order-status-cell">
+                <span :class="{ 'component-count-status--ordered': Number(item.ordered || 0) > 0 }">Заказано <strong>{{ item.ordered || 0 }}</strong></span>
+                <span :class="{ 'component-count-status--shortfall': hasComponentDeliveryShortfall(item) }">Получено <strong>{{ item.recd || 0 }}</strong></span>
+                <span :class="{ 'component-count-status--prosthetist': Number(item.prosthetist_keep || 0) > 0 }">У протезиста <strong>{{ item.prosthetist_keep || 0 }}</strong></span>
+              </td>
+              <td v-else-if="columnKey === 'owner'"><StatusPill :label="item.client_id ? getClientLabel(item.client_id) : 'На складе'" :kind="item.client_id ? 'neutral' : 'status'" /></td>
+            </template>
+            <td class="table-actions-cell"><ActionMenu :items="getComponentActions(item)" :label="`Действия: ${getComponentName(item)}`" /></td>
           </tr>
         </tbody>
       </table>
@@ -1089,7 +1164,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <form class="side-form flat-form" @submit.prevent="saveComponent">
+        <form class="side-form flat-form" @submit.prevent>
           <div class="form-grid">
             <label>
               ТСР комплектующей
@@ -1256,9 +1331,9 @@ onBeforeUnmount(() => {
             <textarea v-model="componentForm.notes" rows="3" />
           </label>
 
-          <button class="primary-button" :disabled="isSaving" type="submit">
-            {{ isSaving ? 'Сохраняем...' : 'Сохранить комплектующую' }}
-          </button>
+          <div class="autosave-status" :class="{ 'form-error': componentAutosaveState === 'error' }" aria-live="polite">
+            {{ componentAutosaveState === 'saving' ? 'Сохраняем изменения…' : componentAutosaveState === 'pending' ? 'Изменения будут сохранены автоматически…' : componentAutosaveState === 'waiting' ? 'Автосохранение начнётся после заполнения названия и поставщика' : componentAutosaveState === 'error' ? 'Не удалось автоматически сохранить изменения' : 'Все изменения сохранены автоматически' }}
+          </div>
         </form>
       </section>
     </div>

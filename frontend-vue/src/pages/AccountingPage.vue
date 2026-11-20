@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AccountingPeriodFilter from '@/shared/ui/AccountingPeriodFilter.vue'
+import AccountingTableView from '@/shared/ui/AccountingTableView.vue'
 import ContractAccountingTab from '@/pages/ContractAccountingTab.vue'
 import { formatMoney, formatMoneyInput, parseMoney } from '@/shared/lib/money'
+import { ALL_COMPANIES, COMPANY_OPTIONS, accountingCompany, companyBadgeClass, readCompanySelection, writeCompanySelection } from '@/shared/lib/organizations'
 
 import { useAuthStore } from '@/app/stores/auth'
 import {
@@ -47,6 +49,7 @@ const ACCOUNTING_CONTRACT_DOCUMENT_TYPES = new Set([
   'llc_contract',
   'zet_contract',
   'dmk_contract',
+  'dmk_full_package',
   'sdv_contract',
   // Legacy generated contract types are still valid evidence that a
   // contract exists, even when they are not editable in the new per-document
@@ -67,7 +70,8 @@ const expenseColumns: Array<{ key: ExpenseKey; label: string }> = [
 ]
 
 const leadingColumns = [
-  { key: 'client', label: 'Клиент' },
+  { key: 'client', label: 'Пациент' },
+  { key: 'agent', label: 'Агент' },
   { key: 'certificate', label: 'Сертификат' },
   { key: 'modules_cost', label: 'Стоимость комплектующих' },
 ]
@@ -80,8 +84,36 @@ const trailingColumns = [
   { key: 'profit', label: 'Прибыль' },
 ]
 
+const accountingCompanies = COMPANY_OPTIONS
+const getAccountingCompany = (client: Client) => accountingCompany(client.performer_company)
 const authStore = useAuthStore()
 const router = useRouter()
+const accountingSelectionStorageKey = computed(() => `dbcrm.accounting.companies.v1.${authStore.user?.user_id ?? 'anonymous'}`)
+const selectedAccountingCompanies = ref<string[]>([...ALL_COMPANIES])
+// "__none__" is an explicit, never-matching filter for report endpoints and XLSX.
+// An omitted/empty query parameter means "all companies" in legacy API calls.
+const accountingSelectionKey = computed(() => selectedAccountingCompanies.value.join('|') || '__none__')
+const accountingSelectionLabel = computed(() => {
+  if (selectedAccountingCompanies.value.length === 0) return 'Ничего не выбрано'
+  if (selectedAccountingCompanies.value.length === accountingCompanies.length) return 'Все организации'
+  if (selectedAccountingCompanies.value.length === 1) {
+    return accountingCompanies.find((item) => item.value === selectedAccountingCompanies.value[0])?.label ?? ''
+  }
+  return `Выбрано организаций: ${selectedAccountingCompanies.value.length}`
+})
+const allAccountingCompaniesSelected = computed(() => selectedAccountingCompanies.value.length === accountingCompanies.length)
+function selectAllAccountingCompanies() {
+  selectedAccountingCompanies.value = [...ALL_COMPANIES]
+}
+function selectOnlyAccountingCompany(company: string) {
+  selectedAccountingCompanies.value = [company]
+}
+function toggleAccountingCompany(company: string) {
+  const selection = new Set(selectedAccountingCompanies.value)
+  if (selection.has(company)) selection.delete(company)
+  else selection.add(company)
+  selectedAccountingCompanies.value = ALL_COMPANIES.filter((item) => selection.has(item))
+}
 const activeAccountingTab = ref<'clients' | 'contracts'>('clients')
 const clients = ref<Client[]>([])
 const customFields = ref<AccountingCustomField[]>([])
@@ -93,7 +125,6 @@ const hideFailed = ref(false)
 const taxUsnPercent = ref(6)
 const taxOsnoPercent = ref(15)
 const acquiringPercent = ref(1)
-const vatPercent = ref(20)
 const newFieldName = ref('')
 const newFieldType = ref<'number' | 'text'>('number')
 const pageLimit = ref(50)
@@ -154,9 +185,10 @@ function getCertificateSlices(client: Client): CertificateSlice[] {
       date: String(item.check_date ?? '').slice(0, 10),
       amount: parseMoney(item.certificate_price),
     }))
-    .filter((item) => item.amount > 0)
 
-  if (normalized.length > 0) return normalized
+  // Even a zero-valued normalized TSR supersedes the legacy patient-level
+  // certificate: falling back to the legacy amount would inflate revenue.
+  if ((client.tsr_items ?? []).length > 0) return normalized
   return [{
     id: '',
     date: String(client.check_date ?? '').slice(0, 10),
@@ -192,8 +224,15 @@ function clientSearchText(client: Client) {
 const filteredClients = computed(() => {
   const normalizedQuery = query.value.trim().toLocaleLowerCase('ru-RU')
   return clients.value.filter((client) => {
+    // A change to the selector must hide excluded patients immediately, without
+    // waiting for the next async reload to finish.
+    if (!selectedAccountingCompanies.value.includes(getAccountingCompany(client))) return false
     if (hideFailed.value && isFailedClient(client)) return false
-    if ((startDate.value || endDate.value) && getVisibleCertificateSlices(client).length === 0) return false
+    // Keep cost-only patients: an unpunched TSR can incur real component costs
+    // in a period before any certificate is punched (same as backend XLSX).
+    if ((startDate.value || endDate.value)
+      && getVisibleCertificateSlices(client).length === 0
+      && getModulesCost(client) <= 0) return false
     return !normalizedQuery || clientSearchText(client).includes(normalizedQuery)
   })
 })
@@ -201,10 +240,9 @@ const filteredClients = computed(() => {
 const calculatedRows = computed(() =>
   filteredClients.value.map((client) => {
     const certificateSlices = getVisibleCertificateSlices(client)
-    const certificateIds = new Set(certificateSlices.map((item) => item.id).filter(Boolean))
     const rawCertificate = certificateSlices.reduce((sum, item) => sum + item.amount, 0)
-    const rawModulesCost = getModulesCost(client, certificateIds)
-    const stockReusedCost = getStockReusedCost(client, certificateIds)
+    const rawModulesCost = getModulesCost(client)
+    const stockReusedCost = getStockReusedCost(client)
     const fixedExpenses = expenseColumns.reduce((sum, column) => (
       sum + getExpenseCellTotal(client, column.key)
     ), 0)
@@ -216,7 +254,8 @@ const calculatedRows = computed(() =>
       0,
     )
     const taxPercent = getClientTaxPercent(client)
-    const vat = rawCertificate * (vatPercent.value / (100 + vatPercent.value))
+    const vatPercent = getClientVatPercent(client)
+    const vat = rawCertificate * (vatPercent / (100 + vatPercent))
     const revenueWithoutVat = rawCertificate - vat
     const acquiring = rawCertificate * (acquiringPercent.value / 100)
     const taxBase = Math.max(
@@ -245,7 +284,8 @@ const calculatedRows = computed(() =>
 )
 
 function accountingColumnValue(row: (typeof calculatedRows.value)[number], key: string): unknown {
-  if (key === 'client') return `${getClientName(row.client)} ${getAgentName(row.client)} ${row.certificateDates.join(' ')}`
+  if (key === 'client') return `${getClientName(row.client)} ${row.certificateDates.join(' ')}`
+  if (key === 'agent') return getAgentName(row.client) === '—' ? '' : getAgentName(row.client)
   if (key === 'certificate') return row.certificate
   if (key === 'modules_cost') return row.modulesCost
   if (key === 'vat') return row.vat
@@ -264,7 +304,7 @@ function accountingColumnValue(row: (typeof calculatedRows.value)[number], key: 
 }
 
 function accountingFilterKind(key: string): TableFilterKind {
-  if (key === 'client') return 'text'
+  if (key === 'client' || key === 'agent') return 'text'
   if (key.startsWith('custom:')) {
     const field = customFields.value.find((item) => getCustomColumnKey(item) === key)
     return field && getFieldType(field) === 'text' ? 'text' : 'number'
@@ -373,11 +413,25 @@ function getCheckDate(client: Client) {
 }
 
 function getTaxationSystem(client: Client) {
+  if (client.performer_company === 'ИП ДМК') {
+    return client.tax_percent_override == null
+      ? 'ИП ДМК · ставка не задана (расчёт 0%)' 
+      : `ИП ДМК · ${getClientTaxPercent(client)}%`
+  }
   return `УСН ${getClientTaxPercent(client)}%`
 }
 
 function getClientTaxPercent(client: Client) {
+  if (client.performer_company === 'ИП ДМК') {
+    return client.tax_percent_override == null ? 0 : Number(client.tax_percent_override)
+  }
   return client.taxation_system === 'ОСНО' ? taxOsnoPercent.value : taxUsnPercent.value
+}
+
+function getClientVatPercent(client: Client) {
+  const fallback = client.performer_company === 'ИП ДМК' ? 0 : 20
+  const value = Number(client.vat_percent ?? fallback)
+  return Number.isFinite(value) ? Math.max(0, value) : fallback
 }
 
 function clientHasGeneratedContract(client: Client) {
@@ -417,31 +471,42 @@ function isComponentManuallyArchived(component: { is_manually_archived?: boolean
   return component.is_manually_archived === true
 }
 
-function getModulesCost(client: Client, visibleCertificateIds: Set<string>) {
-  const dateFilterActive = Boolean(startDate.value || endDate.value)
-  const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
+function componentBusinessDate(client: Client, component: NonNullable<Client['modules']>[number]) {
+  // Match app/services/accounting_report.py:module_accounting_date.
+  const tsrItems = client.tsr_items ?? []
+  const assigned = tsrItems.find((item) => String(item.client_tsr_id) === String(component.client_tsr_id ?? ''))
+  const assignedDate = String(assigned?.check_date ?? '').slice(0, 10)
+  if (assignedDate) return assignedDate
+  const dates = tsrItems.map((item) => String(item.check_date ?? '').slice(0, 10)).filter(Boolean).sort()
+  const clientDate = tsrItems.length > 0 ? (dates[dates.length - 1] ?? '') : String(client.check_date ?? '').slice(0, 10)
+  if (clientDate) return clientDate
+  if (assigned?.created_at) return String(assigned.created_at).slice(0, 10)
+  return String(component.created_at ?? '').slice(0, 10)
+}
+
+function isComponentInAccountingPeriod(client: Client, component: NonNullable<Client['modules']>[number]) {
+  if (!startDate.value && !endDate.value) return true
+  const date = componentBusinessDate(client, component)
+  if (!date) return false
+  if (startDate.value && date < startDate.value) return false
+  if (endDate.value && date > endDate.value) return false
+  return true
+}
+
+function getModulesCost(client: Client) {
   return (client.modules ?? []).reduce((sum, component) => {
-    // is_archived выставляется автоматически при переводе пациента
-    // в «Выполненные» и не должен убирать уже понесённый расход.
-    // Исключаем только явно списанные вручную комплектующие.
+    // Automatic archiving must not erase historical costs. Manual write-offs
+    // and previously purchased stock are excluded from new component costs.
     if (isComponentManuallyArchived(component) || component.accounting_cost_excluded) return sum
-    if (dateFilterActive && hasNormalizedCertificates) {
-      const certificateId = String(component.client_tsr_id ?? '')
-      if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
-    }
+    if (!isComponentInAccountingPeriod(client, component)) return sum
     return sum + parseMoney(component.cost)
   }, 0)
 }
 
-function getStockReusedCost(client: Client, visibleCertificateIds: Set<string>) {
-  const dateFilterActive = Boolean(startDate.value || endDate.value)
-  const hasNormalizedCertificates = (client.tsr_items ?? []).length > 0
+function getStockReusedCost(client: Client) {
   return (client.modules ?? []).reduce((sum, component) => {
     if (isComponentManuallyArchived(component) || !component.accounting_cost_excluded) return sum
-    if (dateFilterActive && hasNormalizedCertificates) {
-      const certificateId = String(component.client_tsr_id ?? '')
-      if (!certificateId || !visibleCertificateIds.has(certificateId)) return sum
-    }
+    if (!isComponentInAccountingPeriod(client, component)) return sum
     return sum + parseMoney(component.cost)
   }, 0)
 }
@@ -511,6 +576,14 @@ function resetAccountingFilters() {
   resetAccountingPage()
 }
 
+function supportsPaymentStatus(client: Client, key: string) {
+  return key === 'prosthetist_work' || key === 'patient_payment' || (key === 'agency_expenses' &&
+    ['ООО "Смарт Движение"', 'ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»'].includes(getAccountingCompany(client)))
+}
+function isSelectedPaymentExpense() {
+  return Boolean(selectedExpenseClient.value && supportsPaymentStatus(selectedExpenseClient.value, selectedExpenseFieldKey.value))
+}
+
 function getExpenseEntries(client: Client, key: string) {
   return client.accounting_expenses?.[key] ?? []
 }
@@ -528,7 +601,7 @@ function getExpenseCellTotal(client: Client, key: string) {
 }
 
 function getExpensePaymentState(client: Client, key: string): 'paid' | 'unpaid' | 'partial' {
-  if (key !== 'prosthetist_work') return 'paid'
+  if (!supportsPaymentStatus(client, key)) return 'paid'
   const entries = getExpenseEntries(client, key)
   const legacyPaid = client.accounting_expense_status?.[key] !== 'unpaid'
   if (!entries.length) return legacyPaid ? 'paid' : 'unpaid'
@@ -594,13 +667,13 @@ function startEditExpense(entry: { id: string; amount: number; description: stri
 }
 
 async function toggleExpenseEntryPaid(entry: { id: string; amount: number; description: string; paid?: boolean | null }) {
-  if (selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  if (!isSelectedPaymentExpense()) return
   const nextPaid = !(entry.paid ?? true)
   expenseDialogLoading.value = true
   try {
     const client = selectedExpenseClient.value
     if (!client) return
-    selectedExpenseHistory.value = await updateClientExpense(getClientId(client), 'prosthetist_work', entry.id, { amount: entry.amount, description: entry.description, paid: nextPaid })
+    selectedExpenseHistory.value = await updateClientExpense(getClientId(client), selectedExpenseFieldKey.value, entry.id, { amount: entry.amount, description: entry.description, paid: nextPaid })
     await loadData()
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -683,7 +756,7 @@ async function saveExpenseEntry() {
   resetMessages()
   try {
     selectedExpenseHistory.value = await addClientExpense(getClientId(client), {
-      field_key: key, amount, description, paid: key === 'prosthetist_work' ? expensePaid.value : true,
+      field_key: key, amount, description, paid: supportsPaymentStatus(client, key) ? expensePaid.value : true,
     })
     expenseAmount.value = ''
     expenseDescription.value = ''
@@ -703,10 +776,10 @@ async function saveExpenseEntry() {
 
 async function changeProsthetistPaymentStatus(paid: boolean) {
   const client = selectedExpenseClient.value
-  if (!client || selectedExpenseFieldKey.value !== 'prosthetist_work') return
+  if (!client || !isSelectedPaymentExpense()) return
   expenseDialogLoading.value = true
   try {
-    selectedExpenseHistory.value = await updateClientExpenseStatus(getClientId(client), 'prosthetist_work', paid)
+    selectedExpenseHistory.value = await updateClientExpenseStatus(getClientId(client), selectedExpenseFieldKey.value, paid)
     expensePaid.value = paid
     await loadData()
     const refreshed = clients.value.find((item) => getClientId(item) === getClientId(client))
@@ -782,9 +855,6 @@ async function loadSettings() {
     if (typeof settings.acq_percent === 'number') {
       acquiringPercent.value = settings.acq_percent
     }
-    if (typeof settings.vat_percent === 'number') {
-      vatPercent.value = settings.vat_percent
-    }
   } catch {
     // Настройки не должны блокировать бухгалтерию.
   } finally {
@@ -818,9 +888,7 @@ async function savePercentSettings() {
       tax_usn_percent: taxUsnPercent.value,
       tax_osno_percent: taxOsnoPercent.value,
       acq_percent: acquiringPercent.value,
-      vat_percent: vatPercent.value,
     })
-    successMessage.value = 'Проценты сохранены автоматически'
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
   } finally {
@@ -839,7 +907,7 @@ async function exportClientsXlsx() {
       tax_usn_percent: taxUsnPercent.value,
       tax_osno_percent: taxOsnoPercent.value,
       acquiring_percent: acquiringPercent.value,
-      vat_percent: vatPercent.value,
+      performer_company: accountingSelectionKey.value,
     })
   } catch (caughtError) {
     error.value = getApiErrorMessage(caughtError)
@@ -848,7 +916,9 @@ async function exportClientsXlsx() {
   }
 }
 
+let latestAccountingLoad = 0
 async function loadData() {
+  const thisLoad = ++latestAccountingLoad
   isLoading.value = true
   error.value = ''
 
@@ -860,12 +930,14 @@ async function loadData() {
       fetchClientContractCoverage(),
     ])
 
+    if (thisLoad !== latestAccountingLoad) return
     // Бухгалтерия должна видеть всю базу пациентов, а не только активных.
     // Архивность и статусы остаются доступными для фильтрации в интерфейсе.
     // Пациенты из «Не пробитые пациенты» полностью исключены из бухгалтерии.
     // Это должно работать независимо от выбранного периода, включая «Все время».
     clients.value = [...activeClientsResponse, ...archivedClientsResponse].filter(
-      (client) => client.workflow_bucket !== 'unpunched',
+      (client) => client.workflow_bucket !== 'unpunched'
+        && selectedAccountingCompanies.value.includes(getAccountingCompany(client)),
     )
     customFields.value = fieldsResponse
     contractCoverage.value = coverageResponse
@@ -873,9 +945,9 @@ async function loadData() {
     Object.keys(editableRows).forEach((key) => delete editableRows[key])
     resetAccountingPage()
   } catch (caughtError) {
-    error.value = getApiErrorMessage(caughtError)
+    if (thisLoad === latestAccountingLoad) error.value = getApiErrorMessage(caughtError)
   } finally {
-    isLoading.value = false
+    if (thisLoad === latestAccountingLoad) isLoading.value = false
   }
 }
 
@@ -935,11 +1007,28 @@ async function removeCustomField(field: AccountingCustomField) {
   }
 }
 
+watch(accountingSelectionStorageKey, (key) => {
+  selectedAccountingCompanies.value = readCompanySelection(key)
+}, { immediate: true })
+watch(selectedAccountingCompanies, (companies) => {
+  writeCompanySelection(accountingSelectionStorageKey.value, companies)
+})
 watch([query, startDate, endDate, hideFailed, pageLimit, accountingColumnFilters], resetAccountingPage, { deep: true })
-watch([taxUsnPercent, taxOsnoPercent, acquiringPercent, vatPercent], queuePercentSettingsSave)
+watch([taxUsnPercent, taxOsnoPercent, acquiringPercent], queuePercentSettingsSave)
 watch(activeAccountingTab, (tab) => {
   if (tab === 'clients') {
     void loadData()
+  }
+})
+watch(accountingSelectionKey, async () => {
+  currentPage.value = 1
+  startDate.value = ''
+  endDate.value = ''
+  // The period filter is keyed by legal entity. Wait for the newly mounted
+  // filter to restore that entity's saved period before loading its ledger.
+  await nextTick()
+  if (activeAccountingTab.value === 'clients') {
+    await loadData()
   }
 })
 
@@ -957,9 +1046,23 @@ onMounted(async () => {
       </div>
     </div>
 
+    <section class="accounting-company-selector" aria-label="Выбор бухгалтерий">
+      <div class="accounting-company-selector-title">
+        <div><strong>Какие бухгалтерии показывать</strong><span class="muted">{{ accountingSelectionLabel }}</span></div>
+        <div class="row-actions"><button class="ghost-button" type="button" @click="selectedAccountingCompanies = []">Снять все</button><button class="secondary-button" :class="{ active: allAccountingCompaniesSelected }" type="button" @click="selectAllAccountingCompanies">Все сразу</button></div>
+      </div>
+      <div class="accounting-company-choices">
+        <label v-for="company in accountingCompanies" :key="company.value" class="accounting-company-choice">
+          <input type="checkbox" :checked="selectedAccountingCompanies.includes(company.value)" @change="toggleAccountingCompany(company.value)" />
+          <span>{{ company.label }}</span>
+          <button class="ghost-button" type="button" :aria-label="`Показать только ${company.label}`" @click.prevent="selectOnlyAccountingCompany(company.value)">Только эта</button>
+        </label>
+      </div>
+    </section>
+
     <div class="tabs" role="tablist">
       <button :class="{ active: activeAccountingTab === 'clients' }" type="button" @click="activeAccountingTab = 'clients'">
-        По клиентам
+        По пациентам
       </button>
       <button :class="{ active: activeAccountingTab === 'contracts' }" type="button" @click="activeAccountingTab = 'contracts'">
         По договорам
@@ -981,10 +1084,6 @@ onMounted(async () => {
         Эквайринг, %
         <input v-model.number="acquiringPercent" min="0" step="0.1" type="number" />
       </label>
-      <label>
-        НДС, %
-        <input v-model.number="vatPercent" min="0" step="0.1" type="number" />
-      </label>
       <span class="muted accounting-autosave-status">
         {{ isPercentSaving ? 'Сохраняем проценты...' : 'Проценты сохраняются автоматически' }}
       </span>
@@ -995,6 +1094,8 @@ onMounted(async () => {
     <template v-if="activeAccountingTab === 'clients'">
       <p v-if="error" class="form-error">{{ error }}</p>
       <p v-if="successMessage" class="form-success">{{ successMessage }}</p>
+
+      <div class="table-count-indicator" role="status">Записей в бухгалтерии: <strong>{{ rows.length }}</strong> из {{ clients.length }} · на странице: {{ pagedRows.length }}</div>
 
       <div class="metric-grid">
         <div class="metric-card">
@@ -1015,7 +1116,7 @@ onMounted(async () => {
 
       <div class="accounting-filter-row">
         <form class="accounting-period-controls" @submit.prevent="loadData">
-          <AccountingPeriodFilter v-model:start-date="startDate" v-model:end-date="endDate" storage-key="dbcrm.accounting.clients.period" />
+          <AccountingPeriodFilter :key="`clients-period-${accountingSelectionKey}`" v-model:start-date="startDate" v-model:end-date="endDate" :storage-key="`dbcrm.accounting.clients.period.${accountingSelectionKey}`" />
           <div class="accounting-period-actions">
             <button class="secondary-button" type="submit">Обновить</button>
             <button v-if="activeAccountingFilterCount" class="ghost-button" type="button" @click="resetAccountingFilters">
@@ -1057,7 +1158,7 @@ onMounted(async () => {
         </label>
       </div>
 
-      <p class="form-hint">Скрытие колонок не влияет на расчёты. НДС извлекается из суммы сертификата, эквайринг считается от полной суммы, а УСН — от выручки без НДС за вычетом себестоимости комплектующих и эквайринга.</p>
+      <p class="form-hint">Скрытие колонок не влияет на расчёты. Ставка НДС берётся из карточки каждого пациента, эквайринг считается от полной суммы, а УСН — от выручки без НДС за вычетом себестоимости комплектующих и эквайринга.</p>
 
       <div class="field-chip-row" aria-label="Настройка колонок бухгалтерии">
         <button
@@ -1087,13 +1188,15 @@ onMounted(async () => {
 
       </details>
 
+    <AccountingTableView title="Бухгалтерия по пациентам" :count="rows.length" :page-count="pagedRows.length">
       <p v-if="isLoading" class="muted">Загружаем бухгалтерию...</p>
 
       <div v-else class="table-wrap accounting-table">
-        <table>
+        <table data-resize-id="accounting-clients">
           <thead>
             <tr>
-              <SortableFilterHeader v-if="isColumnVisible('client')" label="Клиент" column-key="client" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.client" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.client = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('client')" label="Пациент" column-key="client" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.client" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.client = $event" />
+              <SortableFilterHeader v-if="isColumnVisible('agent')" label="Агент" column-key="agent" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.agent" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.agent = $event" />
               <SortableFilterHeader v-if="isColumnVisible('certificate')" label="Сертификат" column-key="certificate" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.certificate" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.certificate = $event" />
               <SortableFilterHeader v-if="isColumnVisible('modules_cost')" label="Стоимость комплектующих" column-key="modules_cost" filter-kind="number" placeholder="Сумма или диапазон" :sort-key="accountingSortKey" :sort-direction="accountingSortDirection" :filter-value="accountingColumnFilters.modules_cost" @sort="sortAccounting" @update:filter-value="accountingColumnFilters.modules_cost = $event" />
               <SortableFilterHeader
@@ -1139,12 +1242,13 @@ onMounted(async () => {
               <td v-if="isColumnVisible('client')" class="accounting-identity-cell">
                 <button class="link-button accounting-client-link" type="button" @click="openClientCard(row.client)">
                   <strong>{{ getClientName(row.client) }}</strong>
-                  <span class="muted">{{ getTaxationSystem(row.client) }} · дата пробития {{ getCheckDate(row.client) || '—' }}</span>
+                  <span class="accounting-identity-details"><span class="org-badge" :class="companyBadgeClass(getAccountingCompany(row.client))">{{ getAccountingCompany(row.client) }}</span><span class="muted">{{ getTaxationSystem(row.client) }} · дата пробития {{ getCheckDate(row.client) || '—' }}</span></span>
                   <span v-if="clientRequiresContract(row.client)" class="contract-warning">
                     Необходимо сделать договор
                   </span>
                 </button>
               </td>
+              <td v-if="isColumnVisible('agent')" class="accounting-agent-cell">{{ getAgentName(row.client) }}</td>
               <td v-if="isColumnVisible('certificate')" class="table-money">{{ formatMoney(row.certificate) }}</td>
               <td v-if="isColumnVisible('modules_cost')" class="table-money">
                 {{ formatMoney(row.modulesCost) }}
@@ -1182,7 +1286,7 @@ onMounted(async () => {
                   @blur="formatCustomEditableValue(row.client, field)"
                 />
               </td>
-              <td v-if="isColumnVisible('vat')" class="table-money">{{ formatMoney(row.vat) }}</td>
+              <td v-if="isColumnVisible('vat')" class="table-money" :title="`НДС ${getClientVatPercent(row.client)}%`">{{ formatMoney(row.vat) }}</td>
               <td
                 v-if="isColumnVisible('tax')"
                 class="table-money"
@@ -1222,6 +1326,7 @@ onMounted(async () => {
           </button>
         </div>
       </div>
+      </AccountingTableView>
     </template>
 
 
@@ -1266,7 +1371,7 @@ onMounted(async () => {
                   <div class="accounting-expense-entry-meta">
                     <small>{{ entry.username || 'Система' }} · {{ entry.created_at ? formatDateTime(entry.created_at) : 'ранее' }}</small>
                     <div class="accounting-expense-entry-actions">
-                      <button v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="status-choice compact" :class="{ active: entry.paid !== false, unpaid: entry.paid === false }" type="button" :disabled="expenseDialogLoading" @click="toggleExpenseEntryPaid(entry)">{{ entry.paid === false ? 'Не оплачено' : 'Оплачено' }}</button>
+                      <button v-if="isSelectedPaymentExpense()" class="status-choice compact" :class="{ active: entry.paid !== false, unpaid: entry.paid === false }" type="button" :disabled="expenseDialogLoading" @click="toggleExpenseEntryPaid(entry)">{{ entry.paid === false ? 'Не оплачено' : 'Оплачено' }}</button>
                       <button class="ghost-button" type="button" :disabled="expenseDialogLoading" @click="startEditExpense(entry)">Изменить</button>
                       <button class="danger-button" type="button" :disabled="expenseDialogLoading" @click="requestDeleteExpense(entry.id)">Удалить</button>
                     </div>
@@ -1284,7 +1389,7 @@ onMounted(async () => {
             <p v-else class="muted">Расходов пока нет.</p>
           </div>
 
-          <div v-if="selectedExpenseFieldKey === 'prosthetist_work'" class="accounting-payment-status">
+          <div v-if="isSelectedPaymentExpense()" class="accounting-payment-status">
             <span class="muted">Статус нового расхода:</span>
             <button class="status-choice" :class="{ active: expensePaid }" type="button" @click="changeProsthetistPaymentStatus(true)">Оплачено</button>
             <button class="status-choice unpaid" :class="{ active: !expensePaid }" type="button" @click="changeProsthetistPaymentStatus(false)">Не оплачено</button>
@@ -1310,7 +1415,8 @@ onMounted(async () => {
       :tax-usn-percent="taxUsnPercent"
       :tax-osno-percent="taxOsnoPercent"
       :acquiring-percent="acquiringPercent"
-      :vat-percent="vatPercent"
+      :performer-company="accountingSelectionKey"
+      :key="accountingSelectionKey"
     />
   </section>
 </template>

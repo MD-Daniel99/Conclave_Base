@@ -2083,7 +2083,8 @@ body.modal-open {
 
 /* Per-TSR assignment: prosthetist, address and repeat visit live in each TSR card. */
 .client-main-assignment-grid {
-  grid-template-columns: minmax(260px, 2fr) minmax(150px, 0.7fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
 }
 
 .client-profile-modal .tsr-component-group {
@@ -4620,4 +4621,822 @@ body.modal-open {
     left: 12px;
     width: auto;
   }
+}
+
+/* Persistent drag-and-drop table columns */
+.filterable-table-header.is-column-draggable {
+  position: relative;
+  cursor: grab;
+  user-select: none;
+}
+
+.filterable-table-header.is-column-draggable:active {
+  cursor: grabbing;
+}
+
+.filterable-table-header.is-column-dragging {
+  opacity: .48;
+}
+
+.column-drag-handle {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+  color: #8191a8;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: -2px;
+  line-height: 1;
+  opacity: .72;
+  pointer-events: none;
+}
+
+.is-column-draggable .table-sort-button {
+  padding-right: 20px;
+}
+
+.table-reorder-hint {
+  margin: 7px 0 0;
+  color: #8191a8;
+  font-size: 11px;
+}
+
+/* Dense but readable patient tables. Every column has a bounded footprint;
+   column positions can still be reordered without changing these widths. */
+.clients-page .desktop-entity-table > table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+}
+
+.clients-page .desktop-entity-table th,
+.clients-page .desktop-entity-table td {
+  box-sizing: border-box;
+  padding: 7px 5px;
+}
+
+.clients-page .desktop-entity-table .filterable-table-header {
+  min-width: 104px;
+  max-width: 148px;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.clients-page .desktop-entity-table .filterable-table-header .table-sort-button > span:first-child {
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+
+.clients-page .desktop-entity-table .filterable-table-header .table-sort-button {
+  gap: 4px;
+  padding-right: 19px; /* Leave room for the column drag handle. */
+}
+
+.clients-page .desktop-entity-table .filterable-table-header .table-column-filter {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding-inline: 6px;
+}
+
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="number"] { min-width: 45px; max-width: 52px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="patient"] { min-width: 172px; max-width: 196px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="prosthetist"] { min-width: 106px; max-width: 120px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="tsr"],
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="prosthesis"] { min-width: 168px; max-width: 186px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="check_date"] { min-width: 115px; max-width: 128px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="certificate"] { min-width: 102px; max-width: 118px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="status"],
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="stage"] { min-width: 105px; max-width: 126px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="contract_status"],
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="act_status"] { min-width: 138px; max-width: 145px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="agent"] { min-width: 100px; max-width: 120px; }
+.clients-page .desktop-entity-table .filterable-table-header[data-column-key="repeat_visit"] { min-width: 132px; max-width: 145px; }
+
+/* Avoid the old wide fixed size; wrap only between complete TSR codes. */
+/* Compact TSR chips wrap only BETWEEN full codes, never across other cells. */
+.clients-page .desktop-entity-table td.compact-tsr-cell {
+  box-sizing: border-box;
+  width: 172px;
+  min-width: 168px;
+  max-width: 186px;
+  vertical-align: middle;
+}
+
+.compact-tsr-toggle {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tsr-code-list {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 5px;
+  color: #dbe7f7;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.tsr-code-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgb(157 179 208 / 10%);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tsr-expand-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: inline-grid;
+  place-items: center;
+  margin-top: 1px;
+  border: 1px solid rgba(129, 145, 168, .45);
+  border-radius: 6px;
+  color: #9badc3;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.tsr-full-details {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(129, 145, 168, .2);
+  color: #b5c3d6;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Organization colors: blue vs deep forest green with distinct markers. */
+.client-organization-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 2px 0 10px;
+  color: #9badc3;
+  font-size: 11px;
+}
+
+.client-org-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.client-org-legend-item i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.client-org-legend-item.client-org-smart i { background: #80adff; }
+.client-org-legend-item.client-org-zet i { background: #5cc69c; }
+
+.clients-page .desktop-entity-table tbody tr.client-org-smart > td {
+  background: #253752;
+}
+
+.clients-page .desktop-entity-table tbody tr.client-org-zet > td {
+  background: #224535;
+}
+
+.clients-page .desktop-entity-table tbody tr.client-org-smart > td:first-child {
+  box-shadow: inset 4px 0 #80adff;
+}
+
+.clients-page .desktop-entity-table tbody tr.client-org-zet > td:first-child {
+  box-shadow: inset 4px 0 #5cc69c;
+}
+
+.clients-page .desktop-entity-table tbody tr.client-org-smart:hover > td,
+.clients-page .desktop-entity-table tbody tr.client-org-smart.selected > td {
+  background: #304765;
+}
+
+.clients-page .desktop-entity-table tbody tr.client-org-zet:hover > td,
+.clients-page .desktop-entity-table tbody tr.client-org-zet.selected > td {
+  background: #254936;
+}
+
+.clients-page .mobile-entity-card.client-org-smart {
+  border-left: 4px solid #80adff;
+  background: linear-gradient(90deg, rgba(79, 140, 255, .18), transparent 54%);
+}
+
+.clients-page .mobile-entity-card.client-org-zet {
+  border-left: 4px solid #5cc69c;
+  background: linear-gradient(90deg, rgba(55, 143, 95, .27), transparent 60%);
+}
+
+/* Autosave feedback replacing manual Save buttons */
+.autosave-status,
+.client-autosave-bar {
+  color: #9badc3;
+  font-size: 12px;
+}
+
+.client-autosave-bar {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* Separate accounting ledgers per legal entity */
+.accounting-company-switcher {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 4px;
+  border: 1px solid #2f415b;
+  border-radius: 10px;
+  background: rgba(19, 30, 46, .72);
+}
+
+.accounting-company-switcher button {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #9badc3;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.accounting-company-switcher button.active {
+  background: rgba(124, 92, 255, .16);
+  color: #eef3fa;
+  box-shadow: inset 0 0 0 1px rgba(160, 139, 255, .28);
+}
+
+@media (max-width: 720px) {
+  .accounting-company-switcher {
+    display: grid;
+    width: 100%;
+  }
+
+  .accounting-company-switcher button {
+    width: 100%;
+  }
+}
+
+/* A viewport-pinned, always-visible draggable scrollbar for all tables.
+   Unlike the OS scrollbar, the thumb cannot disappear in overlay-scroll mode. */
+.global-table-scrollbar {
+  position: fixed;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  z-index: 40;
+  box-sizing: border-box;
+  height: 20px;
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
+  padding: 1px;
+  border: 1px solid #607894;
+  border-radius: 10px;
+  background: #192c43;
+  box-shadow: 0 5px 17px rgba(3, 9, 22, .42);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.global-table-scrollbar-thumb {
+  height: 14px;
+  border: 1px solid #e5effd;
+  border-radius: 8px;
+  background: #afc8e8;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  cursor: grab;
+}
+
+.global-table-scrollbar:active .global-table-scrollbar-thumb { cursor: grabbing; background: #d5e6fc; }
+.global-table-scrollbar:focus-visible { outline: 2px solid #bdcfff; outline-offset: 2px; }
+@media print { .global-table-scrollbar { display: none !important; } }
+
+/* Multi-ledger selector: any subset of the three legal entities. */
+.accounting-company-selector {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+.accounting-company-selector-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.accounting-company-selector-title > div { display: grid; gap: 3px; }
+.accounting-company-selector-title strong { font-size: 15px; }
+.accounting-company-selector-title .muted { font-size: 12px; }
+.accounting-company-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.accounting-company-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.accounting-company-choice > input { flex-shrink: 0; width: 17px; height: 17px; accent-color: #9470f5; }
+.accounting-company-choice > span { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; }
+.accounting-company-choice > button { flex-shrink: 0; font-size: 11px; padding: 5px 7px; }
+@media (max-width: 900px) {
+  .accounting-company-choices { grid-template-columns: 1fr; }
+}
+/* The editor is a true screen-centered dialog, not a collapsible form
+   at the top of the scrollable list of components. */
+.client-component-modal-overlay {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+  background: rgb(3 8 20 / 78%);
+}
+.client-component-modal-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(930px, 100%);
+  max-height: calc(100dvh - 28px);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 30px 90px rgb(0 0 0 / 50%);
+}
+.client-component-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-shrink: 0;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.client-component-modal-header > div { display: grid; gap: 4px; }
+.client-component-modal-header h2 { margin: 0; font-size: 18px; }
+.client-component-modal-header .muted { font-size: 12px; }
+.client-component-modal-panel .component-workbench-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 0;
+  padding: 16px 20px 24px;
+}
+@media (max-width: 600px) {
+  .client-component-modal-header { padding: 12px; }
+  .client-component-modal-panel .component-workbench-body { padding: 12px; }
+}
+
+/* Separate visual marker for the new IP legal entity in patient cards. */
+.client-org-legend-item.client-org-dmk i { background: #f2ad67; }
+.clients-page .desktop-entity-table tbody tr.client-org-dmk > td { background: #493629; }
+.clients-page .desktop-entity-table tbody tr.client-org-dmk > td:first-child { box-shadow: inset 4px 0 #f2ad67; }
+.clients-page .desktop-entity-table tbody tr.client-org-dmk:hover > td,
+.clients-page .desktop-entity-table tbody tr.client-org-dmk.selected > td { background: #55402e; }
+.clients-page .mobile-entity-card.client-org-dmk {
+  border-left: 4px solid #f2ad67;
+  background: linear-gradient(90deg, rgba(242, 173, 103, .2), transparent 60%);
+}
+
+/* Contract date inputs: readable day/month and a compact four-digit year.
+   Keep widths stable instead of allowing the year to consume both selects. */
+.client-profile-modal .contract-toolbar > .contract-date-field .date-input,
+.documents-page .documents-contract-date-field .date-input {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.client-profile-modal .contract-toolbar > .contract-date-field .date-input-day,
+.client-profile-modal .contract-toolbar > .contract-date-field .date-input-month,
+.documents-page .documents-contract-date-field .date-input-day,
+.documents-page .documents-contract-date-field .date-input-month {
+  flex: 0 0 72px;
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
+  padding-inline: 6px;
+}
+
+.client-profile-modal .contract-toolbar > .contract-date-field .date-input-year,
+.documents-page .documents-contract-date-field .date-input-year {
+  flex: 0 0 96px;
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
+  padding-inline: 6px;
+}
+
+.client-profile-modal .contract-toolbar > .contract-date-field .date-input-clear,
+.documents-page .documents-contract-date-field .date-input-clear {
+  flex: 0 0 30px;
+  width: 30px;
+}
+
+/* Avoid 3 narrow columns inside the patient card and on the standalone page. */
+@media (min-width: 1181px) {
+  .client-profile-modal .contract-toolbar:has(.contract-date-field:nth-of-type(6)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .client-profile-modal .contract-toolbar:has(.contract-date-field:nth-of-type(6)) > .contract-template-field,
+  .client-profile-modal .contract-toolbar:has(.contract-date-field:nth-of-type(6)) > .contract-submit-button {
+    grid-column: 1 / -1;
+  }
+}
+
+.documents-page .documents-form-grid:has(> .documents-contract-date-field) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.client-profile-modal .contract-diagnosis-field {
+  grid-column: 1 / -1;
+}
+
+.documents-page .documents-contract-diagnosis-field {
+  grid-column: 1 / -1;
+}
+
+.client-profile-modal .contract-diagnosis-field .muted,
+.documents-page .documents-contract-diagnosis-field .muted {
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+@media (max-width: 650px) {
+  .documents-page .documents-form-grid:has(> .documents-contract-date-field) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .client-profile-modal .contract-toolbar > .contract-date-field .date-input-day,
+  .client-profile-modal .contract-toolbar > .contract-date-field .date-input-month,
+  .documents-page .documents-contract-date-field .date-input-day,
+  .documents-page .documents-contract-date-field .date-input-month {
+    flex-basis: 60px;
+    width: 60px;
+    min-width: 60px;
+    max-width: 60px;
+  }
+  .client-profile-modal .contract-toolbar > .contract-date-field .date-input-year,
+  .documents-page .documents-contract-date-field .date-input-year {
+    flex-basis: 88px;
+    width: 88px;
+    min-width: 88px;
+    max-width: 88px;
+  }
+}
+
+
+/* Round 4: visible table sizes, persistent organization filters and linked dashboard. */
+.table-count-indicator {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 8px 12px;
+  margin-block: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  font-size: 13px;
+}
+.table-count-indicator strong { color: var(--text); font-weight: 800; }
+.org-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 750;
+  max-width: 100%;
+  white-space: normal;
+}
+.org-badge-smart, .org-filter-smart { color: #9bc3ff; }
+.org-badge-zet, .org-filter-zet { color: #70e6b2; }
+.org-badge-dmk, .org-filter-dmk { color: #ffbf83; }
+.org-badge-other { color: var(--text-soft); }
+.org-badge-smart { background: rgb(128 173 255 / 12%); }
+.org-badge-zet { background: rgb(92 198 156 / 12%); }
+.org-badge-dmk { background: rgb(242 173 103 / 13%); }
+.accounting-identity-details {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+}
+.compact-company-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  margin-block: 10px;
+}
+.compact-company-filter > strong { font-size: 13px; }
+.compact-company-option { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.compact-company-option input { width: 16px; height: 16px; margin: 0; accent-color: #9470f5; }
+.compact-company-option span { font-weight: 700; font-size: 12px; }
+.compact-company-filter .ghost-button { margin-left: auto; }
+.dashboard-metric-button {
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.dashboard-metric-button:hover { border-color: #f7c65c; }
+.dashboard-metric-button:disabled { cursor: default; opacity: .7; }
+.dashboard-contract-modal-backdrop { z-index: 130; display: grid; place-items: center; padding: 18px; }
+.dashboard-contract-modal {
+  width: min(850px, 100%);
+  max-height: calc(100dvh - 36px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dashboard-contract-modal .modal-header { flex-shrink: 0; }
+.dashboard-contract-modal-list { overflow-y: auto; min-height: 0; padding: 12px 20px 20px; }
+.dashboard-contract-modal-client {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 12px 4px;
+  text-decoration: none;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.dashboard-contract-modal-client:hover { background: var(--surface-soft); }
+.dashboard-contract-modal-client-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dashboard-contract-modal-client-info { display: flex; flex-wrap: wrap; gap: 5px 14px; font-size: 12px; }
+.dashboard-contract-modal-client > div { min-width: 0; flex: 1; }
+.dashboard-contract-modal-client > svg { flex: 0 0 auto; }
+@media (max-width: 680px) {
+  .dashboard-contract-modal-client { align-items: flex-start; }
+  .dashboard-contract-modal-client-info { display: grid; gap: 2px; }
+  .compact-company-filter .ghost-button { margin-left: 0; }
+}
+
+/* Per-user resize handles for every data table. These rules override legacy
+   max-content table widths only after the resize enhancer has initialized. */
+table.dbcrm-resizable-table {
+  table-layout: fixed !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+table.dbcrm-resizable-table th,
+table.dbcrm-resizable-table td {
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  white-space: normal;
+  min-width: 0;
+  max-width: none;
+}
+table.dbcrm-resizable-table th.dbcrm-resizable-header { position: relative; padding-right: 14px; }
+.dbcrm-column-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 11px;
+  height: 100%;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  border-right: 2px solid transparent;
+}
+.dbcrm-column-resize-handle:hover,
+.dbcrm-column-resize-handle:focus-visible,
+.dbcrm-column-resize-handle.dragging { border-right-color: var(--primary, #667eea); }
+table.dbcrm-resizable-table td input,
+table.dbcrm-resizable-table th input,
+table.dbcrm-resizable-table td select,
+table.dbcrm-resizable-table th select { max-width: 100%; min-width: 0; box-sizing: border-box; }
+table.dbcrm-resizable-table .table-money { white-space: normal; overflow-wrap: anywhere; }
+
+/* Existing accounting/client columns have fixed legacy min-widths. Let
+   the user's colgroup widths take precedence after resizing is initialized. */
+table.dbcrm-resizable-table > thead > tr > th,
+table.dbcrm-resizable-table > tbody > tr > td,
+table.dbcrm-resizable-table .filterable-table-header,
+table.dbcrm-resizable-table .accounting-identity-cell {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+table.dbcrm-resizable-table .accounting-client-link,
+table.dbcrm-resizable-table .table-column-filter { max-width: 100% !important; min-width: 0 !important; }
+table.dbcrm-resizable-table .table-column-filter {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+table.dbcrm-resizable-table .accounting-expense-cell,
+table.dbcrm-resizable-table .table-sort-button {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+
+/* CONCLAVE accounting layout repair (2026-11-12).
+ * Legacy accounting styles use !important width/min-width and 'position: relative'
+ * on all resizable TH elements. Those declarations defeated the shared colgroup
+ * resizer and disabled sticky headers except for the separately pinned patient.
+ * Keep this override scoped to accounting, not the application's other tables. */
+.accounting-page .accounting-table {
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table {
+  table-layout: fixed !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table > thead > tr > th,
+.accounting-page .accounting-table > table.dbcrm-resizable-table > tbody > tr > td,
+.accounting-page .accounting-table > table.dbcrm-resizable-table .filterable-table-header,
+.accounting-page .accounting-table > table.dbcrm-resizable-table .accounting-identity-cell {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  box-sizing: border-box;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+/* Entire header stays pinned during vertical scrolling, independently of
+   the first (horizontally pinned) patient column. */
+.accounting-page .accounting-table > table.dbcrm-resizable-table > thead > tr > th {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 20;
+  background: var(--surface-elevated, #18263a);
+  box-shadow: inset 0 -1px 0 var(--border);
+  vertical-align: top;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table > thead > tr > th[data-column-key="client"] {
+  position: sticky !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: 35;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table > tbody > tr > td.accounting-identity-cell {
+  position: sticky !important;
+  left: 0 !important;
+  z-index: 9;
+}
+/* Colgroup is the sole authority for widths. Inputs, buttons and filters must
+   shrink/wrap with their own column rather than holding fixed old widths. */
+.accounting-page .accounting-table > table.dbcrm-resizable-table .table-column-filter,
+.accounting-page .accounting-table > table.dbcrm-resizable-table .accounting-expense-cell,
+.accounting-page .accounting-table > table.dbcrm-resizable-table .table-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table .table-sort-button,
+.accounting-page .accounting-table > table.dbcrm-resizable-table .accounting-client-link {
+  box-sizing: border-box;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow-wrap: anywhere;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table .accounting-stock-cost {
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table .table-money {
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table th.dbcrm-resizable-header {
+  padding-right: 16px;
+}
+.accounting-page .accounting-table > table.dbcrm-resizable-table .dbcrm-column-resize-handle {
+  z-index: 42;
+}
+/* Same live table in normal mode and a distraction-free full-screen dialog. */
+.accounting-table-view {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.accounting-table-view-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 4px 0 8px;
+}
+.accounting-table-view-summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  min-width: 0;
+}
+.accounting-table-view-summary strong { font-size: 13px; }
+.accounting-table-view-summary .muted { font-size: 12px; }
+.accounting-fullscreen-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.accounting-table-view-fullscreen {
+  position: fixed !important;
+  inset: 0;
+  z-index: 2200;
+  width: 100vw;
+  width: 100dvw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  background: var(--surface, #121e31);
+  color: var(--text);
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 45%);
+  overflow: hidden;
+}
+.accounting-table-view-fullscreen .accounting-table-view-bar {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+.accounting-table-view-fullscreen .accounting-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none !important;
+  overflow: auto !important;
+  width: 100%;
+}
+.accounting-table-view-fullscreen .pagination-bar {
+  flex: 0 0 auto;
+  margin: 0;
+  padding-block: 4px;
+}
+@media (max-width: 680px) {
+  .accounting-table-view-fullscreen { padding: 8px; }
+  .accounting-table-view-bar { align-items: flex-start; }
 }

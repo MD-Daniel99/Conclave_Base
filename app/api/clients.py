@@ -87,7 +87,10 @@ def patch_client(
     before = crud.get_client(db, client_id)
     if not before:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
-    updated = crud.update_client(db, client_id, payload.model_dump(exclude_unset=True))
+    try:
+        updated = crud.update_client(db, client_id, payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
     log_action(db, entity="client", entity_id=client_id, action="update", user=current_user, before=before, after=updated)

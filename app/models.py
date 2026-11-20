@@ -95,6 +95,14 @@ class Client(Base):
             name="ck_client_taxation_system_allowed",
         ),
         CheckConstraint(
+            "performer_company IS NULL OR performer_company IN ('ООО «ПрОП ДВИЖЕНИЕ ЗЕТ»', 'ООО \"Смарт Движение\"', 'ИП ДМК')",
+            name="ck_client_performer_company_allowed",
+        ),
+        CheckConstraint(
+            "tax_percent_override IS NULL OR (tax_percent_override >= 0 AND tax_percent_override <= 100)",
+            name="ck_client_tax_percent_override_range",
+        ),
+        CheckConstraint(
             "contract_status IS NULL OR contract_status IN ('Подписан', 'Сделан', 'Отправлен')",
             name="ck_client_contract_status_allowed",
         ),
@@ -152,10 +160,15 @@ class Client(Base):
         default="УСН",
         server_default=text("'УСН'"),
     )
+    # Ручная ставка налога доступна только ИП ДМК; для ООО применяются общие настройки.
+    tax_percent_override = Column(Float, nullable=True)
+    # Ставка НДС задаётся персонально для пациента и используется во всех бухгалтерских расчётах.
+    vat_percent = Column(Float, nullable=False, default=20.0, server_default=text("20"))
     place_of_residence = Column(String(255), nullable = True)
     prosthetist = Column(String(32), nullable=True)
 
     ipra_code = Column(String(64), nullable = True)
+    mse_reference = Column(Text, nullable=True)  # Свободный текст справки МСЭ
     is_archived = Column(
         Boolean,
         nullable=False,

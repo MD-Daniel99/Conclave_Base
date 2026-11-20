@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Eye, Plus, Search, Trash2, X } from '@lucide/vue'
+import { onBeforeRouteLeave } from 'vue-router'
 
 import { fetchClients } from '@/shared/api/clients'
 import { fetchEntityAudit } from '@/shared/api/audit'
@@ -79,6 +80,10 @@ const form = reactive<AgentForm>({ ...emptyForm })
 
 const isLoading = ref(false)
 const isSaving = ref(false)
+const agentAutosaveState = ref<'idle' | 'pending' | 'saving' | 'saved' | 'error' | 'waiting'>('idle')
+const lastSavedAgentState = ref('')
+let agentAutosaveTimeout: number | undefined
+let agentAutosavePromise: Promise<void> | null = null
 const isClientsLoading = ref(false)
 const isAuditLoading = ref(false)
 const error = ref('')
@@ -236,18 +241,17 @@ function resetForm() {
   selectedAgent.value = null
   clearAgentRelatedState()
   resetMessages()
+  lastSavedAgentState.value = JSON.stringify(form)
 }
 
-function openNewAgent() {
+async function openNewAgent() {
+  await flushAgentAutosave()
   resetForm()
   isAgentCardOpen.value = true
 }
 
-function closeAgentCard() {
-  if (isSaving.value) {
-    return
-  }
-
+async function closeAgentCard() {
+  await flushAgentAutosave()
   isAgentCardOpen.value = false
   resetForm()
 }
@@ -263,17 +267,20 @@ function fillFormFromAgent(agent: Agent) {
   form.account_number = agent.account_number ?? ''
   form.correspondent_account = agent.correspondent_account ?? ''
   form.bic = agent.bic ?? ''
+  lastSavedAgentState.value = JSON.stringify(form)
 }
 
 async function selectAgent(agent: Agent) {
+  if (isAgentCardOpen.value && String(selectedAgent.value?.agent_id ?? '') !== getAgentId(agent)) await flushAgentAutosave()
   selectedAgent.value = agent
   fillFormFromAgent(agent)
   clearAgentRelatedState()
   resetMessages()
   isAgentCardOpen.value = true
+  agentAutosaveState.value = 'saved'
 }
 
-function validateDigits(label: string, value: string, allowedLengths: number[]) {
+function validateDigits(label: string, value: string, allowedLengths: number[], showError = true) {
   const trimmed = value.trim()
 
   if (!trimmed) {
@@ -282,14 +289,14 @@ function validateDigits(label: string, value: string, allowedLengths: number[]) 
 
   const digits = normalizeDigits(trimmed)
   if (digits !== trimmed || !allowedLengths.includes(digits.length)) {
-    error.value = `${label}: укажите только цифры, длина ${allowedLengths.join(' или ')}`
+    if (showError) error.value = `${label}: укажите только цифры, длина ${allowedLengths.join(' или ')}`
     return false
   }
 
   return true
 }
 
-function validateAccount(label: string, value: string) {
+function validateAccount(label: string, value: string, showError = true) {
   const trimmed = value.trim()
 
   if (!trimmed) {
@@ -298,25 +305,25 @@ function validateAccount(label: string, value: string) {
 
   const digits = normalizeDigits(trimmed)
   if (digits !== trimmed || digits.length < 20 || digits.length > 34) {
-    error.value = `${label}: укажите только цифры, длина от 20 до 34`
+    if (showError) error.value = `${label}: укажите только цифры, длина от 20 до 34`
     return false
   }
 
   return true
 }
 
-function validateForm() {
+function validateForm(showError = true) {
   if (!form.first_name.trim()) {
-    error.value = 'Заполните имя агента'
+    if (showError) error.value = 'Заполните имя агента'
     return false
   }
 
   return (
-    validateDigits('ИНН', form.inn, [10, 12]) &&
-    validateDigits('ОГРНИП', form.ogrnip, [15]) &&
-    validateDigits('БИК', form.bic, [9]) &&
-    validateAccount('Расчетный счет', form.account_number) &&
-    validateAccount('Корреспондентский счет', form.correspondent_account)
+    validateDigits('ИНН', form.inn, [10, 12], showError) &&
+    validateDigits('ОГРНИП', form.ogrnip, [15], showError) &&
+    validateDigits('БИК', form.bic, [9], showError) &&
+    validateAccount('Расчетный счет', form.account_number, showError) &&
+    validateAccount('Корреспондентский счет', form.correspondent_account, showError)
   )
 }
 
@@ -501,6 +508,7 @@ async function loadAgentAudit() {
 }
 
 async function setAgentTab(tab: AgentTab) {
+  if (activeAgentTab.value === 'edit' && tab !== 'edit') await flushAgentAutosave()
   if (tab !== 'edit' && !isAgentPersisted.value) {
     return
   }
@@ -516,44 +524,86 @@ async function setAgentTab(tab: AgentTab) {
   }
 }
 
-async function saveAgent() {
-  resetMessages()
+function queueAgentAutosave() {
+  if (!isAgentCardOpen.value) return
+  window.clearTimeout(agentAutosaveTimeout)
+  agentAutosaveState.value = validateForm(false) ? 'pending' : 'waiting'
+  agentAutosaveTimeout = window.setTimeout(() => {
+    agentAutosaveTimeout = undefined
+    void saveAgent(true)
+  }, 700)
+}
 
-  if (!validateForm()) {
+async function flushAgentAutosave() {
+  window.clearTimeout(agentAutosaveTimeout)
+  agentAutosaveTimeout = undefined
+
+  if (agentAutosavePromise) await agentAutosavePromise
+  if (JSON.stringify(form) !== lastSavedAgentState.value && validateForm(false) && !isSaving.value) {
+    await saveAgent(true)
+  }
+  if (agentAutosavePromise) await agentAutosavePromise
+}
+
+async function saveAgent(automatic = false) {
+  if (!validateForm(!automatic)) {
+    if (automatic) agentAutosaveState.value = 'waiting'
     return
   }
 
-  isSaving.value = true
+  if (agentAutosavePromise) {
+    const active = agentAutosavePromise
+    await active
+    if (agentAutosavePromise === active) agentAutosavePromise = null
+    if (JSON.stringify(form) !== lastSavedAgentState.value && validateForm(false)) {
+      return saveAgent(automatic)
+    }
+    return
+  }
 
+  if (isSaving.value) {
+    if (automatic) queueAgentAutosave()
+    return
+  }
+
+  const snapshot = JSON.stringify(form)
+  const editingAgent = selectedAgent.value?.agent_id ? selectedAgent.value : null
+
+  const task = (async () => {
+    resetMessages()
+    isSaving.value = true
+    agentAutosaveState.value = 'saving'
+
+    try {
+      const savedAgent = editingAgent
+        ? await updateAgent(getAgentId(editingAgent), buildUpdatePayload())
+        : await createAgent(buildCreatePayload())
+
+      selectedAgent.value = savedAgent
+      lastSavedAgentState.value = snapshot
+      if (JSON.stringify(form) === snapshot) fillFormFromAgent(savedAgent)
+      if (!automatic) successMessage.value = editingAgent ? 'Агент обновлен' : 'Агент создан'
+      await loadAgents()
+      if (activeAgentTab.value === 'clients') await loadLinkedClients()
+      if (activeAgentTab.value === 'history') await loadAgentAudit()
+      agentAutosaveState.value = JSON.stringify(form) === lastSavedAgentState.value ? 'saved' : 'pending'
+    } catch (caughtError) {
+      error.value = getApiErrorMessage(caughtError)
+      agentAutosaveState.value = 'error'
+    } finally {
+      isSaving.value = false
+    }
+  })()
+
+  agentAutosavePromise = task
   try {
-    if (isEditing.value && selectedAgent.value) {
-      const agentId = getAgentId(selectedAgent.value)
-      const updatedAgent = await updateAgent(agentId, buildUpdatePayload())
-
-      selectedAgent.value = updatedAgent
-      fillFormFromAgent(updatedAgent)
-      successMessage.value = 'Агент обновлен'
-    } else {
-      const createdAgent = await createAgent(buildCreatePayload())
-
-      selectedAgent.value = createdAgent
-      fillFormFromAgent(createdAgent)
-      successMessage.value = 'Агент создан'
-    }
-
-    await loadAgents()
-
-    if (activeAgentTab.value === 'clients') {
-      await loadLinkedClients()
-    }
-
-    if (activeAgentTab.value === 'history') {
-      await loadAgentAudit()
-    }
-  } catch (caughtError) {
-    error.value = getApiErrorMessage(caughtError)
+    await task
   } finally {
-    isSaving.value = false
+    if (agentAutosavePromise === task) agentAutosavePromise = null
+  }
+
+  if (isAgentCardOpen.value && JSON.stringify(form) !== lastSavedAgentState.value && validateForm(false)) {
+    queueAgentAutosave()
   }
 }
 
@@ -580,7 +630,8 @@ async function removeAgent(agent: Agent) {
     successMessage.value = 'Агент удален'
 
     if (selectedAgent.value && getAgentId(selectedAgent.value) === agentId) {
-      closeAgentCard()
+      isAgentCardOpen.value = false
+      resetForm()
     }
 
     await loadAgents()
@@ -595,11 +646,22 @@ watch(isAgentCardOpen, (isOpen) => {
   window.document.body.classList.toggle('modal-open', isOpen)
 })
 
+watch(form, () => {
+  if (!isAgentCardOpen.value || JSON.stringify(form) === lastSavedAgentState.value) return
+  queueAgentAutosave()
+}, { deep: true })
+
 watch([query, pageSize, agentColumnFilters], () => { page.value = 1 }, { deep: true })
+
+onBeforeRouteLeave(async () => {
+  await flushAgentAutosave()
+  return true
+})
 
 onMounted(loadAgents)
 
 onBeforeUnmount(() => {
+  window.clearTimeout(agentAutosaveTimeout)
   window.document.body.classList.remove('modal-open')
 })
 </script>
@@ -648,8 +710,10 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div class="table-count-indicator" role="status">Агентов: <strong>{{ filteredAgents.length }}</strong> из {{ agents.length }} · на странице: {{ pagedAgents.length }} · выбрано: <strong>{{ selectedAgents.length }}</strong></div>
+
     <div class="table-wrap desktop-entity-table">
-      <table>
+      <table data-resize-id="agents">
         <thead>
           <tr>
             <th class="selection-cell">
@@ -816,7 +880,7 @@ onBeforeUnmount(() => {
           <p v-if="error" class="form-error">{{ error }}</p>
           <p v-if="successMessage" class="form-success">{{ successMessage }}</p>
 
-          <form v-if="activeAgentTab === 'edit'" class="detail-panel" @submit.prevent="saveAgent">
+          <form v-if="activeAgentTab === 'edit'" class="detail-panel" @submit.prevent>
             <div class="form-grid">
               <label>
                 Фамилия
@@ -873,9 +937,9 @@ onBeforeUnmount(() => {
               </label>
             </div>
 
-            <button class="primary-button" type="submit" :disabled="isSaving">
-              {{ isSaving ? 'Сохраняем...' : isEditing ? 'Сохранить изменения' : 'Создать агента' }}
-            </button>
+            <div class="autosave-status" :class="{ 'form-error': agentAutosaveState === 'error' }" aria-live="polite">
+              {{ agentAutosaveState === 'saving' ? 'Сохраняем изменения…' : agentAutosaveState === 'pending' ? 'Изменения будут сохранены автоматически…' : agentAutosaveState === 'waiting' ? 'Автосохранение начнётся после заполнения имени и корректных реквизитов' : agentAutosaveState === 'error' ? 'Не удалось автоматически сохранить изменения' : 'Все изменения сохранены автоматически' }}
+            </div>
           </form>
 
           <div v-else-if="activeAgentTab === 'clients'" class="detail-panel">
