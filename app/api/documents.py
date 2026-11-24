@@ -1,15 +1,15 @@
 # app/api/documents.py
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Body
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
-from uuid import UUID
+from uuid import UUID, uuid4
 import os
 
 from app import crud, models, schemas
 from app.api.deps import get_current_user
 from app.db import get_db
-from app.services import contracts, mtz
+from app.services import contracts, mtz, mtz_designer, mtz_template_editor
 from app.services.audit import log_action, snapshot
 
 router = APIRouter()
@@ -80,6 +80,114 @@ def list_mtz_templates(
     current_user: models.User = Depends(get_current_user),
 ):
     return mtz.list_mtz_templates()
+
+
+@router.get("/mtz_templates/config")
+def read_mtz_configuration(current_user: models.User = Depends(get_current_user)):
+    try:
+        return mtz_designer.get_config()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/mtz_templates/config")
+def save_mtz_configuration(
+    payload: dict = Body(...), db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        config = mtz_designer.set_config(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    log_action(db, entity="document", entity_id=uuid4(), action="mtz.config.update", user=current_user,
+               details={"fields": len(config['custom_fields'])})
+    return config
+
+
+@router.get("/mtz_templates/{template_key}/editor")
+def read_mtz_template_editor(
+    template_key: str, current_user: models.User = Depends(get_current_user),
+):
+    try:
+        return mtz_template_editor.get_editor(template_key)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/mtz_templates/{template_key}/editor")
+def save_mtz_template_editor(
+    template_key: str, payload: dict = Body(...), db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        saved = mtz_template_editor.save_template(template_key,payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    log_action(db, entity="document", entity_id=uuid4(), action="mtz.template.edit", user=current_user,
+               details={"template_id":template_key,"revision":saved['revision']})
+    return saved
+
+
+@router.post("/mtz_templates/{template_key}/restore")
+def restore_mtz_template_editor(
+    template_key: str, payload: dict = Body(...), db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        saved = mtz_template_editor.restore_template(template_key,
+            int(payload['target_revision']),int(payload['expected_revision']))
+    except (ValueError, KeyError, TypeError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    log_action(db, entity="document", entity_id=uuid4(), action="mtz.template.restore", user=current_user,
+               details={"template_id":template_key,"revision":saved['revision']})
+    return saved
+
+
+@router.post("/mtz_templates/upload")
+async def upload_mtz_conclusions(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not (file.filename or "").lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Загрузите файл DOCX с заключениями ТСР")
+    # Read one byte beyond the limit to detect oversized requests promptly.
+    raw = await file.read(mtz.mtz_conclusions.MAX_DOCX_BYTES + 1)
+    try:
+        templates = mtz.mtz_conclusions.add_templates(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    log_action(db, entity="document", entity_id=uuid4(), action="mtz_template.upload", user=current_user,
+               details={"added_template_ids": [t["value"] for t in templates], "count": len(templates)})
+    return templates
+
+
+@router.get("/mtz_templates/{template_key}/download")
+def download_mtz_conclusion_template(
+    template_key: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        record, path = mtz.mtz_conclusions.find_template(template_key)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(path, filename=f"mtz_conclusion_{record['tsr_code']}.docx",
+        media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+@router.delete("/mtz_templates/{template_key}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_mtz_conclusion(
+    template_key: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        mtz.mtz_conclusions.delete_template(template_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_action(db, entity="document", entity_id=uuid4(), action="mtz_template.remove", user=current_user,
+               details={"template_id": template_key})
+    return None
 
 
 @router.patch("/{document_id}/status", response_model=schemas.DocumentRead)

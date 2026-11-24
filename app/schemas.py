@@ -694,14 +694,24 @@ class ContractGeneration(BaseModel):
     selected_module_ids: List[UUID] = Field(default_factory=list)
 
 
-# DBCRM_UPDATE_20260831: MTZ
+# MTZ: independent reusable conclusion sections under the approved ZET header.
+class MtzConclusionSelection(BaseModel):
+    template_type: str = Field(min_length=1, max_length=110)
+    amputation_level: str = Field(min_length=1, max_length=512)
+    # Optional classification code for a level that differs from the source.
+    amputation_code: Optional[str] = Field(default=None, max_length=40)
+
+
 class MtzGeneration(BaseModel):
-    template_type: Literal["mtz_zet_thigh_mpu"] = "mtz_zet_thigh_mpu"
+    # A legacy single-item request is still accepted for older frontends.
+    template_type: Optional[str] = None
+    amputation_level: Optional[str] = None
+    items: List[MtzConclusionSelection] = Field(default_factory=list, max_length=40)
     disability_group_reason: Literal[
-        "I Группа, Военная травма", "II Группа, Военная травма", "III Группа, Военная травма"
+        "I Группа, Военная травма", "II Группа, Военная травма", "III Группа, Военная травма",
+        "I Группа, Общее заболевание", "II Группа, Общее заболевание", "III Группа, Общее заболевание",
     ]
     diagnoses: List[str] = Field(min_length=1, max_length=18)
-    amputation_level: str = Field(min_length=1, max_length=512)
     stump_condition: Literal["Функциональная", "Нефункциональная"]
     activity_level: Literal["2-3", "3-4"]
     weight_kg: str = Field(min_length=1, max_length=32)

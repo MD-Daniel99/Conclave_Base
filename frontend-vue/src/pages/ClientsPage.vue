@@ -22,8 +22,8 @@ import {
 } from '@lucide/vue'
 import { useAuthStore } from '@/app/stores/auth'
 import DateInput from '@/shared/ui/DateInput.vue'
-import MtzDiagnosisPicker from '@/shared/ui/MtzDiagnosisPicker.vue'
-import { MTZ_DISABILITY_REASONS } from '@/shared/lib/mtzDiagnosis'
+import MtzSharedFields from '@/shared/ui/MtzSharedFields.vue'
+import MtzConclusionSelector from '@/shared/ui/MtzConclusionSelector.vue'
 import NameIndexAutocomplete from '@/shared/ui/NameIndexAutocomplete.vue'
 import NameIndexManagerModal from '@/shared/ui/NameIndexManagerModal.vue'
 import ActionMenu, { type ActionMenuItem } from '@/shared/ui/ActionMenu.vue'
@@ -71,12 +71,15 @@ import {
   fetchClientDocuments,
   fetchContractTemplates,
   fetchMtzTemplates,
+  fetchMtzConfig,
   fetchNextContractNumber,
   generateClientContract,
   generateClientMtz,
   uploadClientDocument,
   updateDocumentStatus,
   type MtzTemplateOption,
+  type MtzConclusionItem,
+  type MtzFormConfig,
 } from '@/shared/api/documents'
 import { getApiErrorMessage } from '@/shared/api/http'
 import {
@@ -416,12 +419,13 @@ const contractDate = ref(new Date().toISOString().slice(0, 10))
 const contractPlanDate = ref(new Date().toISOString().slice(0, 10))
 const contractAppendixDate = ref(new Date().toISOString().slice(0, 10))
 const mtzTemplateOptions = ref<MtzTemplateOption[]>([])
-const mtzType = ref('mtz_zet_thigh_mpu')
+const mtzConfig = ref<MtzFormConfig | null>(null)
+const mtzExtraValues = ref<Record<string,string>>({})
+const mtzItems = ref<MtzConclusionItem[]>([])
 const mtzDisabilityGroupReason = ref('')
 const mtzDiagnoses = ref<string[]>([])
-const mtzAmputationLevel = ref('')
-const mtzStumpCondition = ref<'Функциональная' | 'Нефункциональная'>('Функциональная')
-const mtzActivityLevel = ref<'2-3' | '3-4'>('3-4')
+const mtzStumpCondition = ref('Функциональная')
+const mtzActivityLevel = ref('3-4')
 const mtzWeightKg = ref('')
 const selectedFile = ref<File | null>(null)
 const isLoading = ref(false)
@@ -541,10 +545,10 @@ function getDetailTabDraftState(tab: DetailTab) {
       selectedClientTsrIds: selectedContractClientTsrIds.value,
       selectedModuleIds: selectedContractModuleIds.value,
       documentGeneratorTab: documentGeneratorTab.value,
-      mtzType: mtzType.value,
+      mtzItems: mtzItems.value,
       mtzDisabilityGroupReason: mtzDisabilityGroupReason.value,
       mtzDiagnoses: mtzDiagnoses.value,
-      mtzAmputationLevel: mtzAmputationLevel.value,
+
       mtzStumpCondition: mtzStumpCondition.value,
       mtzActivityLevel: mtzActivityLevel.value,
       mtzWeightKg: mtzWeightKg.value,
@@ -1814,7 +1818,7 @@ function getContractPrefixForTemplate(templateType: string) {
 }
 
 const showExtendedContractDates = computed(() => ['llc_contract', 'zet_contract', 'dmk_full_package', 'dmk_contract'].includes(contractType.value))
-const selectedMtzTemplate = computed(() => mtzTemplateOptions.value.find((item) => item.value === mtzType.value))
+const mtzSelectedTemplateNames = computed(() => mtzItems.value.map(item => mtzTemplateOptions.value.find(t => t.value === item.template_type)?.label || ''))
 const mtzAutofillData = computed(() => {
   const client = selectedClient.value
   const passports = [...(client?.passports ?? [])].sort((a, b) => Number(b.version ?? 0) - Number(a.version ?? 0))
@@ -2109,10 +2113,11 @@ function resetDetailState() {
   dmkDiagnosis.value = ''
   mtzDisabilityGroupReason.value = ''
   mtzDiagnoses.value = []
-  mtzAmputationLevel.value = ''
+  mtzItems.value = []
   mtzStumpCondition.value = 'Функциональная'
   mtzActivityLevel.value = '3-4'
   mtzWeightKg.value = ''
+  mtzExtraValues.value = {}
   Object.keys(clientTsrDrafts).forEach((key) => delete clientTsrDrafts[key])
 }
 
@@ -3890,7 +3895,7 @@ async function generateContract() {
 
 async function generateMtzFromClientCard() {
   error.value = ''
-  if (!mtzDisabilityGroupReason.value || !mtzDiagnoses.value.length || !mtzAmputationLevel.value.trim() || !mtzWeightKg.value.trim()) {
+  if (!mtzDisabilityGroupReason.value || !mtzDiagnoses.value.length || (!mtzItems.value.length || mtzItems.value.some(item => !item.amputation_level.trim())) || !mtzWeightKg.value.trim()) {
     error.value = 'Для МТЗ выберите причину инвалидности, диагноз, уровень ампутации и вес.'
     return
   }
@@ -3905,13 +3910,13 @@ async function generateMtzFromClientCard() {
     await saveMseReference()
     if (mseAutosaveStatus.value === 'error') throw new Error('Не удалось сохранить справку МСЭ')
     await generateClientMtz(clientId, {
-      template_type: mtzType.value,
+      items: mtzItems.value,
       disability_group_reason: mtzDisabilityGroupReason.value,
       diagnoses: mtzDiagnoses.value,
-      amputation_level: mtzAmputationLevel.value.trim(),
       stump_condition: mtzStumpCondition.value,
       activity_level: mtzActivityLevel.value,
       weight_kg: mtzWeightKg.value.trim(),
+      extra_fields: mtzExtraValues.value,
     })
     await loadClientTabData('documents', true)
     successMessage.value = 'МТЗ сформировано. Скачать его можно в списке документов ниже.'
@@ -4030,8 +4035,12 @@ async function loadMtzTemplateOptions() {
   try {
     const templates = await fetchMtzTemplates()
     mtzTemplateOptions.value = templates
-    if (templates.length > 0 && !templates.some((item) => item.value === mtzType.value)) {
-      mtzType.value = templates[0].value
+    try { mtzConfig.value = await fetchMtzConfig() } catch { mtzConfig.value = null }
+    if (mtzConfig.value) {
+      const stumpOptions=mtzConfig.value.manual.stump_condition?.options ?? []
+      const activityOptions=mtzConfig.value.manual.activity_level?.options ?? []
+      if (stumpOptions.length && !stumpOptions.includes(mtzStumpCondition.value)) mtzStumpCondition.value=stumpOptions[0]
+      if (activityOptions.length && !activityOptions.includes(mtzActivityLevel.value)) mtzActivityLevel.value=activityOptions[0]
     }
   } catch {
     mtzTemplateOptions.value = []
@@ -5400,32 +5409,15 @@ onBeforeUnmount(() => {
                     <p class="muted">ФИО, дата рождения, паспортные данные и справка МСЭ берутся из карточки пациента. Номер и дата МТЗ заполняются вручную после печати. Диагноз выбирается для этого документа.</p>
                   </div>
                 </div>
-                <div class="client-mtz-form-grid">
-                  <label class="wide-field">Шаблон / ТСР
-                    <select v-model="mtzType">
-                      <option v-for="option in mtzTemplateOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                    </select>
-                  </label>
-                  <label class="wide-field">Причина инвалидности
-                    <select v-model="mtzDisabilityGroupReason">
-                      <option value="">Выберите причину</option>
-                      <option v-for="reason in MTZ_DISABILITY_REASONS" :key="reason" :value="reason">{{ reason }}</option>
-                    </select>
-                  </label>
-                  <label class="wide-field">Справка МСЭ (из личных документов)
-                    <input :value="mseDraft" readonly placeholder="Заполните в СНИЛС / ИПРА / МСЭ" />
-                  </label>
-                  <div class="wide-field">
-                    <MtzDiagnosisPicker v-model="mtzDiagnoses" :tsr-labels="(selectedClient?.tsr_items ?? []).map((item) => String(item.tsr?.full_tsr_code ?? ''))" />
-                  </div>
-                  <label>1.1 Уровень ампутации<input v-model="mtzAmputationLevel" placeholder="Введите уровень" /></label>
-                  <label>1.2 Состояние культи
-                    <select v-model="mtzStumpCondition"><option>Функциональная</option><option>Нефункциональная</option></select>
-                  </label>
-                  <label>1.3 Уровень активности
-                    <select v-model="mtzActivityLevel"><option>2-3</option><option>3-4</option></select>
-                  </label>
-                  <label>1.4 Вес пациента (кг)<input v-model="mtzWeightKg" inputmode="decimal" placeholder="Например: 82" /></label>
+                <div class="mtz-workspace">
+                  <MtzConclusionSelector v-model="mtzItems" :templates="mtzTemplateOptions" :config="mtzConfig" />
+                  <MtzSharedFields :config="mtzConfig" :reason="mtzDisabilityGroupReason" :diagnoses="mtzDiagnoses"
+                    :stump="mtzStumpCondition" :activity="mtzActivityLevel" :weight="mtzWeightKg"
+                    :mse="mseDraft" :extra-values="mtzExtraValues"
+                    :tsr-labels="mtzSelectedTemplateNames.length ? mtzSelectedTemplateNames : (selectedClient?.tsr_items ?? []).map(item=>String(item.tsr?.full_tsr_code ?? ''))"
+                    @update:reason="mtzDisabilityGroupReason=$event" @update:diagnoses="mtzDiagnoses=$event"
+                    @update:stump="mtzStumpCondition=$event" @update:activity="mtzActivityLevel=$event"
+                    @update:weight="mtzWeightKg=$event" @update:extra-values="mtzExtraValues=$event" />
                 </div>
                 <button class="primary-button" :disabled="isSaving || mtzTemplateOptions.length === 0" type="submit">
                   {{ isSaving ? 'Формируем…' : 'Сформировать МТЗ' }}
@@ -5442,7 +5434,7 @@ onBeforeUnmount(() => {
                   <div><dt>ФИО</dt><dd>{{ mtzAutofillData.fullName }}</dd></div>
                   <div><dt>Дата рождения</dt><dd>{{ mtzAutofillData.birthDate }}</dd></div>
                   <div><dt>Телефон</dt><dd>{{ mtzAutofillData.phone }}</dd></div>
-                  <div><dt>Текущий шаблон</dt><dd>{{ selectedMtzTemplate?.label || '—' }}</dd></div>
+                  <div><dt>Заключений ТСР</dt><dd>{{ mtzItems.length }}</dd></div>
                 </dl>
               </aside>
             </div>

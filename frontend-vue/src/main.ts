@@ -15,6 +15,7 @@ import './assets/styles.css'
 import './assets/design-system.css'
 import './assets/aurora-theme.css'
 import './assets/light-refresh.css'
+import './assets/mtz-workspace.css'
 
 const app = createApp(App)
 const pinia = createPinia()

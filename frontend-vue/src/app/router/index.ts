@@ -11,6 +11,7 @@ const AgentsPage = () => import('@/pages/AgentsPage.vue')
 const WarehousePage = () => import('@/pages/WarehousePage.vue')
 const AccountingPage = () => import('@/pages/AccountingPage.vue')
 const DocumentsPage = () => import('@/pages/DocumentsPage.vue')
+const MtzDesignerPage = () => import('@/pages/MtzDesignerPage.vue')
 const ReferencesPage = () => import('@/pages/ReferencesPage.vue')
 const AdminUsersPage = () => import('@/pages/AdminUsersPage.vue')
 const SettingsPage = () => import('@/pages/SettingsPage.vue')
@@ -66,6 +67,16 @@ export const router = createRouter({
           path: 'documents/mtz',
           name: 'documents-mtz',
           component: DocumentsPage,
+        },
+        {
+          path: 'documents/mtz/templates',
+          name: 'documents-mtz-templates',
+          component: DocumentsPage,
+        },
+        {
+          path: 'documents/mtz/designer',
+          name: 'documents-mtz-designer',
+          component: MtzDesignerPage,
         },
         {
           path: 'tsr-references',

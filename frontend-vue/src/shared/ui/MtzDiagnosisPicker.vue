@@ -2,11 +2,15 @@
 import { computed, ref } from 'vue'
 import { MTZ_DIAGNOSES, suggestMtzDiagnoses } from '@/shared/lib/mtzDiagnosis'
 
-const props = defineProps<{ modelValue: string[]; tsrLabels: string[] }>()
+const props = defineProps<{ modelValue: string[]; tsrLabels: string[]; options?: string[] }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string[]] }>()
 const showAll = ref(false)
 const suggested = computed(() => suggestMtzDiagnoses(props.tsrLabels))
-const options = computed(() => (showAll.value || suggested.value.length === 0) ? MTZ_DIAGNOSES : suggested.value)
+const options = computed(() => {
+  const allowed = props.options?.length ? props.options : MTZ_DIAGNOSES
+  const filtered = suggested.value.filter(v => allowed.includes(v))
+  return (showAll.value || filtered.length === 0) ? allowed : filtered
+})
 
 function toggle(item: string, checked: boolean) {
   const next = checked

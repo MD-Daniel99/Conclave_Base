@@ -1,0 +1,86 @@
+/* MTZ workspace only. No global table / account / patient design changes. */
+.documents-page .documents-mtz-layout,
+.client-mtz-panel .client-mtz-layout {grid-template-columns:minmax(0,1fr);width:100%;gap:14px}
+.documents-mtz-layout > *, .client-mtz-layout > * {min-width:0;width:100%;max-width:none}
+.documents-mtz-layout .documents-generator, .client-mtz-layout .client-mtz-form {width:100%;max-width:none}
+.mtz-workspace {display:grid;gap:16px;width:100%;min-width:0}
+.mtz-section {min-width:0;border:1px solid var(--border,#455067);border-radius:14px;padding:16px;background:var(--surface,#161d30);display:grid;gap:14px}
+.mtz-section-title{display:flex;align-items:center;gap:12px;min-width:0}
+.mtz-section-title h3{margin:0 0 2px;font-size:17px;line-height:1.3}
+.mtz-section-title p{margin:0;font-size:12px;color:var(--muted)}
+.mtz-section-index{flex:0 0 36px;height:36px;border-radius:11px;display:grid;place-items:center;background:color-mix(in srgb,var(--accent,#776cef) 16%,transparent);color:var(--accent,#776cef);font-size:12px;font-weight:800}
+.mtz-count{margin-left:auto;flex-shrink:0;padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--accent,#776cef) 14%,transparent);color:var(--accent,#776cef);font-size:12px;font-weight:750}
+.mtz-conclusions-picker{max-width:none!important}
+.mtz-conclusions-picker .mtz-conclusions-add{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}
+.mtz-form-label{display:grid;gap:7px;min-width:0;font-weight:650;font-size:12px;line-height:1.4}
+.mtz-form-label input,.mtz-form-label select,.mtz-form-label textarea,.mtz-conclusions-add select{width:100%;min-width:0;max-width:none;min-height:42px;box-sizing:border-box;font:inherit;font-size:14px}
+.mtz-conclusions-picker .mtz-conclusions-list{display:grid;gap:12px;max-height:none;overflow:visible;list-style:none;margin:0;padding:0}
+.mtz-conclusions-picker .mtz-conclusions-item{border-radius:12px;padding:14px;gap:12px;background:color-mix(in srgb,var(--accent,#776cef) 5%,var(--surface,#161d30));}
+.mtz-conclusions-item-head{display:flex;align-items:center;gap:11px;min-width:0}
+.mtz-conclusions-item-head>strong{flex:1 1 auto;font-size:13px;line-height:1.5;min-width:0}
+.mtz-conclusion-index{background:var(--accent,#776cef);color:white;border-radius:9px;min-width:28px;height:28px;display:grid;place-items:center;font-size:12px;font-weight:800}
+.mtz-item-actions{display:flex;gap:3px;flex-shrink:0}
+.mtz-item-actions button{border:1px solid var(--border,#526080);border-radius:7px;color:inherit;background:transparent;min-width:29px;height:29px;cursor:pointer;font-size:16px}
+.mtz-item-actions .mtz-remove{color:#d56b76}
+.mtz-item-actions button:disabled{opacity:.3;cursor:default}
+.mtz-item-inputs{display:grid;grid-template-columns:minmax(0,2fr) minmax(150px,1fr);gap:12px;align-items:start}
+.mtz-helper{color:var(--muted);font-size:12px;margin:0;line-height:1.5}
+.mtz-empty{padding:18px;text-align:center;border:1px dashed var(--border,#526080);border-radius:10px;color:var(--muted)}
+.mtz-input-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+.mtz-span-all{grid-column:1/-1}
+.mtz-readonly-mse{display:flex;gap:12px;align-items:baseline;justify-content:space-between;padding:11px 14px;border:1px solid var(--border,#475063);border-radius:10px;font-size:13px;background:color-mix(in srgb,var(--accent,#776cef) 5%,transparent)}
+.mtz-readonly-mse span{color:var(--muted)}
+.mtz-readonly-mse strong{font-size:13px;text-align:right;overflow-wrap:anywhere}
+.mtz-control-group{border:0;margin:0;padding:0;min-width:0}
+.mtz-control-group legend{font-size:12px;font-weight:700;margin-bottom:8px}
+.mtz-choice-pills{display:flex;flex-wrap:wrap;gap:7px}
+.mtz-choice-pills button{padding:8px 11px;border:1px solid var(--border,#475063);border-radius:8px;background:transparent;color:inherit;cursor:pointer;font-size:13px;line-height:1.2;min-height:36px;flex:none;max-width:100%}
+.mtz-choice-pills button.selected{border-color:var(--accent,#776cef);background:color-mix(in srgb,var(--accent,#776cef) 15%,transparent);font-weight:750;color:inherit}
+.mtz-optional{font-weight:400;color:var(--muted)}
+.mtz-diagnosis-list{grid-template-columns:repeat(2,minmax(0,1fr));max-height:230px!important;gap:6px 15px}
+.mtz-diagnosis-choice{padding:5px 6px;border-radius:6px}
+.mtz-diagnosis-choice:hover{background:color-mix(in srgb,var(--accent,#776cef) 8%,transparent)}
+.documents-mtz-layout .documents-autofill-preview dl,.client-mtz-layout .client-mtz-preview dl{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.documents-mtz-layout .documents-autofill-preview dl>div,.client-mtz-layout .client-mtz-preview dl>div{border-bottom:0;min-width:0;padding:4px 0}
+.mtz-designer-page{width:100%;max-width:none;padding:12px 16px 60px;display:grid;gap:16px;box-sizing:border-box}
+.mtz-designer-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap}
+.mtz-designer-head h1{font-size:26px;margin:3px 0 8px}
+.mtz-designer-head p{margin:0;color:var(--muted);max-width:800px}
+.mtz-designer-nav{display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border,#586075);padding-bottom:10px}
+.mtz-designer-nav button{padding:10px 15px;border:1px solid var(--border,#576077);border-radius:9px;background:transparent;color:inherit;cursor:pointer}
+.mtz-designer-nav button.selected{background:var(--accent,#776cef);color:white;border-color:var(--accent,#776cef);font-weight:700}
+.mtz-designer-note,.mtz-designer-ok,.mtz-designer-error{padding:12px 15px;border:1px solid var(--border,#526080);border-radius:10px;font-size:13px;line-height:1.5}
+.mtz-designer-ok{border-color:#32996e;color:#32996e}.mtz-designer-error{border-color:#c75263;color:#c75263}
+.mtz-designer-content{display:grid;gap:16px;min-width:0}
+.mtz-designer-panel{border:1px solid var(--border,#526080);border-radius:14px;padding:18px;background:var(--surface,#161d30);display:grid;gap:14px;min-width:0}
+.mtz-designer-panel h2,.mtz-designer-panel h3{margin:0;font-size:18px}
+.mtz-designer-panel>p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}
+.mtz-designer-panel label{display:grid;gap:6px;min-width:0;font-size:12px;font-weight:650}
+.mtz-designer-panel input,.mtz-designer-panel select,.mtz-designer-panel textarea{width:100%;min-width:0;box-sizing:border-box;max-width:none;min-height:39px;font-size:13px;line-height:1.35}
+.mtz-auto-fields{display:grid;gap:9px}
+.mtz-auto-row{display:grid;grid-template-columns:130px repeat(3,minmax(0,1fr));gap:12px;align-items:center;padding:8px;border-radius:9px;border:1px solid var(--border,#475063)}
+.mtz-field-key{font-family:monospace;font-size:11px;overflow-wrap:anywhere;color:var(--muted)}
+.mtz-manual-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.mtz-field-editor,.mtz-custom-field{display:grid;gap:11px;padding:14px;border:1px solid var(--border,#526080);border-radius:12px;min-width:0}
+.mtz-field-editor-head{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.mtz-field-editor-head code,.mtz-custom-field code{font-size:11px;color:var(--muted)}
+.mtz-activity-codes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.mtz-custom-field{grid-template-columns:repeat(2,minmax(0,1fr));align-items:end}
+.mtz-custom-field>div:first-child{grid-column:1/-1}
+.mtz-designer-panel .mtz-checkbox{display:flex;align-items:center;gap:9px}
+.mtz-checkbox input{width:16px;min-height:16px}
+.mtz-new-field{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:end;padding:13px;border:1px dashed var(--border,#526080);border-radius:12px}
+.mtz-new-field button{grid-column:1/-1;justify-self:start}
+.mtz-editor-save{display:flex;justify-content:flex-end;gap:12px;padding:8px 0}
+.mtz-editor-selector label{max-width:none}
+.mtz-editor-toolbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+.mtz-editor-title{font-size:13px!important}
+.mtz-rows{display:grid;gap:7px}
+.mtz-row-editor{border:1px solid var(--border,#526080);border-radius:9px;min-width:0;overflow:hidden}
+.mtz-row-editor summary{cursor:pointer;padding:10px 13px;font-size:13px;font-weight:650;line-height:1.5;overflow-wrap:anywhere}
+.mtz-row-editor[open] summary{background:color-mix(in srgb,var(--accent,#776cef) 9%,transparent)}
+.mtz-row-body{padding:14px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.mtz-row-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
+.mtz-history-panel{max-width:800px}
+@media(max-width:820px){.mtz-designer-page{padding:10px}.mtz-auto-row{grid-template-columns:1fr 1fr}.mtz-field-key{grid-column:1/-1}.mtz-manual-grid{grid-template-columns:1fr}.mtz-new-field{grid-template-columns:1fr 1fr}.documents-mtz-layout .documents-autofill-preview dl,.client-mtz-layout .client-mtz-preview dl{grid-template-columns:1fr 1fr}}
+@media(max-width:640px){.mtz-conclusions-picker .mtz-conclusions-add,.mtz-item-inputs,.mtz-input-grid,.mtz-row-body,.mtz-custom-field,.mtz-auto-row,.mtz-new-field{grid-template-columns:1fr}.mtz-span-all{grid-column:auto}.mtz-readonly-mse{flex-direction:column;gap:5px}.mtz-diagnosis-list{grid-template-columns:1fr}.mtz-section{padding:11px}.mtz-conclusions-item-head{flex-wrap:wrap}.mtz-item-actions{margin-left:auto}}

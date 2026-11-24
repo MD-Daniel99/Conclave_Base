@@ -10,16 +10,64 @@ export type MtzTemplateOption = {
   value: string
   label: string
   tsr_code: string
+  builtin?: boolean
+  pdf_transcribed?: boolean
+  revision?: number
+}
+
+export type MtzConclusionItem = { template_type: string; amputation_level: string; amputation_code?: string; extra_fields?: Record<string,string> }
+
+export type MtzCustomField = {
+  key: string; label: string; kind: 'text' | 'select' | 'auto'
+  scope: 'shared' | 'per_item'; required: boolean; placeholder: string
+  options?: string[]; source?: string
+}
+export type MtzFieldSettings = { label: string; options?: string[]; placeholder?: string; source?: string; default?: string }
+export type MtzFormConfig = {
+  version: number
+  auto: Record<string, MtzFieldSettings>
+  manual: Record<string, MtzFieldSettings>
+  codes: { activity_level: Record<string,string> }
+  custom_fields: MtzCustomField[]
+}
+export type MtzTemplateCell = { col: number; text: string }
+export type MtzTemplateRow = { source_index: number | null; clone_from?: number; cells: MtzTemplateCell[] }
+export type MtzTemplateEditor = {
+  value: string; title: string; tsr_code: string; builtin: boolean; revision: number
+  history: { revision: number; label: string }[]; rows: MtzTemplateRow[]
 }
 
 export type MtzGenerationPayload = {
-  template_type: string
+  items: MtzConclusionItem[]
   disability_group_reason: string
   diagnoses: string[]
-  amputation_level: string
-  stump_condition: 'Функциональная' | 'Нефункциональная'
-  activity_level: '2-3' | '3-4'
+  stump_condition: string
+  activity_level: string
   weight_kg: string
+  extra_fields?: Record<string,string>
+}
+
+export async function fetchMtzConfig() {
+  const { data } = await api.get<MtzFormConfig>('/documents/mtz_templates/config')
+  return data
+}
+export async function saveMtzConfig(config: MtzFormConfig) {
+  const { data } = await api.put<MtzFormConfig>('/documents/mtz_templates/config', config)
+  return data
+}
+export async function fetchMtzTemplateEditor(key: string) {
+  const { data } = await api.get<MtzTemplateEditor>(`/documents/mtz_templates/${encodeURIComponent(key)}/editor`)
+  return data
+}
+export async function saveMtzTemplateEditor(key: string, edit: MtzTemplateEditor) {
+  const { data } = await api.put<MtzTemplateEditor>(`/documents/mtz_templates/${encodeURIComponent(key)}/editor`, edit)
+  return data
+}
+export async function restoreMtzTemplateEditor(key: string, targetRevision: number, expectedRevision: number) {
+  const { data } = await api.post<MtzTemplateEditor>(`/documents/mtz_templates/${encodeURIComponent(key)}/restore`, {
+    target_revision: targetRevision, expected_revision: expectedRevision,
+  })
+  return data
 }
 
 export async function fetchContractTemplates() {
@@ -35,6 +83,24 @@ export async function fetchNextContractNumber(templateType: string = 'llc_contra
 export async function fetchMtzTemplates() {
   const { data } = await api.get<MtzTemplateOption[]>('/documents/mtz_templates')
   return data
+}
+
+export async function uploadMtzTemplate(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await api.post<MtzTemplateOption[]>('/documents/mtz_templates/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
+}
+
+export async function downloadMtzTemplate(templateKey: string) {
+  const { data } = await api.get(`/documents/mtz_templates/${encodeURIComponent(templateKey)}/download`, { responseType: 'blob' })
+  return data as Blob
+}
+
+export async function deleteMtzTemplate(templateKey: string) {
+  await api.delete(`/documents/mtz_templates/${encodeURIComponent(templateKey)}`)
 }
 
 export async function fetchClientDocuments(clientId: string) {

@@ -90,6 +90,7 @@ const pageTitle = computed(() => {
     warehouse: 'Склад',
     'documents-contracts': 'Документы · Договоры',
     'documents-mtz': 'Документы · МТЗ',
+    'documents-mtz-templates': 'Документы · Шаблоны МТЗ',
     'references-tsr': 'Справочники · ТСР',
     'references-components': 'Справочники · Комплектующие',
     accounting: 'Бухгалтерия',

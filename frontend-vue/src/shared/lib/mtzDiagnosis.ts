@@ -3,6 +3,9 @@ export const MTZ_DISABILITY_REASONS = [
   'I Группа, Военная травма',
   'II Группа, Военная травма',
   'III Группа, Военная травма',
+  'I Группа, Общее заболевание',
+  'II Группа, Общее заболевание',
+  'III Группа, Общее заболевание',
 ] as const
 
 export const MTZ_DIAGNOSIS_GROUPS = {
